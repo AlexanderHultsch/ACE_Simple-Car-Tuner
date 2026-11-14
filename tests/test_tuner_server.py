@@ -50,6 +50,13 @@ TURBO_KEYS = {"donor", "available", "reason", "donors", "picked", "car", "tune",
 TWIN = {"car": "ks_b", "label": "Twin B", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]}
 OWN = {"car": "ks_t", "label": "Car T", "count": 1, "kind": "single turbo", "boost": [1.0]}
 SINGLE = {"car": "ks_a", "label": "Single A", "count": 1, "kind": "single turbo", "boost": [0.9]}
+SOUND_KEYS = {"slots", "missing", "skipped", "car", "tune"}
+SLOT_KEYS = {"options", "own", "selected"}
+OPTION_KEYS = {"key", "event", "bank", "optional", "cars"}
+TURBO_BANK, BACKFIRE_BANK = "content\\sfx\\turbo.bank", "content\\sfx\\backfire.bank"
+TE, BE = "event:/parts/turbos/", "event:/parts/backfires/"
+T_NONE, T_RX7 = TE + "turbo_none", TE + "turbo_rx7"
+B_A, B_B, B_CLASSIC = BE + "backfire_a", BE + "backfire_b", BE + "backfire_classic#8"
 JOB_RUNNING = {"error": "a job is running, wait until it has finished"}
 
 
@@ -71,6 +78,18 @@ def boost():
 
 def tyre_dy(axle):
     return mini_setting("tyre_dy_" + axle, group="Tyres", unit="mu", min=0.5, max=2.5, targets=[("@tyre_" + axle, "modelData.Dy0")])
+
+
+def audio(event, kind=None, bank=TURBO_BANK, **more):
+    e = {"event": event}
+    if kind is not None:
+        e["type"] = kind
+    e.update({"transform": {"scale": {"x": 1.0}}, "bank": bank}, **more)
+    return e
+
+
+def actor_of(*entries):
+    return {"car": {"cameras": ["c1"], "audio_events": list(entries), "_order": ["cameras"] + ["audio_events"] * len(entries)}}
 
 
 def gated(test, fn):
@@ -249,12 +268,12 @@ class TestRoutes(ServerCase):
         self.make_car()
 
     def test_route_tables(self):
-        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/settings", "/api/state", "/api/turbo", "/api/tyre",
-                                                 "/api/tyres"])
+        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/settings", "/api/sounds", "/api/state", "/api/turbo",
+                                                 "/api/tyre", "/api/tyres"])
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
-                                                  "/api/reset_all", "/api/set", "/api/turbo_reset", "/api/turbo_set", "/api/tyre_delete",
-                                                  "/api/tyre_new", "/api/tyre_rename", "/api/tyre_reset", "/api/tyre_set",
-                                                  "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
+                                                  "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
+                                                  "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
+                                                  "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
         self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre",))
         self.assertTrue(set(ts.QUERY_ROUTES) <= set(ts.GET_ROUTES))
@@ -2620,7 +2639,7 @@ class TestTurboRoutes(TurboCase):
 
     def test_turbo_set_chooses_the_donor_of_the_default_tune(self):
         r = self.post("/api/turbo_set", {"donor": "ks_b"})
-        self.assertEqual((r.status, set(r.json)), (200, {"result", "turbo"}))
+        self.assertEqual((r.status, set(r.json)), (200, {"result", "turbo", "sounds", "sound_link"}))
         self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]})
         self.assertEqual(r.json["turbo"], self.turbo().json)
         self.assertEqual((r.json["turbo"]["donor"], r.json["turbo"]["picked"], r.json["turbo"]["has_turbo"]), ("ks_b", TWIN, False))
@@ -2813,6 +2832,423 @@ class TestSettingsWithATurboKit(TurboCase):
         self.assertEqual(self.get("/api/settings").status, 400)
         self.assertEqual(self.post("/api/turbo_reset", {}).json["removed"], True)
         self.assertEqual(self.get("/api/settings").status, 200)
+
+
+# -------------------------------------------------------------------------------------------------- sound picker
+class SoundCase(TurboCase):
+    """TurboCase with an .actor file in every installed car: ks_x (own sounds turbo_none and backfire_a), ks_a (turbo_rx7, backfire_classic
+    with optionalParam 8), ks_b (a backfire entry only: backfire_b, no turbo entry although the car has turbos) and ks_t (the same sounds
+    as ks_x)."""
+
+    def setUp(self):
+        super().setUp()
+        for car_id, entries in (("ks_x", [audio(TE + "turbo_none", "TurboEvent"), audio(BE + "backfire_a", "Backfire", BACKFIRE_BANK)]),
+                                ("ks_a", [audio(BE + "backfire_classic", "Backfire", BACKFIRE_BANK, optionalParam=8), audio(TE + "turbo_rx7", "TurboEvent")]),
+                                ("ks_b", [audio(BE + "backfire_b", "Backfire", BACKFIRE_BANK)]),
+                                ("ks_t", [audio(TE + "turbo_none", "TurboEvent"), audio(BE + "backfire_a", "Backfire", BACKFIRE_BANK)])):
+            fc = FakeCar(self.work, car_id)
+            fc.store = self.fc.store
+            fc.add("%s.actor" % car_id, actor_of(audio("event:/evo_cars/%s/engine_int" % car_id, None, "content\\sfx\\%s.bank" % car_id), *entries))
+
+    def sounds(self, query=""):
+        return self.get("/api/sounds" + query)
+
+    def remove_actor(self, car_id):
+        del self.fc.store[self.fc.key(tune.actor_path(self.work, car_id))]
+
+    def keys_of(self, reply, slot):
+        return [o["key"] for o in reply.json["slots"][slot]["options"]]
+
+
+class TestSoundsRoute(SoundCase):
+    def test_sounds_of_the_default_car_offers_the_sounds_of_all_installed_cars(self):
+        r = self.sounds()
+        self.assertEqual((r.status, r.headers.get("Content-Type"), set(r.json)), (200, "application/json; charset=utf-8", SOUND_KEYS))
+        self.assertEqual((r.json["car"], r.json["tune"], r.json["missing"], r.json["skipped"]), ("ks_x", None, [], []))
+        self.assertEqual(list(r.json["slots"]), ["turbo", "backfire"])
+        self.assertEqual([set(s) for s in r.json["slots"].values()], [SLOT_KEYS, SLOT_KEYS])
+        self.assertEqual((self.keys_of(r, "turbo"), self.keys_of(r, "backfire")), ([T_NONE, T_RX7], [B_A, B_B, B_CLASSIC]))
+        self.assertEqual([(o["key"], o["cars"]) for o in r.json["slots"]["turbo"]["options"]], [(T_NONE, ["ks_t", "ks_x"]), (T_RX7, ["ks_a"])])
+        self.assertEqual(r.json["slots"]["backfire"]["options"][2],
+                         {"key": B_CLASSIC, "event": BE + "backfire_classic", "bank": BACKFIRE_BANK, "optional": 8, "cars": ["ks_a"]})
+        self.assertEqual([set(o) for o in r.json["slots"]["turbo"]["options"]], [OPTION_KEYS, OPTION_KEYS])
+        self.assertEqual((r.json["slots"]["turbo"]["own"], r.json["slots"]["turbo"]["selected"]), (T_NONE, None))
+        self.assertEqual((r.json["slots"]["backfire"]["own"], r.json["slots"]["backfire"]["selected"]), (B_A, None))
+        self.assertEqual(r.json, dict(tune.sound_choices(self.work, "ks_x"), car="ks_x", tune=None))
+
+    def test_a_car_without_an_entry_of_a_slot_has_no_own_sound_there(self):
+        r = self.sounds("?car=ks_b")
+        self.assertEqual((r.status, r.json["car"], r.json["slots"]["turbo"]["own"], r.json["slots"]["backfire"]["own"]), (200, "ks_b", None, B_B))
+
+    def test_the_saved_choice_is_selected_and_a_choice_that_is_no_option_any_more_is_missing(self):
+        self.make_tune(None, {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": BE + "backfire_gone"}})
+        r = self.sounds()
+        self.assertEqual((r.json["slots"]["turbo"]["selected"], r.json["slots"]["backfire"]["selected"]), (T_RX7, None))
+        self.assertEqual(r.json["missing"], [{"slot": "backfire", "key": BE + "backfire_gone"}])
+
+    def test_sounds_echoes_the_tune_and_reads_its_own_state(self):
+        self.make_tune("ax01", {"name_suffix": "_A", tune.SOUND_KEY: {"backfire": B_B}})
+        r = self.sounds("?tune=ax01")
+        self.assertEqual((r.status, r.json["tune"], r.json["slots"]["backfire"]["selected"]), (200, "ax01", B_B))
+        r = self.sounds("?tune=draft")
+        self.assertEqual((r.json["tune"], r.json["slots"]["backfire"]["selected"]), ("draft", None))
+        self.assertIsNone(self.sounds().json["slots"]["backfire"]["selected"])
+        self.make_tune(tune.DRAFT, {tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.assertEqual(self.sounds("?tune=draft").json["slots"]["turbo"]["selected"], T_RX7)
+
+    def test_a_car_whose_actor_cannot_be_read_is_skipped_and_reported(self):
+        self.remove_actor("ks_t")
+        r = self.sounds()
+        self.assertEqual((r.status, [s["car"] for s in r.json["skipped"]], set(r.json["skipped"][0])), (200, ["ks_t"], {"car", "reason"}))
+        self.assertIsInstance(r.json["skipped"][0]["reason"], str)
+        self.assertEqual(r.json["slots"]["turbo"]["options"][0]["cars"], ["ks_x"])
+
+    def test_sounds_needs_the_base_car(self):
+        r = self.sounds("?car=ks_y")
+        self.assertEqual((r.status, r.json), (409, {"error": "base car missing, run init"}))
+        self.assertEqual(self.sounds("?car=ks_y&tune=draft").status, 409)
+
+    def test_sounds_with_a_damaged_choice_is_400(self):
+        self.make_tune(None, {tune.SOUND_KEY: 5})
+        r = self.sounds()
+        self.assertEqual((r.status, r.json), (400, {"error": "damaged sound choice in the saved state"}))
+
+    def test_sounds_of_a_car_whose_own_actor_cannot_be_read_is_400(self):
+        self.remove_actor("ks_x")
+        r = self.sounds()
+        self.assertEqual(r.status, 400)
+        self.assertIn("error", r.json)
+
+    def test_sounds_are_read_under_state_lock(self):
+        held, real = [], tune.sound_choices
+
+        def spy(*args, **kw):
+            held.append(ts.STATE_LOCK.locked())
+            return real(*args, **kw)
+        self.patch(tune, "sound_choices", spy)
+        self.sounds()
+        self.assertEqual(held, [True])
+
+    def test_sounds_reads_change_no_file(self):
+        self.sounds()
+        self.sounds("?tune=draft")
+        self.assertFalse(os.path.exists(self.state_file()))
+        self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x", "draft")))
+
+
+class TestSoundSetRoute(SoundCase):
+    def test_sound_set_chooses_the_sound_of_the_default_tune_and_answers_like_the_get(self):
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7})
+        self.assertEqual((r.status, set(r.json)), (200, SOUND_KEYS))
+        self.assertEqual((r.json["slots"]["turbo"]["selected"], r.json["slots"]["backfire"]["selected"], r.json["missing"]), (T_RX7, None, []))
+        self.assertEqual((r.json["car"], r.json["tune"]), ("ks_x", None))
+        self.assertEqual(r.json, self.sounds().json)
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+
+    def test_sound_set_keeps_the_other_slot_and_the_other_values_of_the_state(self):
+        self.write(self.state_file(), {"limiter": 8000})
+        self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7})
+        r = self.post("/api/sound_set", {"slot": "backfire", "key": B_CLASSIC})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"], r.json["slots"]["backfire"]["selected"]), (200, T_RX7, B_CLASSIC))
+        self.assertEqual(self.saved_state(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
+        r = self.post("/api/sound_set", {"slot": "backfire", "key": B_B})
+        self.assertEqual(self.saved_state(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+
+    def test_the_own_sound_of_the_car_removes_the_choice(self):
+        self.write(self.state_file(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_NONE})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"], r.json["slots"]["turbo"]["own"]), (200, None, T_NONE))
+        self.assertEqual(self.saved_state(), {"limiter": 8000, tune.SOUND_KEY: {"backfire": B_B}})
+        self.post("/api/sound_set", {"slot": "backfire", "key": B_A})
+        self.assertEqual(self.saved_state(), {"limiter": 8000})
+
+    def test_key_null_removes_the_choice(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": None})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"]), (200, None))
+        self.assertEqual(self.saved_state(), {})
+        self.assertEqual(self.post("/api/sound_set", {"slot": "turbo", "key": None}).status, 200)
+
+    def test_sound_set_of_a_modded_car_changes_only_its_state(self):
+        self.make_tune("ax01", {"name_suffix": "_A"})
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7, "tune": "ax01"})
+        self.assertEqual((r.status, r.json["tune"], r.json["slots"]["turbo"]["selected"]), (200, "ax01", T_RX7))
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.assertFalse(os.path.exists(self.state_file()))
+        self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x", "draft")))
+        self.assertEqual(self.sounds("?tune=ax01").json, r.json)
+
+    def test_sound_set_of_the_draft_needs_no_modded_car(self):
+        r = self.post("/api/sound_set", {"slot": "backfire", "key": B_B, "tune": "draft"})
+        self.assertEqual((r.status, r.json["tune"]), (200, "draft"))
+        self.assertEqual(self.tune_state("draft"), {tune.SOUND_KEY: {"backfire": B_B}})
+        self.assertEqual(self.tune_ids(), [])
+        self.assertFalse(os.path.exists(self.state_file()))
+
+    def test_sound_set_of_another_car_uses_that_cars_own_sound(self):
+        r = self.post("/api/sound_set", {"car": "ks_a", "slot": "turbo", "key": T_RX7})
+        self.assertEqual((r.status, r.json["car"], r.json["slots"]["turbo"]["selected"]), (200, "ks_a", None))
+        self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_a")))
+
+    def test_sound_set_with_a_slot_or_key_of_the_wrong_kind_is_400_and_writes_nothing(self):
+        text = "need slot (text) and key (text or null)"
+        for body in ({}, {"key": T_RX7}, {"slot": None, "key": T_RX7}, {"slot": 5, "key": T_RX7}, {"slot": ["turbo"], "key": T_RX7},
+                     {"slot": "", "key": T_RX7}, {"slot": "  ", "key": T_RX7}, {"slot": "turbo", "key": 5}, {"slot": "turbo", "key": ["x"]},
+                     {"slot": "turbo", "key": {"a": 1}}, {"slot": "turbo", "key": True}):
+            with self.subTest(body):
+                r = self.post("/api/sound_set", body)
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertFalse(os.path.exists(self.state_file()))
+
+    def test_sound_set_with_a_refused_slot_or_key_is_400_with_the_message_and_changes_nothing(self):
+        self.write(self.state_file(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7}})
+        for body, text in (({"slot": "horn", "key": T_RX7}, "unknown sound slot 'horn', use one of: turbo, backfire"),
+                           ({"slot": "Turbo", "key": T_RX7}, "unknown sound slot 'Turbo', use one of: turbo, backfire"),
+                           ({"slot": "turbo", "key": TE + "turbo_gone"}, "unknown turbo sound %sturbo_gone, sounds lists the sounds of the game cars" % TE),
+                           ({"slot": "turbo", "key": B_B}, "unknown turbo sound %s, sounds lists the sounds of the game cars" % B_B),
+                           ({"slot": "backfire", "key": ""}, "unknown backfire sound , sounds lists the sounds of the game cars")):
+            with self.subTest(body):
+                r = self.post("/api/sound_set", body)
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual(self.saved_state(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7}})
+
+    def test_sound_set_with_a_damaged_saved_choice_is_400_and_changes_nothing(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: 5})
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7})
+        self.assertEqual((r.status, r.json), (400, {"error": "damaged sound choice in the saved state"}))
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: 5})
+
+    def test_sound_set_without_a_base_is_409_and_writes_nothing(self):
+        for tune_id in (None, "draft"):
+            with self.subTest(tune_id):
+                r = self.post("/api/sound_set", {"car": "ks_y", "slot": "turbo", "key": T_RX7, "tune": tune_id})
+                self.assertEqual((r.status, r.json), (409, {"error": "base car missing, run init"}))
+        self.assertFalse(os.path.exists(os.path.join(self.work, "ks_y")))
+
+    def test_sound_set_with_an_unknown_modded_car_is_400(self):
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7, "tune": "nope"})
+        self.assertEqual((r.status, r.json), (400, {"error": "unknown modded car nope of ks_x"}))
+
+    def test_a_car_that_is_not_text_is_400(self):
+        r = self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7, "car": 5})
+        self.assertEqual((r.status, r.json), (400, {"error": "car must be text"}))
+
+
+class TestSoundResetRoute(SoundCase):
+    def test_sound_reset_without_a_slot_removes_every_choice_and_answers_like_the_get(self):
+        self.write(self.state_file(), {"limiter": 8000, tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+        r = self.post("/api/sound_reset", {})
+        self.assertEqual((r.status, set(r.json)), (200, SOUND_KEYS))
+        self.assertEqual((r.json["slots"]["turbo"]["selected"], r.json["slots"]["backfire"]["selected"]), (None, None))
+        self.assertEqual(r.json, self.sounds().json)
+        self.assertEqual(self.saved_state(), {"limiter": 8000})
+
+    def test_sound_reset_with_a_slot_removes_that_slot_only(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+        r = self.post("/api/sound_reset", {"slot": "turbo"})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"], r.json["slots"]["backfire"]["selected"]), (200, None, B_B))
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"backfire": B_B}})
+        self.assertEqual(self.post("/api/sound_reset", {"slot": "turbo", "tune": None}).status, 200)
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"backfire": B_B}})
+        self.post("/api/sound_reset", {"slot": "backfire"})
+        self.assertEqual(self.saved_state(), {})
+
+    def test_sound_reset_without_a_choice_changes_nothing(self):
+        r = self.post("/api/sound_reset")
+        self.assertEqual((r.status, set(r.json), r.json["slots"]["turbo"]["selected"]), (200, SOUND_KEYS, None))
+        self.assertEqual(self.post("/api/sound_reset", {"slot": "backfire"}).status, 200)
+        self.assertFalse(os.path.exists(self.state_file()))
+
+    def test_sound_reset_of_a_modded_car_and_of_the_draft(self):
+        self.make_tune("ax01", {"name_suffix": "_A", tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.make_tune(tune.DRAFT, {tune.SOUND_KEY: {"backfire": B_B}, "limiter": 8000})
+        self.make_tune(None, {tune.SOUND_KEY: {"turbo": T_RX7}})
+        r = self.post("/api/sound_reset", {"tune": "ax01"})
+        self.assertEqual((r.status, r.json["tune"], r.json["slots"]["turbo"]["selected"]), (200, "ax01", None))
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A"})
+        self.assertEqual(self.post("/api/sound_reset", {"tune": "draft"}).status, 200)
+        self.assertEqual(self.tune_state("draft"), {"limiter": 8000})
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+
+    def test_sound_reset_with_a_slot_that_does_not_exist_or_is_not_text_is_400(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+        for body, text in (({"slot": "horn"}, "unknown sound slot 'horn', use one of: turbo, backfire"),
+                           ({"slot": ""}, "unknown sound slot '', use one of: turbo, backfire"),
+                           ({"slot": 5}, "slot must be text"), ({"slot": ["turbo"]}, "slot must be text")):
+            with self.subTest(body):
+                r = self.post("/api/sound_reset", body)
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+
+    def test_sound_reset_without_a_base_is_409(self):
+        r = self.post("/api/sound_reset", {"car": "ks_y"})
+        self.assertEqual((r.status, r.json), (409, {"error": "base car missing, run init"}))
+
+    def test_sound_reset_without_a_slot_removes_a_damaged_choice(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: 5})
+        r = self.post("/api/sound_reset", {})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"]), (200, None))
+        self.assertEqual(self.saved_state(), {})
+
+
+class TestSoundRoutesShared(SoundCase):
+    def test_the_sound_writes_happen_under_state_lock(self):
+        held = []
+        for name in ("set_sound", "reset_sounds"):
+            def spy(*args, _name=name, _real=getattr(tune, name), **kw):
+                held.append((_name, ts.STATE_LOCK.locked()))
+                return _real(*args, **kw)
+            self.patch(tune, name, spy)
+        self.assertEqual(self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7}).status, 200)
+        self.assertEqual(self.post("/api/sound_reset", {}).status, 200)
+        self.assertEqual(held, [("set_sound", True), ("reset_sounds", True)])
+
+    def test_both_writes_are_409_while_a_job_runs_and_change_nothing(self):
+        self.make_tune("ax01", {"name_suffix": "_A", tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.write(self.state_file(), {tune.SOUND_KEY: {"backfire": B_B}})
+        with open(self.state_file(), "rb") as f:
+            before = f.read()
+        self.hold_jobs()
+        self.assertEqual(self.post("/api/init").status, 202)
+        self.entered.wait(5)
+        for path, body in (("/api/sound_set", {"slot": "turbo", "key": T_RX7}), ("/api/sound_reset", {})):
+            for tune_id in (None, "ax01", "draft"):
+                with self.subTest(path, tune=tune_id):
+                    r = self.post(path, dict(body, tune=tune_id))
+                    self.assertEqual((r.status, r.json), (409, JOB_RUNNING))
+        r = self.post("/api/sound_set", {"slot": 5})
+        self.assertEqual((r.status, r.json), (409, JOB_RUNNING))
+        with open(self.state_file(), "rb") as f:
+            self.assertEqual(f.read(), before)
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x", "draft")))
+        self.assertEqual(self.sounds().status, 200)
+        self.finish_held_job()
+        self.assertEqual(self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7}).status, 200)
+
+    def test_the_routes_check_the_host_the_post_headers_and_the_method(self):
+        self.assertEqual(self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7}, headers={"X-Tuner": None}).status, 403)
+        r = self.post("/api/sound_reset", {}, headers={"Content-Type": "text/plain"})
+        self.assertEqual((r.status, r.json), (415, {"error": "Content-Type must be application/json"}))
+        self.assertEqual(self.get("/api/sounds", host="evil.example").status, 403)
+        self.assertEqual(self.post("/api/sound_set", {"slot": "turbo", "key": T_RX7}, host="evil.example").status, 403)
+        self.assertFalse(os.path.exists(self.state_file()))
+        self.assertEqual(self.get("/api/sound_set").status, 404)
+        self.assertEqual(self.get("/api/sound_reset").status, 404)
+        self.assertEqual(self.post("/api/sounds", {}).status, 404)
+        for method in ("PUT", "DELETE", "PATCH"):
+            with self.subTest(method):
+                r = self.request(method, "/api/sounds")
+                self.assertEqual((r.status, r.headers.get("Allow")), (405, "GET, POST"))
+
+    def test_the_statuses_of_the_sound_routes_are_200_not_202(self):
+        self.assertTrue({"/api/sounds", "/api/sound_set", "/api/sound_reset"}.isdisjoint(ts.ACCEPTED))
+        self.assertTrue({"/api/sounds"}.isdisjoint(ts.QUERY_ROUTES))
+
+    def test_the_sound_routes_take_the_car_and_the_tune_like_every_route(self):
+        self.assertEqual(self.sounds("?car=nope").status, 400)
+        self.assertEqual(self.sounds("?tune=nope").json, {"error": "unknown modded car nope of ks_x"})
+        self.assertEqual(self.post("/api/sound_reset", {"car": "nope"}).status, 400)
+
+
+class TestKitLinkedSound(SoundCase):
+    def test_choosing_a_donor_with_a_turbo_sound_sets_the_turbo_sound_to_the_donors(self):
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual((r.status, set(r.json)), (200, {"result", "turbo", "sounds", "sound_link"}))
+        self.assertEqual(r.json["sound_link"], {"slot": "turbo", "key": T_RX7})
+        self.assertEqual((set(r.json["sounds"]), r.json["sounds"]["slots"]["turbo"]["selected"], r.json["sounds"]["slots"]["backfire"]["selected"]),
+                         (SOUND_KEYS, T_RX7, None))
+        self.assertEqual(r.json["sounds"], self.sounds().json)
+        self.assertEqual(self.saved_state(), dict(self.kit("ks_a"), **{tune.SOUND_KEY: {"turbo": T_RX7}}))
+
+    def test_the_old_answer_keys_of_turbo_set_stay_as_they_were(self):
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual(r.json["result"], {"donor": "ks_a", "count": 1, "kind": "single turbo", "boost": [0.9]})
+        self.assertEqual((r.json["turbo"], set(r.json["turbo"])), (self.turbo().json, TURBO_KEYS))
+        self.assertEqual((r.json["turbo"]["donor"], r.json["turbo"]["picked"]), ("ks_a", SINGLE))
+
+    def test_a_donor_without_a_turbo_entry_leaves_the_sound_alone(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+        r = self.post("/api/turbo_set", {"donor": "ks_b"})
+        self.assertEqual((r.status, r.json["sounds"], r.json["sound_link"]), (200, None, None))
+        self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]})
+        self.assertEqual(r.json["turbo"]["donor"], "ks_b")
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}, tune.TURBO_KEY: {"donor": "ks_b"}})
+
+    def test_a_donor_whose_sound_is_the_cars_own_stores_no_sound_choice(self):
+        r = self.post("/api/turbo_set", {"donor": "ks_t"})
+        self.assertEqual((r.status, r.json["sound_link"]), (200, {"slot": "turbo", "key": T_NONE}))
+        self.assertEqual((r.json["sounds"]["slots"]["turbo"]["selected"], r.json["sounds"]["slots"]["turbo"]["own"]), (None, T_NONE))
+        self.assertEqual(self.saved_state(), self.kit("ks_t"))
+
+    def test_a_donor_whose_sound_is_the_cars_own_removes_an_earlier_choice(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
+        r = self.post("/api/turbo_set", {"donor": "ks_t"})
+        self.assertEqual(r.json["sound_link"], {"slot": "turbo", "key": T_NONE})
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"backfire": B_B}, tune.TURBO_KEY: {"donor": "ks_t"}})
+
+    def test_another_donor_replaces_the_turbo_sound_and_the_backfire_sound_is_never_touched(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"backfire": B_B}})
+        self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual(self.saved_state()[tune.SOUND_KEY], {"turbo": T_RX7, "backfire": B_B})
+        self.post("/api/turbo_set", {"donor": "ks_t"})
+        self.assertEqual(self.saved_state()[tune.SOUND_KEY], {"backfire": B_B})
+
+    def test_the_link_of_a_modded_car_and_of_the_draft_changes_only_their_state(self):
+        self.make_tune("ax01", {"name_suffix": "_A"})
+        r = self.post("/api/turbo_set", {"donor": "ks_a", "tune": "ax01"})
+        self.assertEqual((r.status, r.json["sounds"]["tune"], r.json["sounds"]["slots"]["turbo"]["selected"]), (200, "ax01", T_RX7))
+        self.assertEqual(self.tune_state("ax01"), dict({"name_suffix": "_A", tune.SOUND_KEY: {"turbo": T_RX7}}, **self.kit("ks_a")))
+        r = self.post("/api/turbo_set", {"donor": "ks_a", "tune": "draft"})
+        self.assertEqual((r.json["sounds"]["tune"], self.tune_state("draft")), ("draft", dict({tune.SOUND_KEY: {"turbo": T_RX7}}, **self.kit("ks_a"))))
+        self.assertFalse(os.path.exists(self.state_file()))
+
+    def test_a_problem_of_the_sound_step_keeps_the_donor_and_is_reported(self):
+        def broken(*args, **kw):
+            raise ValueError("sound step failed")
+        self.patch(tune, "set_sound", broken)
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual((r.status, set(r.json), r.json["sounds"], r.json["sound_link"]),
+                         (200, {"result", "turbo", "sounds", "sound_link"}, None, {"error": "sound step failed"}))
+        self.assertEqual((r.json["result"]["donor"], r.json["turbo"]["donor"]), ("ks_a", "ks_a"))
+        self.assertEqual(self.saved_state(), self.kit("ks_a"))
+
+    def test_a_donor_whose_actor_cannot_be_read_keeps_the_donor_and_is_reported(self):
+        self.remove_actor("ks_a")
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual((r.status, r.json["sounds"], set(r.json["sound_link"])), (200, None, {"error"}))
+        self.assertIsInstance(r.json["sound_link"]["error"], str)
+        self.assertEqual(r.json["turbo"]["donor"], "ks_a")
+        self.assertEqual(self.saved_state(), self.kit("ks_a"))
+
+    def test_a_damaged_saved_sound_choice_keeps_the_donor_and_is_reported(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: 5})
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual((r.status, r.json["sounds"], r.json["sound_link"]), (200, None, {"error": "damaged sound choice in the saved state"}))
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: 5, tune.TURBO_KEY: {"donor": "ks_a"}})
+
+    def test_a_refused_donor_is_400_and_the_sound_is_not_touched(self):
+        self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_NONE}})
+        for body in ({"donor": "ks_zz"}, {"donor": "ks_x"}, {"donor": 5}, {"donor": "ks_a", "car": "ks_t"}):
+            with self.subTest(body):
+                self.assertEqual(self.post("/api/turbo_set", body).status, 400)
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_NONE}})
+
+    def test_turbo_reset_leaves_the_sound_choice_untouched(self):
+        self.write(self.state_file(), dict(self.kit("ks_a"), **{tune.SOUND_KEY: {"turbo": T_RX7}}))
+        r = self.post("/api/turbo_reset", {})
+        self.assertEqual((r.status, set(r.json), r.json["removed"]), (200, {"removed", "turbo"}, True))
+        self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7}})
+
+    def test_the_link_happens_under_state_lock(self):
+        held, real = [], tune.set_sound
+
+        def spy(*args, **kw):
+            held.append(ts.STATE_LOCK.locked())
+            return real(*args, **kw)
+        self.patch(tune, "set_sound", spy)
+        self.assertEqual(self.post("/api/turbo_set", {"donor": "ks_a"}).status, 200)
+        self.assertEqual(held, [True])
 
 
 # -------------------------------------------------------------------------------------------------- job lifecycle

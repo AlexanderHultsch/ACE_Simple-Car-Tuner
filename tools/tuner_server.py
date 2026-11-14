@@ -64,12 +64,26 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         when it has none or is not offered any more), "car", "tune" and "has_turbo" (the car has a turbo itself);
                         needs the base car
   POST /api/turbo_set   {"donor": car id}                 chooses the donor; answers {"result": {donor, count, kind, boost},
-                        "turbo": the answer of GET /api/turbo}
-  POST /api/turbo_reset {}                                removes the choice; answers {"removed", "turbo"}
+                        "turbo": the answer of GET /api/turbo, "sounds", "sound_link"}: the turbo sound follows the donor, so
+                        after the donor is stored the turbo sound of the car and tune is set to the donor's own turbo sound
+                        (tune.sound_own; the stored choice is removed when it is the car's own sound); "sound_link" is
+                        {"slot": "turbo", "key": the donor's turbo sound} and "sounds" the answer of GET /api/sounds then; both are
+                        null when the donor has no turbo entry (nothing is changed); a problem of the sound step never fails the
+                        donor choice: "sound_link" is {"error": text} and "sounds" null
+  POST /api/turbo_reset {}                                removes the choice; answers {"removed", "turbo"}; the sound choice stays
                         A tune with a turbo kit shows the turbo settings in /api/settings (read from the kit built on that read)
                         and builds with the donor's turbo, so the page must read the settings again after every change of the
                         kit; /api/settings answers 400 with the "turbo kit: ..." message when the kit cannot be built (the donor
                         is gone, the car has a turbo).
+  GET  /api/sounds      the sound picker of the car and the tune: "slots" ("turbo" and "backfire", each {"options": the sounds
+                        the installed cars offer (key, event, bank, optional, cars), "own": the key of the car's own sound or null
+                        when it has no entry of the slot, "selected": the key of the saved choice or null}), "missing" (saved
+                        choices that are not offered any more: slot, key), "skipped" (cars whose .actor file could not be read:
+                        car, reason), "car" and "tune"; needs the base car
+  POST /api/sound_set   {"slot": "turbo" | "backfire", "key": option key or null}   sets the sound of the slot (null or the car's
+                        own sound removes the choice); answers the new sounds like GET /api/sounds
+  POST /api/sound_reset {"slot": optional}                removes the choice of that slot, without "slot" of every slot; answers
+                        the new sounds like GET /api/sounds
 The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so does /api/groups.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
 and without the game package only the tested cars of tuner/cars.json): the query parameter ?car=<id> on GET, the field
@@ -78,7 +92,7 @@ Every route also takes an optional tune next to the car (?tune=<x> on GET, the f
 the default tune of the car (the modded car <new_id>), "draft" the draft of the base car (the values of the base car
 that are not saved as a modded car yet), any other value the id of a modded car of that car (400 otherwise).
 
-Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner), 404 (unknown path), 405 (any method but GET and POST, with the header Allow: GET, POST), 413 (body over 65536 bytes), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, garage or turbo kit edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
+Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner), 404 (unknown path), 405 (any method but GET and POST, with the header Allow: GET, POST), 413 (body over 65536 bytes), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, garage, turbo kit or sound edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
 
 The job state (GET /api/state "job") is global, there is one background job at a time for all cars. The state answer
 also lists the car ("car", "cars") and the installed package of the selected modded car; the old single-car layout of the work folder
@@ -652,9 +666,21 @@ def api_turbo_set(car, body):
     with STATE_LOCK:
         try:
             result = tune.set_turbo(work, car, donor, tune_id)
-            return {"result": result, "turbo": turbo_json(work, car, tune_id)}
+            sounds, sound_link = turbo_sound_link(work, car, donor, tune_id)
+            return {"result": result, "turbo": turbo_json(work, car, tune_id), "sounds": sounds, "sound_link": sound_link}
         except ValueError as e:
             raise ApiError(400, str(e)) from None
+
+
+def turbo_sound_link(work, car, donor, tune_id):
+    try:
+        key = tune.sound_own(work, donor)["turbo"]
+        if key is None:
+            return None, None
+        view = tune.set_sound(work, car, "turbo", key, tune_id)
+    except ValueError as e:
+        return None, {"error": str(e)}
+    return dict(view, car=car, tune=tune_id), {"slot": "turbo", "key": key}
 
 
 def api_turbo_reset(car, body):
@@ -665,6 +691,47 @@ def api_turbo_reset(car, body):
         try:
             res = tune.reset_turbo(work, car, tune_id)
             return {"removed": res["removed"], "turbo": turbo_json(work, car, tune_id)}
+        except ValueError as e:
+            raise ApiError(400, str(e)) from None
+
+
+def sounds_json(work, car, tune_id):
+    return dict(tune.sound_choices(work, car, tune_id), car=car, tune=tune_id)
+
+
+def api_sounds(car, tune_id):
+    work = CONFIG["work"]
+    require_base(work, car)
+    with STATE_LOCK:
+        try:
+            return sounds_json(work, car, tune_id)
+        except ValueError as e:
+            raise ApiError(400, str(e)) from None
+
+
+def api_sound_set(car, body):
+    work, tune_id, slot, key = CONFIG["work"], body.get("tune"), body.get("slot"), body.get("key")
+    refuse_while_job_runs()
+    if not isinstance(slot, str) or not slot.strip() or not (key is None or isinstance(key, str)):
+        raise ApiError(400, "need slot (text) and key (text or null)")
+    require_base(work, car)
+    with STATE_LOCK:
+        try:
+            return dict(tune.set_sound(work, car, slot, key, tune_id), car=car, tune=tune_id)
+        except ValueError as e:
+            raise ApiError(400, str(e)) from None
+
+
+def api_sound_reset(car, body):
+    work, tune_id, slot = CONFIG["work"], body.get("tune"), body.get("slot")
+    refuse_while_job_runs()
+    if slot is not None and not isinstance(slot, str):
+        raise ApiError(400, "slot must be text")
+    require_base(work, car)
+    with STATE_LOCK:
+        try:
+            tune.reset_sounds(work, car, tune_id, slot)
+            return sounds_json(work, car, tune_id)
         except ValueError as e:
             raise ApiError(400, str(e)) from None
 
@@ -691,13 +758,15 @@ def request_tune(value, query, car):
 
 
 GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyres": api_tyres,
-              "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo}
+              "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
+              "/api/sounds": api_sounds}
 POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": api_reset_all,
                "/api/init": api_init, "/api/duplicate": api_duplicate,
                "/api/apply": api_apply, "/api/tyre_new": api_tyre_new, "/api/tyre_rename": api_tyre_rename,
                "/api/tyre_source": api_tyre_source, "/api/tyre_set": api_tyre_set, "/api/tyre_unset": api_tyre_unset,
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
-               "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset}
+               "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset,
+               "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset}
 
 
 def private_ip(text):

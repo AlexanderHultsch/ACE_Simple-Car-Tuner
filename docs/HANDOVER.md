@@ -81,6 +81,18 @@ Read this first in a new session, then [TUNER_SPEC.md](TUNER_SPEC.md) (state of 
   - the description of the group Turbo in `tuner/catalogue.json` still says that only cars whose engine has a turbo show these settings: update it for the kit and regenerate `docs/settings` with `tune.py doc --all` on the PC;
   - the extra turbo settings of the task table below (lag up / down, wastegate, controllers) will also apply to cars with a kit once they are added to the catalogue.
 
+### Short task list for the next local session: turbo sound gate (decided by Alex, 2026-11-14)
+
+Goal: find out in one short session whether a turbo sound can be taken from a car easily. If it cannot, the turbo sound idea is dropped. Background and options: [CONCEPT_TURBO_SOUND.md](CONCEPT_TURBO_SOUND.md).
+
+1. Back up the work folder and the mods folder first (item 2 of "Start here").
+2. Look at the sound files of a turbo car (Mazda RX-7 FD) and of an NA car (BMW M3 E46 CSL), read-only, time box 1 to 2 hours: list the `sfx` folder of both; read the event paths from `master_bank.strings.bank` (a dump of the printable strings is enough: write `tools/bank_strings.py` with tests if it helps); decode both `.carfinalstate` files with `car_json.py decode` and diff the audio event slots.
+3. Question to answer: is there a SEPARATE turbo (or blow-off) event or slot that can be copied on its own (its own event path, or its own event type in the slots), and does the game accept an extra bank file in a car's `sfx` folder? "Easy" means: yes to both, found with the steps above, without FMOD Studio.
+4. If yes: the in-game experiments E1 and E2 of the concept (backups, scratch mods folder, Alex's OK). If no: drop the idea. Write "dropped" with the findings into `docs/review/PC-REVIEW.md` and into the concept document, and plan no further turbo work (the turbo kit stays as it is, marked experimental).
+5. Only if the sound is possible, or Alex wants the boost behaviour anyway: the turbo kit checks (rows 36-44), including the comparison of the engine `damage` block of the donor and of the NA car.
+
+Value note: without sound a turbo adds little over `power_scale`, which already raises the peak power. What a turbo adds is how the power is delivered (boost builds with RPM and lag, throttle response, boost held on throttle-off) and the sound.
+
 ### Next tasks for the local PC session: settings the Kunos page lists that the catalogue does not have yet
 
 The cloud has no `schemas/`, so the field names below are the Kunos page's names, not proven field names. On the PC: find the real names with `python tools\dump_car.py` or `car_json.py decode` on one of the five cars, add each setting to `tuner/catalogue.json` with its targets (description = the official statement first, then our notes, one text without a marker; `verified` false until tested in the game), write tests with synthetic files, and regenerate the references with `tune.py doc --all`. Work with scratch `--work` and `--mods` folders.

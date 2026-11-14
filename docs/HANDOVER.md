@@ -26,7 +26,7 @@ Read this first in a new session, then [TUNER_SPEC.md](TUNER_SPEC.md) (state of 
 - **Docs layout:** `start_tuner.bat` in the root; `docs/README.md` = short advertisement-style GitHub overview with `docs/images/screenshot.jpg`; `docs/USER_GUIDE.md` = the detailed guide; `docs/CLAUDE.md` = project instructions (moved from the root).
 - **Review of the 2026-11-12 bug fixes** was done on the PC the day before (docs/review/PC-REVIEW.md), `main` is the reviewed state.
 
-**Code state:** everything is on `main` (placeholder; `git log -1` gives the commit). The cloud branch `claude/exciting-ramanujan-i0haq5` is no longer used: work goes to `main`. A leftover local branch such as `review-pc` is the local session's own business (check `git branch --no-merged main` before deleting it). Suite: 2019 tests (`python -m unittest discover -s tests`), runs without game data.
+**Code state:** everything is on `main` (placeholder; `git log -1` gives the commit). The cloud branch `claude/exciting-ramanujan-i0haq5` is no longer used: work goes to `main`. A leftover local branch such as `review-pc` is the local session's own business (check `git branch --no-merged main` before deleting it). Suite: 2305 tests (`python -m unittest discover -s tests`), runs without game data.
 
 **What is new (details: `docs/TUNER_SPEC.md` sections 4b, 4c and 4d, `docs/USER_GUIDE.md`):**
 - Other mods and every reference to them are removed from the repository; this project builds its own program.

@@ -84,7 +84,8 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           (rearTyreCompounds) and the front_tyre_data_path (rear_tyre_data_paths) of every presets/*.compatibletyres
           that name the stock file (compared case-insensitively). Other compounds and the shared files stay untouched;
           an axle without a changed tyre setting gets no file and no changed reference. A changed tyre setting of a
-          car whose tyre file is inside the car folder (not shared) is refused: not supported yet.
+          car whose tyre file is inside the car folder (not shared) is refused: not supported yet. A saved sound choice (see Sound
+          picker below) is written into the car's .actor file as the last step.
           --tune ID builds that modded car: its own state, its id as the new id, its name suffix; --tune and --new-id
           cannot be combined. A suffix that another modded car of the same stock car uses is refused before building.
           --new-id ID alone builds the state of the tune with that id (the default tune when it is left out); an id
@@ -156,9 +157,13 @@ car's <id>.actor file; entries are found by their type, never by position (the o
 key: the event text (event:/parts/turbos/turbo_rx7), with #<optionalParam> appended when the entry has an optionalParam other than 0. The choice is
 the object "_sounds" = {"turbo": <option key>, "backfire": <option key>} in the state file (tune_state.json, draft_state.json); a missing slot or
 no "_sounds" entry = the car keeps its own sound. Like "_tyres" and "_turbo" it is not a setting: never reported as unknown, shown in show or
-counted as an applied setting, and duplicate and Create copy it with the rest of the state; Reset all drops it. apply and the build ignore it for
-now. The options are read from the .actor file of every car with an extracted base; a car whose file is missing or cannot be decoded is skipped
-and reported.
+counted as an applied setting, and duplicate and Create copy it with the rest of the state; Reset all drops it. apply writes the choice into the
+<new id>.actor of the built car after all other steps (library functions sound_plan, write_sounds): only the entry of the slot changes (event, bank,
+optionalParam; a car without an entry of the slot gets a copy of the entry of the first installed car that offers the sound), a slot equal to the
+car's own sound changes nothing, and each changed slot adds the note "note: sound <slot>: <old key> -> <new key>" ("- added <key>" for an appended
+entry) and an item {slot, from, to, added} to the "sounds" list of the apply result. A saved sound that is not offered any more, or a slot that does
+not exist, refuses the apply before anything is built. The options are read from the .actor file of every car with an extracted base; a car whose
+file is missing or cannot be decoded is skipped and reported.
 sounds:       lists per slot "<slot> (own: <key or none>, selected: <key or ->)" and one line per option: a mark (* selected, = the car's own
           sound, else blank), the key and the cars that use it (at most 4, then +N more); the none sound comes first, then by event name. A saved
           sound that is not offered any more is a warning.
@@ -1455,7 +1460,7 @@ def changed_settings(work, car_id, new_id, cat):
 
 def apply_plan(work, car_id, new_id, install, mods_dir, cat):
     """Everything apply needs, checked before anything is built: root (base, or the kit root of a tune with a turbo kit), mods, rows,
-    changed, info, garage (plan or None) and kit (the kit.json of the kit root or None)."""
+    changed, info, garage (plan or None), kit (the kit.json of the kit root or None) and sounds (sound_plan, [] without a saved choice)."""
     root, mods = check_target(work, car_id, new_id, install, mods_dir)
     rows, changed = changed_settings(work, car_id, new_id, cat)
     info = load_stock_info(work, car_id)
@@ -1469,7 +1474,8 @@ def apply_plan(work, car_id, new_id, install, mods_dir, cat):
     state = load_state(work, car_id, new_id)
     garage = garage_plan(work, car_id, new_id, state, cat) if TYRE_KEY in state else None
     kit = kit_info(root) if TURBO_KEY in state else None
-    return {"root": root, "mods": mods, "rows": rows, "changed": changed, "info": info, "garage": garage, "kit": kit}
+    sound_steps = sound_plan(work, car_id, state) if SOUND_KEY in state else []
+    return {"root": root, "mods": mods, "rows": rows, "changed": changed, "info": info, "garage": garage, "kit": kit, "sounds": sound_steps}
 
 
 def build_partial(work, car_id, new_id, out_dir, plan, cat, game):
@@ -1604,9 +1610,11 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     edits, tyre_edits, applied = collect_edits(car_id, new_id, plan["changed"], part, car_root)
     write_edits(car_root, edits)
     notes += write_tyres(plan["root"], car_id, new_id, car_root, plan["garage"], tyre_edits)
+    changed_sounds = write_sounds(car_root, new_id, plan["sounds"])
+    notes += sound_notes(changed_sounds)
     pkg = pack_build(work, new_id, part, out_dir)
     result = {"new_id": new_id, "tune": new_id, "name_suffix": meta["name_suffix"], "build_dir": out_dir, "package": pkg, "size": os.path.getsize(pkg),
-              "applied": applied, "notes": notes, "installed": None, "backup": None}
+              "applied": applied, "notes": notes, "sounds": changed_sounds, "installed": None, "backup": None}
     if install:
         result["backup"], result["installed"] = install_package(work, pkg, plan["mods"])
     return result
@@ -2930,6 +2938,60 @@ def reset_sounds(work, car_id, tune=None, slot=None):
     if removed:
         save_state(work, car_id, state, tune)
     return {"removed": removed}
+
+
+def sound_template(work, slot, option):
+    """The audio entry of the option in the .actor of the first installed car that offers it (option["cars"][0], see sound_options)."""
+    for _, entry in sounds.slot_entries(load_actor(work, option["cars"][0]), slot):
+        if sounds.option_of(entry)["key"] == option["key"]:
+            return entry
+    raise ValueError("the %s sound %s is not in the actor of %s any more" % (slot, option["key"], option["cars"][0]))
+
+
+def sound_plan(work, car_id, state):
+    """Everything apply needs for the saved sounds of a state, checked before anything is built: [{slot, option, template}] in slot
+    order, option from sound_options and template its entry (sound_template); a slot whose saved sound is the car's own is left out.
+    An unknown slot or a saved sound that is no option any more is a ValueError. Writes nothing."""
+    saved = saved_sounds(state)
+    for slot in saved:
+        sounds.slot_type(slot)
+    if not saved:
+        return []
+    options, _ = sound_options(work)
+    own = sound_own(work, car_id)
+    plan = []
+    for slot in sounds.SLOTS:
+        if slot not in saved:
+            continue
+        option = next((o for o in options[slot] if o["key"] == saved[slot]), None)
+        if option is None:
+            raise ValueError("the saved %s sound %s is no longer available (the car that had it is not installed), change or reset it"
+                             % (slot, saved[slot]))
+        if option["key"] != own[slot]:
+            plan.append({"slot": slot, "option": option, "template": sound_template(work, slot, option)})
+    return plan
+
+
+def write_sounds(car_root, new_id, plan):
+    """The sound step of the build: give the .actor of the built car the sounds of a sound_plan. Returns [{slot, from (the option key the
+    car had, None when it had no entry of the slot), to, added (the entry was appended)}] of the changed slots."""
+    if not plan:
+        return []
+    path = find_ci(car_root, new_id + ".actor")
+    actor, name = load_msg(path)
+    changed = []
+    for step in plan:
+        found = sounds.slot_entries(actor, step["slot"])
+        before = sounds.option_of(found[0][1])["key"] if found else None
+        sounds.set_choice(actor, step["slot"], step["option"], step["template"], set_field)
+        changed.append({"slot": step["slot"], "from": before, "to": step["option"]["key"], "added": before is None})
+    save_msg(path, name, actor)
+    return changed
+
+
+def sound_notes(changed):
+    """The notes of apply for the changed sound slots, one line each."""
+    return ["note: sound %s: %s" % (c["slot"], "- added %s" % c["to"] if c["added"] else "%s -> %s" % (c["from"], c["to"])) for c in changed]
 
 
 def ranges_path(work):

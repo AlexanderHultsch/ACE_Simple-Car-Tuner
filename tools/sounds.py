@@ -65,14 +65,14 @@ def collect_options(per_car):
     return {slot: [dict(o, cars=sorted(o["cars"])) for o in sorted(options.values(), key=option_order)] for slot, options in found.items()}
 
 
-def apply_option(entry, option):
-    import tune  # tune imports this module
-
-    tune.set_field(entry, "event", option["event"])
+def apply_option(entry, option, edit):
+    """Put the sound option into an audio entry; edit is the function tune.set_field(obj, key, value) that sets a field and keeps the wire
+    bookkeeping (_order) valid (passed in because tune imports this module)."""
+    edit(entry, "event", option["event"])
     if option.get("bank") is not None:
-        tune.set_field(entry, "bank", option["bank"])
+        edit(entry, "bank", option["bank"])
     if option.get("optional"):
-        tune.set_field(entry, "optionalParam", option["optional"])
+        edit(entry, "optionalParam", option["optional"])
     elif "optionalParam" in entry:
         del entry["optionalParam"]
         order = entry.get("_order")
@@ -80,21 +80,20 @@ def apply_option(entry, option):
             order.remove("optionalParam")
 
 
-def set_choice(obj, slot, option, template_entry):
+def set_choice(obj, slot, option, template_entry, edit):
     """Give the car in obj (a decoded ActorData, changed in place) the sound option for slot. The first entry of the slot's type gets the
     event, bank and optionalParam of the option (optionalParam is removed when the option has none) and keeps its other fields; a car
     without such an entry gets a copy of template_entry (a full entry of a car that uses the option) with the option applied, appended
-    to audio_events. The wire bookkeeping (_order) is kept valid."""
-    import tune  # tune imports this module
-
+    to audio_events. The wire bookkeeping (_order) is kept valid by edit, the function tune.set_field(obj, key, value) (required: tune
+    imports this module, so it is passed in)."""
     slot_type(slot)
     found = slot_entries(obj, slot)
     if found:
-        apply_option(found[0][1], option)
+        apply_option(found[0][1], option, edit)
         return
     car = obj.get("car")
     if not isinstance(car, dict):
         raise ValueError("the actor has no car object")
     entry = copy.deepcopy(template_entry)
-    apply_option(entry, option)
-    tune.set_field(car, "audio_events", audio_events(obj) + [entry])
+    apply_option(entry, option, edit)
+    edit(car, "audio_events", audio_events(obj) + [entry])

@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import sys
 import unittest
 from unittest import mock
@@ -529,41 +530,280 @@ class Apply(World):
         return {k[len(root):]: json.dumps(v, sort_keys=True) for k, v in fc.store.items() if k.startswith(root + os.sep)}
 
 
-class TestApplyIgnoresTheKey(Apply):
-    def test_a_build_with_a_saved_choice_has_the_same_package_inputs_as_one_without(self):
+class ApplySounds(Apply):
+    """apply of ks_x with a sound choice. ks_x has the own sounds turbo_none and backfire_a; the built actor of the fake build is the
+    renamed actor of ks_x, the donors are ks_a (turbo_rx7, backfire_classic#8) and ks_b (turbo_rx7, backfire_a)."""
+
+    def put_actor(self, car_id, obj):
+        fc = self.fakes[car_id]
+        fc.store[fc.key(tune.actor_path(self.work, car_id))] = obj
+
+    def built_actor(self, res):
+        fc = self.fakes["ks_x"]
+        return fc.store[fc.key(os.path.join(res["build_dir"], "content", "cars", res["new_id"], res["new_id"] + ".actor"))]
+
+    def events(self, obj):
+        return obj["car"]["audio_events"]
+
+    def actors_saved(self):
+        return [k for k in self.fakes["ks_x"].saved if k.lower().endswith(".actor")]
+
+    def assertNothingBuilt(self):
+        self.assertEqual(self.calls, [])
+        self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "build")))
+
+    def entry_of(self, obj, slot):
+        return tune.sounds.slot_entries(obj, slot)[0][1]
+
+    def key_of(self, obj, slot):
+        return tune.sounds.option_of(self.entry_of(obj, slot))["key"]
+
+
+class TestApplyWithoutAChange(ApplySounds):
+    def test_without_the_key_nothing_of_the_sound_step_runs(self):
+        self.patch(tune, "sound_plan", lambda *a, **k: self.fail("sound_plan"))
+        self.patch(tune, "sound_options", lambda *a, **k: self.fail("sound_options"))
+        res = self.apply({"limiter": 8000})
+        self.assertEqual((res["sounds"], res["notes"], [a["id"] for a in res["applied"]]), ([], ["note: from build"], ["limiter"]))
+        self.assertEqual(self.actors_saved(), [])
+
+    def test_a_choice_equal_to_the_own_sounds_or_an_empty_one_builds_like_no_choice(self):
         plain = self.apply({"limiter": 8000})
         before = (self.snapshot(plain), plain["notes"], plain["applied"], self.packed[-1], plain["size"])
-        chosen = self.apply({"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_B}})
-        after = (self.snapshot(chosen), chosen["notes"], chosen["applied"], self.packed[-1], chosen["size"])
-        self.assertEqual(after, before)
-        self.assertEqual([a["id"] for a in chosen["applied"]], ["limiter"])
-        self.assertEqual(len(self.packed), 2)
-
-    def test_the_built_actor_keeps_the_stock_sounds(self):
-        res = self.apply({KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
-        built = [json.loads(v) for k, v in self.snapshot(res).items() if k.endswith(".actor")]
-        self.assertEqual(len(built), 1)
-        events = [e["event"] for e in built[0]["car"]["audio_events"]]
-        self.assertIn(T_NONE, events)
-        self.assertIn(B_A, events)
-        self.assertNotIn(T_RX7, events)
+        for chosen in ({KEY: {"turbo": T_NONE, "backfire": B_A}}, {KEY: {"backfire": B_A}}, {KEY: {}}):
+            with self.subTest(chosen):
+                res = self.apply(dict(chosen, limiter=8000))
+                self.assertEqual((self.snapshot(res), res["notes"], res["applied"], self.packed[-1], res["size"]), before)
+                self.assertEqual(res["sounds"], [])
+        self.assertEqual(self.actors_saved(), [])
+        self.assertEqual(len(self.packed), 4)
 
     def test_the_state_file_is_not_touched_by_a_build(self):
         state = {"limiter": 8000, KEY: {"turbo": T_RX7}}
         self.apply(state)
         self.assertEqual(self.state(), state)
 
-    def test_a_choice_for_a_sound_nobody_offers_any_more_does_not_stop_the_build(self):
-        res = self.apply({KEY: {"turbo": T + "turbo_gone"}})
-        self.assertEqual(res["notes"], ["note: from build"])
+    def test_write_sounds_with_an_empty_plan_reads_nothing(self):
+        self.assertEqual(tune.write_sounds(os.path.join(self.work, "nowhere"), "ax_x", []), [])
 
-    def test_apply_from_the_command_line_ignores_the_key_too(self):
+
+class TestApplyChoice(ApplySounds):
+    def test_turbo_only(self):
+        res = self.apply({KEY: {"turbo": T_RX7}})
+        self.assertEqual(res["sounds"], [{"slot": "turbo", "from": T_NONE, "to": T_RX7, "added": False}])
+        self.assertEqual(res["notes"], ["note: from build", "note: sound turbo: %s -> %s" % (T_NONE, T_RX7)])
+        built = self.built_actor(res)
+        self.assertEqual((self.key_of(built, "turbo"), self.key_of(built, "backfire")), (T_RX7, B_A))
+        self.assertEqual([os.path.basename(k) for k in self.actors_saved()], ["ax_x.actor"])
+
+    def test_backfire_only_with_an_optional_param(self):
+        res = self.apply({KEY: {"backfire": B_CLASSIC}})
+        self.assertEqual(res["sounds"], [{"slot": "backfire", "from": B_A, "to": B_CLASSIC, "added": False}])
+        self.assertEqual(res["notes"], ["note: from build", "note: sound backfire: %s -> %s" % (B_A, B_CLASSIC)])
+        built = self.built_actor(res)
+        self.assertEqual(self.entry_of(built, "backfire"), backfire("backfire_classic", optionalParam=8))
+        self.assertEqual(self.key_of(built, "turbo"), T_NONE)
+
+    def test_both_slots_in_the_order_turbo_then_backfire(self):
+        res = self.apply({KEY: {"backfire": B_CLASSIC, "turbo": T_RX7}})
+        self.assertEqual([(s["slot"], s["from"], s["to"], s["added"]) for s in res["sounds"]],
+                         [("turbo", T_NONE, T_RX7, False), ("backfire", B_A, B_CLASSIC, False)])
+        self.assertEqual(res["notes"], ["note: from build", "note: sound turbo: %s -> %s" % (T_NONE, T_RX7),
+                                        "note: sound backfire: %s -> %s" % (B_A, B_CLASSIC)])
+        built = self.built_actor(res)
+        self.assertEqual((self.key_of(built, "turbo"), self.key_of(built, "backfire")), (T_RX7, B_CLASSIC))
+        self.assertEqual(len(self.actors_saved()), 1)
+
+    def test_a_slot_equal_to_the_own_sound_changes_nothing_and_the_other_one_is_applied(self):
+        res = self.apply({KEY: {"turbo": T_NONE, "backfire": B_B}})
+        self.assertEqual([s["slot"] for s in res["sounds"]], ["backfire"])
+        self.assertEqual(res["notes"], ["note: from build", "note: sound backfire: %s -> %s" % (B_A, B_B)])
+        self.assertEqual(self.key_of(self.built_actor(res), "turbo"), T_NONE)
+
+    def test_only_the_entry_of_the_slot_changes_and_every_other_entry_and_field_stays(self):
+        plain = self.built_actor(self.apply({"limiter": 8000}))
+        res = self.apply({"limiter": 8000, KEY: {"turbo": T_RX7}})
+        built = self.built_actor(res)
+        self.assertEqual(len(self.events(built)), len(self.events(plain)))
+        self.assertEqual([i for i, (a, b) in enumerate(zip(self.events(plain), self.events(built))) if a != b], [1])
+        self.assertEqual(self.entry_of(built, "turbo"), dict(self.entry_of(plain, "turbo"), event=T_RX7))
+        self.assertEqual({k: v for k, v in built["car"].items() if k != "audio_events"}, {k: v for k, v in plain["car"].items() if k != "audio_events"})
+
+    def test_the_engine_entry_stays_as_the_clone_made_it(self):
+        res = self.apply({KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
+        self.assertEqual(self.events(self.built_actor(res))[0], entry("event:/evo_cars/ax_x/engine_int", None, "content\\sfx\\ax_x.bank"))
+
+    def test_a_choice_changes_no_other_file_of_the_build(self):
+        plain = self.apply({"limiter": 8000})
+        plain_view = (self.snapshot(plain), plain["applied"], self.packed[-1])
+        chosen = self.apply({"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
+
+        def without_actor(snap):
+            return {k: v for k, v in snap.items() if not k.lower().endswith(".actor")}
+        self.assertEqual((without_actor(self.snapshot(chosen)), chosen["applied"], self.packed[-1]),
+                         (without_actor(plain_view[0]), plain_view[1], plain_view[2]))
+        self.assertNotEqual(self.snapshot(chosen), plain_view[0])
+
+    def test_a_plain_option_removes_the_optional_param_of_the_car(self):
+        self.put_actor("ks_x", actor(engine(), turbo("turbo_none"), backfire("backfire_classic", optionalParam=8)))
+        res = self.apply({KEY: {"backfire": B_A}})
+        self.assertEqual(res["sounds"], [{"slot": "backfire", "from": B_CLASSIC, "to": B_A, "added": False}])
+        self.assertEqual(self.entry_of(self.built_actor(res), "backfire"), backfire("backfire_a"))
+
+    def test_a_car_without_a_turbo_entry_gets_one_with_the_transform_and_bank_of_the_first_donor(self):
+        self.put_actor("ks_x", actor(engine(), backfire("backfire_a")))
+        donor = turbo("turbo_rx7", transform={"scale": {"x": 2.5}}, bank="content\\sfx\\turbo_rx7.bank")
+        self.put_actor("ks_a", actor(backfire("backfire_classic", optionalParam=8), engine(), donor))
+        self.put_actor("ks_b", actor(engine(), turbo("turbo_rx7", transform={"scale": {"x": 7.0}}, bank="content\\sfx\\turbo_rx7.bank"), backfire("backfire_a")))
+        res = self.apply({KEY: {"turbo": T_RX7}})
+        self.assertEqual(res["sounds"], [{"slot": "turbo", "from": None, "to": T_RX7, "added": True}])
+        self.assertEqual(res["notes"], ["note: from build", "note: sound turbo: - added %s" % T_RX7])
+        built = self.built_actor(res)
+        self.assertEqual(len(self.events(built)), 3)
+        self.assertEqual(self.events(built)[2], donor)
+        self.assertEqual(self.events(built)[:2], [entry("event:/evo_cars/ax_x/engine_int", None, "content\\sfx\\ax_x.bank"), backfire("backfire_a")])
+        self.assertEqual(built["car"]["_order"], ["cameras"] + ["audio_events"] * 3)
+
+    def test_an_appended_entry_with_an_optional_param_takes_the_option(self):
+        self.put_actor("ks_x", actor(engine(), turbo("turbo_none")))
+        res = self.apply({KEY: {"backfire": B_CLASSIC}})
+        self.assertEqual(res["sounds"], [{"slot": "backfire", "from": None, "to": B_CLASSIC, "added": True}])
+        self.assertEqual(self.events(self.built_actor(res))[2], backfire("backfire_classic", optionalParam=8))
+
+    def test_the_actor_of_the_build_is_found_whatever_its_case(self):
+        folder = os.path.join(self.work, "built", "ax_x")
+        os.makedirs(folder)
+        path = os.path.join(folder, "AX_X.ACTOR")
+        with open(path, "wb"):
+            pass
+        fc = self.fakes["ks_x"]
+        fc.store[fc.key(path)] = actor(engine(), turbo("turbo_none"))
+        option = {"key": T_RX7, "event": T_RX7, "bank": BANK, "optional": None, "cars": ["ks_a"]}
+        changed = tune.write_sounds(folder, "ax_x", [{"slot": "turbo", "option": option, "template": turbo("turbo_rx7")}])
+        self.assertEqual(changed, [{"slot": "turbo", "from": T_NONE, "to": T_RX7, "added": False}])
+        self.assertEqual(fc.saved, [fc.key(path)])
+        self.assertEqual(self.entry_of(fc.store[fc.key(path)], "turbo")["event"], T_RX7)
+
+    def test_a_second_apply_starts_from_the_base_again(self):
+        first = self.apply({KEY: {"turbo": T_RX7}})
+        again = self.apply({KEY: {"turbo": T_RX7}})
+        self.assertEqual((self.snapshot(again), again["notes"], again["sounds"]), (self.snapshot(first), first["notes"], first["sounds"]))
+        plain = self.apply({})
+        self.assertEqual(self.key_of(self.built_actor(plain), "turbo"), T_NONE)
+        self.assertEqual(plain["sounds"], [])
+
+    def test_the_plan_names_the_slot_option_and_template_and_leaves_out_the_own_sound(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"turbo": T_RX7, "backfire": B_A}})
+        plan = tune.apply_plan(self.work, "ks_x", "ax_x", False, None, self.cat)["sounds"]
+        self.assertEqual([p["slot"] for p in plan], ["turbo"])
+        self.assertEqual((plan[0]["option"]["key"], plan[0]["option"]["cars"], plan[0]["template"]), (T_RX7, ["ks_a", "ks_b"], turbo("turbo_rx7")))
+
+
+class TestApplyRefusals(ApplySounds):
+    def test_a_saved_sound_that_is_no_option_any_more_refuses_before_anything_is_built(self):
+        message = "^the saved turbo sound %s is no longer available \\(the car that had it is not installed\\), change or reset it$"
+        with self.assertRaisesRegex(ValueError, message % (T + "turbo_gone")):
+            self.apply({KEY: {"turbo": T + "turbo_gone"}})
+        self.assertNothingBuilt()
+
+    def test_a_key_of_the_other_slot_refuses(self):
+        with self.assertRaisesRegex(ValueError, "^the saved turbo sound %s is no longer available" % B_B):
+            self.apply({KEY: {"turbo": B_B}})
+        self.assertNothingBuilt()
+
+    def test_the_car_that_had_the_sound_is_not_installed_any_more(self):
+        tune.set_sound(self.work, "ks_x", "turbo", T_RX7)
+        for car_id in ("ks_a", "ks_b"):
+            shutil.rmtree(os.path.join(self.work, car_id, "base"))
+        with self.assertRaisesRegex(ValueError, "^the saved turbo sound %s is no longer available" % T_RX7):
+            self.apply(self.state())
+        self.assertNothingBuilt()
+
+    def test_a_refused_apply_leaves_the_previous_build_alone(self):
+        first = self.apply({KEY: {"turbo": T_RX7}})
+        with open(first["package"], "rb") as f:
+            before = (self.snapshot(first), f.read(), len(self.calls))
+        with self.assertRaisesRegex(ValueError, "is no longer available"):
+            self.apply({KEY: {"turbo": T_RX7, "backfire": B + "backfire_gone"}})
+        with open(first["package"], "rb") as f:
+            self.assertEqual((self.snapshot(first), f.read(), len(self.calls)), before)
+        self.assertFalse(os.path.exists(first["build_dir"] + ".partial"))
+
+    def test_the_check_does_not_write_into_a_stale_partial_folder(self):
+        stale = os.path.join(self.work, "ks_x", "build", "ax_x.partial", "stale.bin")
+        self.write(stale, "x")
+        with self.assertRaises(ValueError):
+            self.apply({KEY: {"turbo": T + "turbo_gone"}})
+        self.assertTrue(os.path.isfile(stale))
+
+    def test_a_slot_that_does_not_exist_refuses(self):
+        with self.assertRaisesRegex(ValueError, "^unknown sound slot 'horn', use one of: turbo, backfire$"):
+            self.apply({KEY: {"horn": "event:/h", "turbo": T_RX7}})
+        self.assertNothingBuilt()
+
+    def test_a_damaged_choice_refuses_with_the_message_of_the_other_commands(self):
+        for bad in ([], "turbo", 5, {"turbo": 5}):
+            with self.subTest(repr(bad)):
+                with self.assertRaisesRegex(ValueError, "^damaged sound choice in the saved state$"):
+                    self.apply({KEY: bad})
+                self.assertNothingBuilt()
+
+    def test_a_car_whose_own_actor_cannot_be_read_refuses(self):
+        self.put_actor("ks_x", ValueError("cannot decode"))
+        with self.assertRaisesRegex(ValueError, "^cannot decode$"):
+            self.apply({KEY: {"turbo": T_RX7}})
+        self.assertNothingBuilt()
+
+
+class TestApplyFromTheDraft(ApplySounds):
+    def apply_tune(self, new_id):
+        return tune.apply(self.work, "ks_x", new_id, install=False, catalogue=self.cat, game=self.game)
+
+    def test_create_from_the_draft_applies_the_sounds_of_the_draft(self):
+        tune.save_state(self.work, "ks_x", {"limiter": 9000, KEY: {"turbo": T_RX7, "backfire": B_B}}, tune.DRAFT)
+        created = tune.new_tune_from_draft(self.work, "ks_x")
+        self.assertEqual(self.state(created["id"])[KEY], {"turbo": T_RX7, "backfire": B_B})
+        res = self.apply_tune(created["id"])
+        self.assertEqual([(s["slot"], s["to"]) for s in res["sounds"]], [("turbo", T_RX7), ("backfire", B_B)])
+        built = self.built_actor(res)
+        self.assertEqual((self.key_of(built, "turbo"), self.key_of(built, "backfire")), (T_RX7, B_B))
+        self.assertEqual(self.state(tune.DRAFT)[KEY], {"turbo": T_RX7, "backfire": B_B})
+
+    def test_a_duplicate_builds_the_sounds_of_its_source_and_the_source_keeps_its_own(self):
         tune.save_state(self.work, "ks_x", {KEY: {"turbo": T_RX7}})
+        copied = tune.duplicate_tune(self.work, "ks_x", None)
+        self.assertEqual(self.apply_tune(copied["id"])["sounds"][0]["to"], T_RX7)
+        tune.set_sound(self.work, "ks_x", "turbo", None, copied["id"])
+        self.assertEqual(self.apply_tune(copied["id"])["sounds"], [])
+        self.assertEqual(self.apply_tune(None)["sounds"][0]["to"], T_RX7)
+
+    def test_the_draft_is_not_built_into_a_tune_without_the_key(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"turbo": T_RX7}}, tune.DRAFT)
+        self.assertEqual(self.apply({"limiter": 8000})["sounds"], [])
+
+
+class TestApplyCommand(ApplySounds):
+    def test_the_command_prints_the_sound_notes(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
         with mock.patch.object(tune, "game_running", lambda: False):
             code, out, err = self.run_main("apply", "--no-install")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("applied 0 setting(s)", out)
+        self.assertIn("applied 0 setting(s)\nnote: from build\nnote: sound turbo: %s -> %s\nnote: sound backfire: %s -> %s\n"
+                      % (T_NONE, T_RX7, B_A, B_CLASSIC), out)
         self.assertNotIn("_sounds", out)
+
+    def test_a_vanished_sound_is_an_error_line_with_exit_1_and_nothing_is_built(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"turbo": T + "turbo_gone"}})
+        with mock.patch.object(tune, "game_running", lambda: False):
+            code, out, err = self.run_main("apply", "--no-install")
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("error: the saved turbo sound %s is no longer available" % (T + "turbo_gone")), err)
+        self.assertEqual(self.calls, [])
+
+    def test_the_server_lines_name_the_notes(self):
+        import tuner_server
+        res = self.apply({KEY: {"turbo": T_RX7}})
+        self.assertIn("note: sound turbo: %s -> %s" % (T_NONE, T_RX7), tuner_server.apply_lines(res))
 
 
 class TestCommands(World):

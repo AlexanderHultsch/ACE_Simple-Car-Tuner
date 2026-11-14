@@ -9,6 +9,7 @@ from support import desc_enum, desc_field, desc_file, desc_message, desc_set, pb
 
 import car_json as cj
 import sounds
+import tune
 
 BANK = "content\\sfx\\turbo.bank"
 BACKFIRE_BANK = "content\\sfx\\backfire.bank"
@@ -85,7 +86,7 @@ class TestSlotEntries(unittest.TestCase):
 
     def test_an_unknown_slot_is_a_value_error(self):
         for call in (lambda: sounds.slot_entries(actor(), "horn"), lambda: sounds.slot_type("Turbo"),
-                     lambda: sounds.set_choice(actor(), "horn", option("e"), entry("e")), lambda: sounds.slot_entries(actor(), None)):
+                     lambda: sounds.set_choice(actor(), "horn", option("e"), entry("e"), tune.set_field), lambda: sounds.slot_entries(actor(), None)):
             with self.assertRaisesRegex(ValueError, "^unknown sound slot .*, use one of: turbo, backfire$"):
                 call()
 
@@ -177,7 +178,7 @@ class TestSetChoiceReplace(unittest.TestCase):
     def test_event_and_bank_are_replaced_and_the_other_fields_kept(self):
         obj = actor(engine(), turbo("turbo_none", debug=True), backfire("backfire_a"))
         other = copy.deepcopy(obj)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_rx7", "content\\sfx\\other.bank"), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_rx7", "content\\sfx\\other.bank"), None, tune.set_field)
         e = obj["car"]["audio_events"][1]
         self.assertEqual(e, {"event": TURBO + "turbo_rx7", "type": "TurboEvent", "debug": True, "transform": {"scale": {"x": 1.0}}, "bank": "content\\sfx\\other.bank"})
         other["car"]["audio_events"][1] = e
@@ -186,27 +187,27 @@ class TestSetChoiceReplace(unittest.TestCase):
     def test_the_other_slot_and_the_other_entries_are_not_touched(self):
         obj = actor(backfire("backfire_a", optionalParam=8), engine(), turbo("turbo_a"))
         before = copy.deepcopy(obj)
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][1:], before["car"]["audio_events"][1:])
         self.assertEqual(obj["car"]["audio_events"][0]["event"], BACKFIRE + "backfire_b")
 
     def test_a_car_with_the_entry_late_in_the_list_is_found_by_type(self):
         obj = actor(engine(), backfire("backfire_a"), entry("event:/h", "Horn"), turbo("turbo_none"))
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None, tune.set_field)
         self.assertEqual([e["event"] for e in obj["car"]["audio_events"]],
                          ["event:/evo_cars/ks_x/engine_int", BACKFIRE + "backfire_a", "event:/h", TURBO + "turbo_b"])
 
     def test_the_optional_param_of_the_option_is_set_and_replaces_an_old_one(self):
         obj = actor(backfire("backfire_a", optionalParam=3), turbo("turbo_a"))
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][0]["optionalParam"], 8)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK, 5), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK, 5), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][1]["optionalParam"], 5)
 
     def test_an_optional_param_is_removed_when_the_option_has_none(self):
         obj = actor(backfire("backfire_a", optionalParam=8), turbo("turbo_a", optionalParam=0))
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None, tune.set_field)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None, tune.set_field)
         self.assertEqual([e for e in obj["car"]["audio_events"] if "optionalParam" in e], [])
 
     def test_the_entry_order_names_follow_a_removed_and_an_added_optional_param(self):
@@ -215,8 +216,8 @@ class TestSetChoiceReplace(unittest.TestCase):
         t = turbo("turbo_a")
         t["_order"] = ["event", "type", "transform", "bank"]
         obj = actor(a, t)
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK, 4), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None, tune.set_field)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK, 4), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][0]["_order"], ["event", "type", "transform", "bank"])
         self.assertEqual(obj["car"]["audio_events"][1]["_order"], ["event", "type", "transform", "bank", "optionalParam"])
 
@@ -224,38 +225,38 @@ class TestSetChoiceReplace(unittest.TestCase):
         e = turbo("turbo_a")
         del e["bank"]
         obj = actor(e)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", BANK), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][0]["bank"], BANK)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_c", None), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_c", None), None, tune.set_field)
         self.assertEqual(obj["car"]["audio_events"][0]["bank"], BANK)
 
     def test_the_car_order_is_not_changed_by_a_replace(self):
         obj = actor(engine(), turbo("turbo_a"))
         order = list(obj["car"]["_order"])
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None, tune.set_field)
         self.assertEqual(obj["car"]["_order"], order)
 
     def test_the_template_is_not_used_when_the_car_has_an_entry(self):
         obj = actor(turbo("turbo_a"))
         template = turbo("turbo_t")
         before = copy.deepcopy(template)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), template)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), template, tune.set_field)
         self.assertEqual((len(obj["car"]["audio_events"]), template), (1, before))
 
     def test_only_the_first_entry_of_a_type_is_changed(self):
         obj = actor(turbo("turbo_a"), turbo("turbo_b"))
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_c"), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_c"), None, tune.set_field)
         self.assertEqual([e["event"] for e in obj["car"]["audio_events"]], [TURBO + "turbo_c", TURBO + "turbo_b"])
 
     def test_it_returns_nothing(self):
-        self.assertIsNone(sounds.set_choice(actor(turbo("turbo_a")), "turbo", option(TURBO + "turbo_b"), None))
+        self.assertIsNone(sounds.set_choice(actor(turbo("turbo_a")), "turbo", option(TURBO + "turbo_b"), None, tune.set_field))
 
 
 class TestSetChoiceAppend(unittest.TestCase):
     def test_a_car_without_the_entry_gets_a_copy_of_the_template_with_the_option_applied(self):
         obj = actor(engine(), backfire("backfire_a"))
         template = turbo("turbo_rx7", debug=True)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", "content\\sfx\\b.bank", 2), template)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b", "content\\sfx\\b.bank", 2), template, tune.set_field)
         e = obj["car"]["audio_events"][-1]
         self.assertEqual(e, {"event": TURBO + "turbo_b", "type": "TurboEvent", "debug": True, "transform": {"scale": {"x": 1.0}}, "bank": "content\\sfx\\b.bank",
                              "optionalParam": 2})
@@ -266,7 +267,7 @@ class TestSetChoiceAppend(unittest.TestCase):
         template = turbo("turbo_rx7", optionalParam=8)
         before = copy.deepcopy(template)
         obj = actor(engine())
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), template)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), template, tune.set_field)
         self.assertEqual(template, before)
         e = obj["car"]["audio_events"][-1]
         self.assertIsNot(e, template)
@@ -276,18 +277,18 @@ class TestSetChoiceAppend(unittest.TestCase):
 
     def test_the_names_of_audio_events_in_the_car_order_grow_by_one_at_the_old_place(self):
         obj = actor(engine(), backfire("backfire_a"))
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"))
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"), tune.set_field)
         self.assertEqual(obj["car"]["_order"], ["cameras", "audio_events", "audio_events", "audio_events", "lights"])
         self.assertEqual(len(obj["car"]["audio_events"]), 3)
 
     def test_without_a_car_order_none_is_made(self):
         obj = actor(engine(), order=False)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"))
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"), tune.set_field)
         self.assertNotIn("_order", obj["car"])
 
     def test_a_car_without_any_audio_events_gets_the_list(self):
         obj = {"car": {"cameras": ["c1"], "_order": ["cameras"]}}
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), backfire("backfire_a"))
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), backfire("backfire_a"), tune.set_field)
         self.assertEqual([e["event"] for e in obj["car"]["audio_events"]], [BACKFIRE + "backfire_b"])
         self.assertEqual(obj["car"]["_order"], ["cameras", "audio_events"])
 
@@ -295,14 +296,27 @@ class TestSetChoiceAppend(unittest.TestCase):
         for obj in ({}, {"car": 5}):
             before = copy.deepcopy(obj)
             with self.assertRaisesRegex(ValueError, "^the actor has no car object$"):
-                sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"))
+                sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), turbo("turbo_rx7"), tune.set_field)
             self.assertEqual(obj, before)
+
+    def test_the_editing_function_is_required(self):
+        obj = actor(engine(), turbo("turbo_a"))
+        before = copy.deepcopy(obj)
+        with self.assertRaises(TypeError):
+            sounds.set_choice(obj, "turbo", option(TURBO + "turbo_b"), None)
+        with self.assertRaises(TypeError):
+            sounds.apply_option(obj["car"]["audio_events"][1], option(TURBO + "turbo_b"))
+        self.assertEqual(obj, before)
+
+    def test_the_module_does_not_import_tune(self):
+        with open(sounds.__file__, encoding="utf-8") as f:
+            self.assertNotRegex(f.read(), r"(?m)^\s*(import tune|from tune )")
 
     def test_an_unknown_slot_changes_nothing(self):
         obj = actor(engine(), turbo("turbo_a"))
         before = copy.deepcopy(obj)
         with self.assertRaises(ValueError):
-            sounds.set_choice(obj, "horn", option("e"), turbo("t"))
+            sounds.set_choice(obj, "horn", option("e"), turbo("t"), tune.set_field)
         self.assertEqual(obj, before)
 
 
@@ -369,7 +383,7 @@ class TestOnTheWire(unittest.TestCase):
     def test_replace_event_and_bank(self):
         wire = wire_actor(wire_entry("event:/e/engine_int", None, "b"), wire_entry(TURBO + "turbo_none", "TurboEvent", debug=True), wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK))
         obj = self.decode(wire)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_generic", "content\\sfx\\other.bank"), None)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_generic", "content\\sfx\\other.bank"), None, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(wire_entry("event:/e/engine_int", None, "b"),
                                                       wire_entry(TURBO + "turbo_generic", "TurboEvent", "content\\sfx\\other.bank", debug=True),
                                                       wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK)))
@@ -377,14 +391,14 @@ class TestOnTheWire(unittest.TestCase):
     def test_remove_the_optional_param(self):
         wire = wire_actor(wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK, 8), wire_entry(TURBO + "turbo_a", "TurboEvent"))
         obj = self.decode(wire)
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(wire_entry(BACKFIRE + "backfire_b", "Backfire", BACKFIRE_BANK), wire_entry(TURBO + "turbo_a", "TurboEvent")))
 
     def test_add_and_change_the_optional_param(self):
         wire = wire_actor(wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK), wire_entry(TURBO + "turbo_a", "TurboEvent", optional=3))
         obj = self.decode(wire)
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), None)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_a", BANK, 5), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), None, tune.set_field)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_a", BANK, 5), None, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(wire_entry(BACKFIRE + "backfire_b", "Backfire", BACKFIRE_BANK, 8),
                                                       wire_entry(TURBO + "turbo_a", "TurboEvent", optional=5)))
 
@@ -392,16 +406,16 @@ class TestOnTheWire(unittest.TestCase):
         entry_wire = pb_msg(9, pb_str(6, BACKFIRE_BANK), pb_str(1, BACKFIRE + "backfire_a"), pb_vint(2, ENUM["Backfire"]), pb_vint(7, 8))
         obj = self.decode(wire_actor(entry_wire))
         self.assertIn("_order", obj["car"]["audio_events"][0])
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK), None, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(pb_msg(9, pb_str(6, BACKFIRE_BANK), pb_str(1, BACKFIRE + "backfire_b"), pb_vint(2, ENUM["Backfire"]))))
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_c", BACKFIRE_BANK, 4), None)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_c", BACKFIRE_BANK, 4), None, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(pb_msg(9, pb_str(6, BACKFIRE_BANK), pb_str(1, BACKFIRE + "backfire_c"), pb_vint(2, ENUM["Backfire"]), pb_vint(7, 4))))
 
     def test_append_for_a_car_without_the_entry(self):
         template = self.decode(wire_actor(wire_entry(TURBO + "turbo_rx7", "TurboEvent")))["car"]["audio_events"][0]
         wire = wire_actor(wire_entry("event:/e/engine_int", None, "b"), wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK))
         obj = self.decode(wire)
-        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_rx7"), template)
+        sounds.set_choice(obj, "turbo", option(TURBO + "turbo_rx7"), template, tune.set_field)
         self.assertEqual(self.encode(obj), wire_actor(wire_entry("event:/e/engine_int", None, "b"), wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK),
                                                       wire_entry(TURBO + "turbo_rx7", "TurboEvent")))
         again = self.decode(self.encode(obj))
@@ -410,7 +424,7 @@ class TestOnTheWire(unittest.TestCase):
     def test_append_with_an_optional_param_into_a_car_without_audio_events(self):
         template = self.decode(wire_actor(wire_entry(BACKFIRE + "backfire_a", "Backfire", BACKFIRE_BANK)))["car"]["audio_events"][0]
         obj = self.decode(pb_msg(103, pb_str(1, "c1"), pb_vint(200, 5), pb_str(10, "l1")))
-        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), template)
+        sounds.set_choice(obj, "backfire", option(BACKFIRE + "backfire_b", BACKFIRE_BANK, 8), template, tune.set_field)
         self.assertEqual(self.encode(obj), pb_msg(103, pb_str(1, "c1"), pb_vint(200, 5), pb_str(10, "l1"), wire_entry(BACKFIRE + "backfire_b", "Backfire", BACKFIRE_BANK, 8)))
 
 

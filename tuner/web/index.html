@@ -330,6 +330,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
           </div>
           <p id="turbo-picked"></p>
           <p id="turbo-error" class="msg err" role="alert" hidden></p>
+          <p id="turbo-sound-link" class="msg" hidden></p>
         </div>
       </div>
       <div id="garage" class="panel garage">
@@ -349,6 +350,29 @@ button.reset { padding: 2px 8px; font-size: 12px; }
           </div>
           <p id="garage-error" class="msg err" role="alert" hidden></p>
           <p id="garage-missing" class="msg warn" hidden></p>
+        </div>
+      </div>
+      <div id="sounds" class="panel garage">
+        <button id="sounds-toggle" class="grouptoggle" type="button" aria-expanded="false" aria-controls="sounds-body">
+          <span class="chev" aria-hidden="true"></span>
+          <span class="gname">Sounds</span>
+          <span id="sounds-count" class="gcount"></span>
+        </button>
+        <div id="sounds-body" class="garage-body" hidden>
+          <p class="garage-help">Give this car the turbo sound and the exhaust backfire sound of another car. The first entry of each list is the car's own sound. This changes only what the car sounds like, not how it drives. Unverified: not heard in the game yet.</p>
+          <div class="garage-row">
+            <label for="sound-turbo">Turbo sound</label>
+            <select id="sound-turbo" disabled></select>
+          </div>
+          <div class="garage-row">
+            <label for="sound-backfire">Backfire sound</label>
+            <select id="sound-backfire" disabled></select>
+          </div>
+          <div class="actions">
+            <button id="btn-sound-reset" type="button" disabled>Reset to the car's own sounds</button>
+          </div>
+          <p id="sounds-error" class="msg err" role="alert" hidden></p>
+          <p id="sounds-missing" class="msg warn" hidden></p>
         </div>
       </div>
     </section>
@@ -500,6 +524,20 @@ let turboOpen = false;
 let turboError = "";
 let turboSeq = 0;
 let turboJobRunning = false;
+// what /api/turbo_set answered as sound_link (null, {slot, key} or {error}): the hint about the turbo sound in the kit panel,
+// cleared by the next write of the kit and when another car is selected
+let turboSoundLink = null;
+// the sounds of the shown car or modded car as the server answered last ({slots, missing, ...}), null until it is loaded;
+// soundsOpen is the state of its panel: collapsed by default, reset when another car is selected; soundsSeq counts the loads and
+// the answers of writes, so that a slow load never replaces a newer answer; SOUND_SELECTS are the selects in the order of
+// SOUND_SLOTS
+const SOUND_SLOTS = ["turbo", "backfire"];
+const SOUND_SELECTS = { turbo: $("sound-turbo"), backfire: $("sound-backfire") };
+let sounds = null;
+let soundsOpen = false;
+let soundsError = "";
+let soundsSeq = 0;
+let soundsJobRunning = false;
 
 function storedSelection() {
   const none = { car: null, tune: DRAFT };
@@ -708,6 +746,7 @@ function renderButtons() {
   renderTyreControls();
   renderGarageControls();
   renderTurboControls();
+  renderSoundsControls();
 }
 
 function addLine(box, text, cls) {
@@ -1184,6 +1223,7 @@ async function loadSettings() {
     localError = "";
     loadGarage();
     loadTurbo();
+    loadSounds();
   } catch (e) {
     localError = e.message;
   }
@@ -1201,6 +1241,7 @@ async function startJob(path, body) {
   await refresh();
   loadGarage();
   loadTurbo();
+  loadSounds();
 }
 
 // Create has started its job: when it ends with a new modded car, that car is selected
@@ -1275,6 +1316,7 @@ async function submitDialog() {
       await refresh();
       loadGarage();
       loadTurbo();
+      loadSounds();
     } else {
       const res = await api("/api/duplicate", { new_id: newId, suffix: suffix }, target);
       if (dialog !== mine) return;
@@ -1328,7 +1370,12 @@ function switchCar(next) {
   turboOpen = false;
   turbo = null;
   turboError = "";
+  turboSoundLink = null;
   renderTurbo();
+  soundsOpen = false;
+  sounds = null;
+  soundsError = "";
+  renderSounds();
   awaitCreated = null;
   closeDialog(false);
   tableLoaded = false;
@@ -1849,10 +1896,19 @@ function renderTurboToggle() {
   $("turbo-count").textContent = turboSummary();
 }
 
+function turboSoundText() {
+  if (!turboSoundLink) return "";
+  if (turboSoundLink.error) return "The sound could not follow the donor: " + turboSoundLink.error;
+  return "Turbo sound set to " + soundShortName(turboSoundLink.key) + " (change it in Sounds).";
+}
+
 function renderTurboLines() {
   $("turbo-picked").textContent = turboPickedText();
   $("turbo-error").textContent = turboError;
   $("turbo-error").hidden = turboError === "";
+  $("turbo-sound-link").textContent = turboSoundText();
+  $("turbo-sound-link").hidden = turboSoundLink === null;
+  $("turbo-sound-link").classList.toggle("warn", !!turboSoundLink && !!turboSoundLink.error);
 }
 
 // the select is off while a job runs, while the page has no base car and while there is nothing to choose from (no donor
@@ -1936,10 +1992,19 @@ async function turboFailed(target, e) {
   renderTurboLines();
 }
 
+// the donor choice may have set the turbo sound of the car: the kit panel shows a hint, the sounds panel the new sounds
+function showTurboSound(target, answer) {
+  if (target !== selection) return;
+  turboSoundLink = answer.sound_link || null;
+  renderTurboLines();
+  if (answer.sounds) showSounds(target, answer.sounds);
+}
+
 async function sendTurboSet(donor, target) {
   try {
     const res = await api("/api/turbo_set", { donor: donor }, target);
     showTurbo(target, res.turbo);
+    showTurboSound(target, res);
     return true;
   } catch (e) {
     await turboFailed(target, e);
@@ -1964,6 +2029,7 @@ function turboChanged() {
   const donor = $("turbo-donor").value;
   const target = selection;
   turboError = "";
+  turboSoundLink = null;
   renderTurboLines();
   queue = queue.then(async () => {
     const done = donor === "" ? await sendTurboReset(target) : await sendTurboSet(donor, target);
@@ -1974,6 +2040,177 @@ function turboChanged() {
 function toggleTurbo() {
   turboOpen = !turboOpen;
   renderTurboToggle();
+}
+
+/* ---------- sounds ---------- */
+
+// the key of a sound without the event path of its slot, a trailing #<n> shown as the variant
+function soundShortName(key) {
+  const m = key.replace(/^event:\/parts\/(?:turbos|backfires)\//, "").match(/^(.*?)(?:#(\d+))?$/);
+  return m[1] + (m[2] ? " (variant " + m[2] + ")" : "");
+}
+
+// at most two names of the cars that offer a sound, the rest as a count
+function soundCarNames(ids) {
+  const list = info && info.cars ? info.cars : [];
+  const names = ids.map((id) => {
+    const c = list.find((x) => x.id === id);
+    return c ? optionText(c) : id;
+  });
+  return names.slice(0, 2).join(", ") + (names.length > 2 ? " +" + (names.length - 2) + " more" : "");
+}
+
+function soundOptionText(option) {
+  return soundShortName(option.key) + " - " + soundCarNames(option.cars);
+}
+
+function soundsChosen() {
+  return sounds ? SOUND_SLOTS.filter((slot) => sounds.slots[slot].selected !== null).length : 0;
+}
+
+function soundsSummary() {
+  if (!sounds) return "";
+  const n = soundsChosen();
+  return n === 0 ? "(own sounds)" : "(" + n + " changed)";
+}
+
+function renderSoundsToggle() {
+  $("sounds-toggle").setAttribute("aria-expanded", soundsOpen ? "true" : "false");
+  $("sounds-body").hidden = !soundsOpen;
+  $("sounds-count").textContent = soundsSummary();
+}
+
+function renderSoundsLines() {
+  const missing = sounds ? sounds.missing : [];
+  $("sounds-missing").textContent = missing.length ? "No longer available, Apply is refused until you change the sound or reset it: " +
+    missing.map((m) => m.slot + ": " + soundShortName(m.key)).join(", ") : "";
+  $("sounds-missing").hidden = missing.length === 0;
+  $("sounds-error").textContent = soundsError;
+  $("sounds-error").hidden = soundsError === "";
+}
+
+// the selects and the reset button are off while a job runs and while the page has no base car
+function lockSounds() {
+  let why = "";
+  if (!info) why = serverError || "server not reachable";
+  else if (info.job.state === "running") why = "a job is running";
+  else if (!info.base_present) why = "extract the stock car first";
+  const locked = why !== "";
+  for (const slot of SOUND_SLOTS) {
+    SOUND_SELECTS[slot].disabled = locked || !sounds;
+    SOUND_SELECTS[slot].title = why;
+  }
+  if (!locked && soundsChosen() === 0 && !(sounds && sounds.missing.length)) why = "the car has its own sounds already";
+  $("btn-sound-reset").disabled = why !== "";
+  $("btn-sound-reset").title = why;
+}
+
+// the lists are drawn from the answer of the server: the first entry is the car's own sound, the other entries are the sounds
+// of the cars, except the car's own sound; the focus stays on the select the user changed
+function renderSounds() {
+  const focused = SOUND_SLOTS.find((slot) => SOUND_SELECTS[slot] === document.activeElement);
+  for (const slot of SOUND_SLOTS) {
+    const select = SOUND_SELECTS[slot];
+    const view = sounds ? sounds.slots[slot] : null;
+    select.replaceChildren();
+    const own = el("option", "", "The car's own sound (" + (view && view.own !== null ? soundShortName(view.own) : "none") + ")");
+    own.value = "";
+    select.appendChild(own);
+    for (const option of view ? view.options : []) {
+      if (option.key === view.own) continue;
+      const o = el("option", "", soundOptionText(option));
+      o.value = option.key;
+      select.appendChild(o);
+    }
+    select.value = view && view.selected !== null ? view.selected : "";
+  }
+  renderSoundsToggle();
+  renderSoundsLines();
+  lockSounds();
+  if (focused && !SOUND_SELECTS[focused].disabled) SOUND_SELECTS[focused].focus();
+}
+
+function renderSoundsControls() {
+  const running = !!info && info.job.state === "running";
+  // a job that ends may have installed a car or changed the car, so the sounds are read again
+  if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();
+  soundsJobRunning = running;
+  lockSounds();
+}
+
+async function loadSounds() {
+  if (!tableLoaded) return;
+  const target = selection;
+  const seq = ++soundsSeq;
+  try {
+    const res = await api("/api/sounds", undefined, target);
+    if (seq !== soundsSeq || target !== selection) return;
+    sounds = res;
+    soundsError = "";
+  } catch (e) {
+    if (seq !== soundsSeq || target !== selection) return;
+    sounds = null;
+    soundsError = e.message;
+  }
+  renderSounds();
+}
+
+// the answer of a write carries the sounds of the server, which win over what the page showed
+function showSounds(target, answer) {
+  if (target !== selection) return;
+  soundsSeq += 1;
+  sounds = answer;
+  soundsError = "";
+  renderSounds();
+}
+
+// a failed write: the sounds are read again and the message of the write stays in the panel
+async function soundsFailed(target, e) {
+  await loadSounds();
+  if (target !== selection) return;
+  soundsError = e.message;
+  renderSoundsLines();
+}
+
+async function sendSoundSet(slot, key, target) {
+  try {
+    const res = await api("/api/sound_set", { slot: slot, key: key }, target);
+    showSounds(target, res);
+  } catch (e) {
+    await soundsFailed(target, e);
+  }
+}
+
+async function sendSoundReset(target) {
+  try {
+    const res = await api("/api/sound_reset", {}, target);
+    showSounds(target, res);
+  } catch (e) {
+    await soundsFailed(target, e);
+  }
+}
+
+// the first entry (value "") takes the choice away and is sent as null
+function soundChanged(ev) {
+  const slot = SOUND_SLOTS.find((s) => SOUND_SELECTS[s] === ev.target);
+  if (!slot) return;
+  const key = ev.target.value === "" ? null : ev.target.value;
+  const target = selection;
+  soundsError = "";
+  renderSoundsLines();
+  queue = queue.then(() => sendSoundSet(slot, key, target));
+}
+
+function resetSounds() {
+  const target = selection;
+  soundsError = "";
+  renderSoundsLines();
+  queue = queue.then(() => sendSoundReset(target));
+}
+
+function toggleSounds() {
+  soundsOpen = !soundsOpen;
+  renderSoundsToggle();
 }
 
 /* ---------- tabs ---------- */
@@ -1988,6 +2225,7 @@ function selectTab(i) {
   if (tabs[i] === $("tab-tyres")) loadTyres(true);
   if (tabs[i] === $("tab-car")) loadGarage();
   if (tabs[i] === $("tab-car")) loadTurbo();
+  if (tabs[i] === $("tab-car")) loadSounds();
 }
 
 function tabKey(ev) {
@@ -2034,6 +2272,9 @@ $("turbo-donor").addEventListener("change", turboChanged);
 $("garage-toggle").addEventListener("click", toggleGarage);
 $("garage").addEventListener("change", garageChanged);
 $("btn-garage-reset").addEventListener("click", resetGarage);
+$("sounds-toggle").addEventListener("click", toggleSounds);
+$("sounds").addEventListener("change", soundChanged);
+$("btn-sound-reset").addEventListener("click", resetSounds);
 $("search").addEventListener("input", applyFilter);
 $("changed-only").addEventListener("change", applyFilter);
 $("show-advanced").addEventListener("change", () => {

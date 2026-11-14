@@ -206,12 +206,8 @@ def called_paths():
     return paths | {p for p in re.findall(r'"(/api/[^"?]*)\?id=" \+ encodeURIComponent\(', CODE) if p in ts.QUERY_ROUTES}
 
 
-# sound picker routes the page does not call yet: delete this list and the filter below when the page starts to use them
-SOUND_ROUTES_WITHOUT_PAGE = ("/api/sounds", "/api/sound_set", "/api/sound_reset")
-
-
 class TestApiContract(unittest.TestCase):
-    ROUTES = [r for r in list(ts.GET_ROUTES) + list(ts.POST_ROUTES) if r not in SOUND_ROUTES_WITHOUT_PAGE]
+    ROUTES = list(ts.GET_ROUTES) + list(ts.POST_ROUTES)
 
     def test_the_script_has_one_fetch_call(self):
         self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
@@ -260,7 +256,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 24, calls)
+        self.assertEqual(len(calls), 27, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -1734,7 +1730,7 @@ class TestGarage(unittest.TestCase):
                 self.assertTrue(route in ts.GET_ROUTES or route in ts.POST_ROUTES)
                 self.assertIn(route, called_paths())
         self.assertNotIn("SERVER_ONLY", globals())
-        self.assertEqual(sorted(TestApiContract.ROUTES + list(SOUND_ROUTES_WITHOUT_PAGE)), sorted(list(ts.GET_ROUTES) + list(ts.POST_ROUTES)))
+        self.assertEqual(sorted(TestApiContract.ROUTES), sorted(list(ts.GET_ROUTES) + list(ts.POST_ROUTES)))
 
     def test_the_fields_of_a_choice_the_page_reads_are_sent_by_the_server(self):
         source = inspect.getsource(ts.tune.garage_choices) + inspect.getsource(ts.tune.garage_entries)
@@ -1979,6 +1975,288 @@ class TestTurboKit(unittest.TestCase):
         for name in ("renderTurbo", "renderTurboToggle", "renderTurboLines"):
             with self.subTest(name):
                 self.assertTrue("textContent" in function_body(name) or 'el("option"' in function_body(name))
+
+
+class TestSounds(unittest.TestCase):
+    CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
+    PANEL = re.search(r'<div id="sounds" class="panel garage">.*?\n      </div>\n', MARKUP, re.S).group(0)
+    FUNCTIONS = ("soundShortName", "soundCarNames", "soundOptionText", "soundsChosen", "soundsSummary", "renderSoundsToggle",
+                 "renderSoundsLines", "lockSounds", "renderSounds", "renderSoundsControls", "loadSounds", "showSounds", "soundsFailed",
+                 "sendSoundSet", "sendSoundReset", "soundChanged", "resetSounds", "toggleSounds")
+
+    @staticmethod
+    def tag(ident):
+        return re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % ident, MARKUP).group(0)
+
+    def test_the_panel_is_the_last_element_of_the_settings_section_directly_after_the_garage_panel(self):
+        tuner = MARKUP[MARKUP.index('<section id="tuner"'):MARKUP.index("</section>", MARKUP.index('<section id="tuner"'))]
+        self.assertEqual(tuner.count('id="sounds"'), 1)
+        self.assertLess(tuner.index('id="garage"'), tuner.index('id="sounds"'))
+        between = tuner[tuner.index('id="garage"'):tuner.index('<div id="sounds"')]
+        self.assertEqual(between.count('class="panel garage"'), 1)
+        self.assertTrue(tuner.rstrip().endswith(self.PANEL.rstrip()))
+        self.assertNotRegex(self.tag("sounds"), r"\bhidden\b")
+        self.assertIn('id="sounds"', self.CAR_PANEL)
+        self.assertNotIn('id="sounds"', MARKUP[MARKUP.index('id="panel-tyres"'):])
+
+    def test_the_header_is_a_collapsed_toggle_button_with_a_chevron_the_name_and_the_summary(self):
+        button = re.search(r'<button id="sounds-toggle".*?</button>', self.PANEL, re.S).group(0)
+        for part in ('class="grouptoggle"', 'type="button"', 'aria-expanded="false"', 'aria-controls="sounds-body"'):
+            self.assertIn(part, button)
+        self.assertIn('<span class="chev" aria-hidden="true"></span>', button)
+        self.assertIn('<span class="gname">Sounds</span>', button)
+        self.assertIn('<span id="sounds-count" class="gcount"></span>', button)
+        self.assertIn("sounds-body", dom_ids())
+
+    def test_the_body_is_hidden_by_default_and_holds_the_help_the_two_labelled_selects_the_reset_button_and_the_lines(self):
+        self.assertRegex(self.tag("sounds-body"), r"\bhidden>$")
+        body = self.PANEL[self.PANEL.index('id="sounds-body"'):]
+        self.assertIn("Give this car the turbo sound and the exhaust backfire sound of another car. The first entry of each list is the "
+                      "car's own sound. This changes only what the car sounds like, not how it drives. Unverified: not heard in the game "
+                      "yet.", body)
+        self.assertRegex(body, r'<label for="sound-turbo">Turbo sound</label>\s*<select id="sound-turbo" disabled></select>')
+        self.assertRegex(body, r'<label for="sound-backfire">Backfire sound</label>\s*<select id="sound-backfire" disabled></select>')
+        self.assertIn('<button id="btn-sound-reset" type="button" disabled>Reset to the car\'s own sounds</button>', body)
+        self.assertIn('<p id="sounds-error" class="msg err" role="alert" hidden></p>', body)
+        self.assertIn('<p id="sounds-missing" class="msg warn" hidden></p>', body)
+        self.assertLess(body.index("garage-help"), body.index('id="sound-turbo"'))
+        self.assertLess(body.index('id="sound-turbo"'), body.index('id="sound-backfire"'))
+        self.assertLess(body.index('id="sound-backfire"'), body.index("btn-sound-reset"))
+        self.assertLess(body.index("btn-sound-reset"), body.index('id="sounds-error"'))
+        self.assertLess(body.index('id="sounds-error"'), body.index('id="sounds-missing"'))
+        self.assertNotIn("aria-live", self.PANEL)
+        self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
+
+    def test_the_panel_is_collapsed_by_default_and_the_toggle_flips_a_separate_variable(self):
+        self.assertRegex(CODE, r"(?m)^let soundsOpen = false;")
+        self.assertNotRegex(CODE, r"soundsOpen = true")
+        body = function_body("toggleSounds")
+        self.assertIn("soundsOpen = !soundsOpen;", body)
+        self.assertNotIn("expanded", body)
+        toggle = function_body("renderSoundsToggle")
+        self.assertIn('$("sounds-toggle").setAttribute("aria-expanded", soundsOpen ? "true" : "false");', toggle)
+        self.assertIn('$("sounds-body").hidden = !soundsOpen;', toggle)
+        self.assertIn('$("sounds-count").textContent = soundsSummary();', toggle)
+        self.assertIn('$("sounds-toggle").addEventListener("click", toggleSounds);', CODE)
+        for name in ("setAllGroups", "toggleGroup", "applyFilter", "revealGroup"):
+            with self.subTest(name):
+                self.assertNotIn("sound", function_body(name).lower())
+        self.assertNotIn("sound", re.search(r'<div class="toolbar">.*?</div>', MARKUP, re.S).group(0))
+
+    def test_another_car_collapses_the_panel_and_forgets_the_old_answer(self):
+        body = function_body("switchCar")
+        for part in ("soundsOpen = false;", "sounds = null;", 'soundsError = "";', "renderSounds();", "turboSoundLink = null;"):
+            self.assertIn(part, body)
+        self.assertEqual(len(re.findall(r"(?m)^  soundsOpen = false;", CODE)), 1)
+
+    def test_the_summary_counts_the_slots_with_a_choice_or_says_own_sounds(self):
+        self.assertIn("SOUND_SLOTS.filter((slot) => sounds.slots[slot].selected !== null).length", function_body("soundsChosen"))
+        body = function_body("soundsSummary")
+        self.assertIn('n === 0 ? "(own sounds)" : "(" + n + " changed)"', body)
+        self.assertIn('if (!sounds) return "";', body)
+        self.assertIn('const SOUND_SLOTS = ["turbo", "backfire"];', CODE)
+        self.assertEqual(set(ts.tune.sounds.SLOTS), {"turbo", "backfire"})
+
+    def test_the_first_entry_of_a_list_is_the_own_sound_and_the_own_sound_is_left_out_of_the_rest(self):
+        body = function_body("renderSounds")
+        self.assertIn('el("option", "", "The car\'s own sound (" + (view && view.own !== null ? soundShortName(view.own) : "none") + ")")', body)
+        self.assertIn('own.value = "";', body)
+        self.assertIn("for (const option of view ? view.options : []) {", body)
+        self.assertIn("if (option.key === view.own) continue;", body)
+        self.assertIn("o.value = option.key;", body)
+        self.assertIn("soundOptionText(option)", body)
+        self.assertLess(body.index("own.value"), body.index("soundOptionText(option)"))
+        self.assertIn('select.value = view && view.selected !== null ? view.selected : "";', body)
+        self.assertRegex(CODE, r'(?m)^const SOUND_SELECTS = \{ turbo: \$\("sound-turbo"\), backfire: \$\("sound-backfire"\) \};$')
+
+    def test_an_option_is_the_short_name_and_the_names_of_at_most_two_cars_and_a_count(self):
+        self.assertIn('soundShortName(option.key) + " - " + soundCarNames(option.cars)', function_body("soundOptionText"))
+        body = function_body("soundCarNames")
+        self.assertIn("info && info.cars ? info.cars : []", body)
+        self.assertIn("list.find((x) => x.id === id)", body)
+        self.assertIn("c ? optionText(c) : id", body)
+        self.assertIn('names.slice(0, 2).join(", ") + (names.length > 2 ? " +" + (names.length - 2) + " more" : "")', body)
+        self.assertIn("c.display_name || c.label", function_body("optionText"))
+
+    def test_the_short_name_strips_both_event_paths_and_shows_a_trailing_hash_number_as_a_variant(self):
+        body = function_body("soundShortName")
+        first, second = re.search(r'key\.replace\(/(.*?)/, ""\)\.match\(/(.*?)/\);', body).groups()
+        self.assertIn("event:", first)
+        self.assertIn("turbos", first)
+        self.assertIn("backfires", first)
+        self.assertIn('return m[1] + (m[2] ? " (variant " + m[2] + ")" : "");', body)
+
+        def short(key):
+            m = re.match(second, re.sub(first, "", key))
+            return m.group(1) + (" (variant " + m.group(2) + ")" if m.group(2) else "")
+
+        self.assertEqual(short("event:/parts/turbos/turbo_a"), "turbo_a")
+        self.assertEqual(short("event:/parts/turbos/turbo_a#2"), "turbo_a (variant 2)")
+        self.assertEqual(short("event:/parts/backfires/backfire_b#12"), "backfire_b (variant 12)")
+        self.assertEqual(short("event:/parts/backfires/backfire_none"), "backfire_none")
+        self.assertEqual(short("other/event"), "other/event")
+
+    def test_the_sounds_are_read_with_the_selection_without_a_body_through_the_one_api_helper(self):
+        body = function_body("loadSounds")
+        self.assertIn('await api("/api/sounds", undefined, target);', body)
+        self.assertIn("if (!tableLoaded) return;", body)
+        self.assertIn("const seq = ++soundsSeq;", body)
+        self.assertIn("if (seq !== soundsSeq || target !== selection) return;", body)
+        self.assertEqual(body.count("if (seq !== soundsSeq || target !== selection) return;"), 2)
+        self.assertIn("sounds = res;", body)
+        self.assertIn("soundsError = e.message;", body)
+        self.assertIn("renderSounds();", body)
+        self.assertRegex(CODE, r"(?m)^let soundsSeq = 0;")
+        self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
+
+    def test_the_sounds_are_loaded_wherever_the_garage_is(self):
+        settings = function_body("loadSettings")
+        self.assertIn("loadSounds();", settings)
+        self.assertLess(settings.index("tableLoaded = true;"), settings.index("loadSounds();"))
+        self.assertRegex(settings, r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
+        self.assertIn('if (tabs[i] === $("tab-car")) loadSounds();', function_body("selectTab"))
+        controls = function_body("renderSoundsControls")
+        self.assertIn('if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();', controls)
+        self.assertIn("soundsJobRunning = running;", controls)
+        self.assertIn("renderSoundsControls();", function_body("renderButtons"))
+        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
+        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
+        # Reset all reads the settings again, and that reads the garage, the kit and the sounds again
+        self.assertIn("await loadSettings();", function_body("resetAll"))
+        self.assertEqual(re.findall(r"setTimeout\([^;]*[Ss]ound", CODE), [])
+        self.assertEqual(len(re.findall(r"setInterval\(", CODE)), 0)
+
+    def test_a_change_posts_the_slot_and_the_key_or_null_for_the_first_entry_through_the_shared_queue(self):
+        self.assertIn('$("sounds").addEventListener("change", soundChanged);', CODE)
+        body = function_body("soundChanged")
+        self.assertIn("SOUND_SLOTS.find((s) => SOUND_SELECTS[s] === ev.target)", body)
+        self.assertIn('const key = ev.target.value === "" ? null : ev.target.value;', body)
+        self.assertIn("const target = selection;", body)
+        self.assertIn("queue = queue.then(() => sendSoundSet(slot, key, target));", body)
+        send = function_body("sendSoundSet")
+        self.assertIn('await api("/api/sound_set", { slot: slot, key: key }, target);', send)
+        self.assertIn("showSounds(target, res);", send)
+        fields = set(re.findall(r"\b(\w+):", re.search(r'api\("/api/sound_set", (\{[^}]*\})', CODE).group(1)))
+        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_sound_set))) - {"tune"})
+
+    def test_reset_posts_sound_reset_without_a_slot_through_the_queue_and_is_off_unless_something_is_stored(self):
+        self.assertIn('$("btn-sound-reset").addEventListener("click", resetSounds);', CODE)
+        self.assertIn("queue = queue.then(() => sendSoundReset(target));", function_body("resetSounds"))
+        reset = function_body("sendSoundReset")
+        self.assertIn('await api("/api/sound_reset", {}, target);', reset)
+        self.assertIn("showSounds(target, res);", reset)
+        body = function_body("lockSounds")
+        self.assertIn('if (!locked && soundsChosen() === 0 && !(sounds && sounds.missing.length)) why = "the car has its own sounds already";', body)
+        self.assertIn('$("btn-sound-reset").disabled = why !== "";', body)
+        self.assertIn('$("btn-sound-reset").title = why;', body)
+
+    def test_the_server_answer_wins_and_a_failed_write_reads_the_sounds_again_and_keeps_its_message(self):
+        show = function_body("showSounds")
+        self.assertIn("if (target !== selection) return;", show)
+        self.assertIn("soundsSeq += 1;", show)
+        self.assertIn("sounds = answer;", show)
+        self.assertIn("renderSounds();", show)
+        failed = function_body("soundsFailed")
+        self.assertLess(failed.index("await loadSounds();"), failed.index("soundsError = e.message;"))
+        self.assertIn("renderSoundsLines();", failed)
+        for name in ("sendSoundSet", "sendSoundReset"):
+            with self.subTest(name):
+                self.assertIn("await soundsFailed(target, e);", function_body(name))
+
+    def test_the_missing_sounds_are_a_warning_line_and_the_error_line_is_the_alert_of_the_panel(self):
+        body = function_body("renderSoundsLines")
+        self.assertIn('"No longer available, Apply is refused until you change the sound or reset it: "', body)
+        self.assertIn('missing.map((m) => m.slot + ": " + soundShortName(m.key)).join(", ")', body)
+        self.assertIn("sounds ? sounds.missing : []", body)
+        self.assertIn('$("sounds-missing").hidden = missing.length === 0;', body)
+        self.assertIn('$("sounds-error").textContent = soundsError;', body)
+        self.assertIn('$("sounds-error").hidden = soundsError === "";', body)
+
+    def test_the_selects_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car_or_an_answer(self):
+        body = function_body("lockSounds")
+        self.assertIn('if (!info) why = serverError || "server not reachable";', body)
+        self.assertIn('else if (info.job.state === "running") why = "a job is running";', body)
+        self.assertIn('else if (!info.base_present) why = "extract the stock car first";', body)
+        self.assertIn("SOUND_SELECTS[slot].disabled = locked || !sounds;", body)
+        self.assertIn("SOUND_SELECTS[slot].title = why;", body)
+        self.assertIn("lockSounds();", function_body("renderSounds"))
+        self.assertIn("lockSounds();", function_body("renderSoundsControls"))
+
+    def test_the_focus_goes_back_to_the_changed_select_after_the_redraw(self):
+        body = function_body("renderSounds")
+        self.assertIn("SOUND_SLOTS.find((slot) => SOUND_SELECTS[slot] === document.activeElement)", body)
+        self.assertIn("if (focused && !SOUND_SELECTS[focused].disabled) SOUND_SELECTS[focused].focus();", body)
+        self.assertLess(body.index("lockSounds();"), body.index(".focus();"))
+        self.assertNotIn("aria-live", "".join(function_body(n) for n in self.FUNCTIONS))
+
+    def test_the_turbo_kit_answer_sets_the_sounds_and_a_hint_below_the_donor(self):
+        self.assertIn('<p id="turbo-sound-link" class="msg" hidden></p>', TestTurboKit.PANEL)
+        self.assertLess(TestTurboKit.PANEL.index('id="turbo-error"'), TestTurboKit.PANEL.index('id="turbo-sound-link"'))
+        self.assertRegex(CODE, r"(?m)^let turboSoundLink = null;")
+        send = function_body("sendTurboSet")
+        self.assertIn("showTurbo(target, res.turbo);", send)
+        self.assertIn("showTurboSound(target, res);", send)
+        self.assertLess(send.index("showTurbo(target, res.turbo);"), send.index("showTurboSound(target, res);"))
+        body = function_body("showTurboSound")
+        self.assertIn("if (target !== selection) return;", body)
+        self.assertIn("turboSoundLink = answer.sound_link || null;", body)
+        self.assertIn("renderTurboLines();", body)
+        self.assertIn("if (answer.sounds) showSounds(target, answer.sounds);", body)
+        sent = quoted_words(ts.api_turbo_set, ts.turbo_sound_link)
+        self.assertTrue({"sounds", "sound_link", "slot", "key", "error"} <= sent, sorted(sent))
+
+    def test_the_hint_names_the_sound_or_says_why_it_could_not_follow_the_donor_and_nothing_for_no_link(self):
+        body = function_body("turboSoundText")
+        self.assertIn('if (!turboSoundLink) return "";', body)
+        self.assertIn('"The sound could not follow the donor: " + turboSoundLink.error', body)
+        self.assertIn('"Turbo sound set to " + soundShortName(turboSoundLink.key) + " (change it in Sounds)."', body)
+        lines = function_body("renderTurboLines")
+        self.assertIn('$("turbo-sound-link").textContent = turboSoundText();', lines)
+        self.assertIn('$("turbo-sound-link").hidden = turboSoundLink === null;', lines)
+        self.assertIn('$("turbo-sound-link").classList.toggle("warn", !!turboSoundLink && !!turboSoundLink.error);', lines)
+
+    def test_the_hint_is_cleared_by_the_next_write_of_the_kit_and_a_donor_reset_leaves_the_sounds_alone(self):
+        self.assertIn("turboSoundLink = null;", function_body("turboChanged"))
+        self.assertLess(function_body("turboChanged").index("turboSoundLink = null;"), function_body("turboChanged").index("queue = queue.then"))
+        reset = function_body("sendTurboReset")
+        for name in ("showSounds", "showTurboSound", "loadSounds", "sounds"):
+            with self.subTest(name):
+                self.assertNotIn(name, reset)
+
+    def test_the_server_routes_the_page_calls_exist_with_the_right_methods(self):
+        self.assertIn("/api/sounds", ts.GET_ROUTES)
+        for route in ("/api/sound_set", "/api/sound_reset"):
+            self.assertIn(route, ts.POST_ROUTES)
+        for route in ("/api/sounds", "/api/sound_set", "/api/sound_reset"):
+            self.assertIn(route, called_paths())
+
+    def test_the_page_reads_only_the_fields_of_the_answer_the_server_sends(self):
+        sent = quoted_words(ts.tune.sound_view, ts.tune.sounds.collect_options) | set(re.findall(r"\b(\w+)=", inspect.getsource(ts.tune.sounds.collect_options)))
+        read =set(re.findall(r"\b(?:sounds|view|option|m)\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS)))
+        self.assertTrue({"slots", "missing", "own", "options", "selected", "key", "cars", "slot"} <= read, sorted(read))
+        self.assertEqual(sorted(read - sent), [])
+
+    def test_the_panel_reuses_the_garage_styles_and_adds_none(self):
+        for cls in ("garage", "garage-body", "garage-help", "garage-row", "grouptoggle", "gname", "gcount", "chev", "msg", "warn", "err"):
+            with self.subTest(cls):
+                self.assertIn(cls, css_classes())
+                self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
+        self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
+                         {"panel garage", "grouptoggle", "chev", "gname", "gcount", "garage-body", "garage-help", "garage-row", "actions",
+                          "msg err", "msg warn"})
+        rule = re.search(r"\n\.garage select \{([^}]*)\}", STYLE).group(1)
+        self.assertIn("max-width: 100%;", rule)
+
+    def test_the_text_of_the_panel_enters_the_page_as_text_and_the_markup_and_code_are_ascii(self):
+        for name in self.FUNCTIONS + ("turboSoundText", "showTurboSound"):
+            with self.subTest(name):
+                self.assertNotRegex(function_body(name), r"\.html\b|innerHTML")
+        for name in ("renderSoundsToggle", "renderSoundsLines"):
+            with self.subTest(name):
+                self.assertIn("textContent", function_body(name))
+        self.assertIn('el("option", ""', function_body("renderSounds"))
+        self.PANEL.encode("ascii")
+        "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
 
 
 class TestStartBat(unittest.TestCase):

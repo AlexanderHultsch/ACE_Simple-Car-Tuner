@@ -44,7 +44,13 @@ Adding a turbo to a car without one (optional, not verified in the game yet): a 
 5. Press **Create modded car…** or **Apply (update this car)** as usual. The build log of the result (collapsed) lists the "turbo kit" notes: the donor, the turbo files and the engine fields that were copied.
 6. Start the game and try the car. If it does not load or drives wrongly, choose **No turbo kit (stock engine)** and Apply again, or remove the modded car (see "Remove a modded car" below).
 
-Nobody has tried a turbo kit in the game yet: whether the game accepts a turbo on a car that had none, how it sounds (the car's engine sound probably has no turbo sounds) and whether a twin turbo needs more than the copied settings are open.
+Nobody has tried a turbo kit in the game yet: whether the game accepts a turbo on a car that had none and whether a twin turbo needs more than the copied settings are open. The sound of the turbo is chosen in the **Sounds** panel (next section); choosing a donor sets the turbo sound to the donor's by default.
+
+Borrowing sounds from other cars (optional, not heard in the game yet): the panel **Sounds** (below **Garage tyres**, closed at the start) lets a modded car use the turbo sound (the whistle, probably with the blow-off valve) and the exhaust backfire sound of any other installed car.
+1. Open **Sounds**. The two lists **Turbo sound** and **Backfire sound** contain every sound used by your installed cars, each with the cars that use it, for example `turbo_rx7 - Mazda RX-7 FD Spirit R`. The first entry is the car's own sound. Install more cars to get more sounds in the lists.
+2. Pick a sound. It is saved at once for this car or draft; **Reset to the car's own sounds** removes your choices.
+3. Press **Create modded car…** or **Apply (update this car)**. The build log lists the change, for example `sound turbo: turbo_none -> turbo_rx7`. Only the turbo and backfire sound change; the engine sound, the power and the handling stay as they are.
+4. If a chosen sound disappears (its car was removed from the work folder) Apply refuses until you change or reset it.
 
 "unverified" next to a description means the meaning is guessed from the setting's name and not yet confirmed in the game. A "copies differ in stock" badge means the game's own files disagree about that value; applying writes your value to every copy. Every setting of every car is explained in `docs/settings/<car id>.md`, for example [docs/settings/ks_bmw_m3_e46_csl.md](settings/ks_bmw_m3_e46_csl.md). Where a setting has an entry in the official physics documentation of the game (https://docs.assetto.cn/en/evo/car/physics/), its description starts with the official statement and continues with our notes; the rules learned from it are in [docs/TUNER_SPEC.md](TUNER_SPEC.md) section 6c.
 

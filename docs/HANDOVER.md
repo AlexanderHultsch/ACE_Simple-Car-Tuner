@@ -53,6 +53,7 @@ Read this first in a new session, then [TUNER_SPEC.md](TUNER_SPEC.md) (state of 
 - Open request: save the drift setup under its own name (item 3 above; the name is still unknown).
 - Not tried on real devices: access from the iPhone/another PC through the Windows firewall, "Add to Home Screen" with the icon.
 - Possible next features, none planned: the range column in the Tyre Creator table; a button or automatic refresh for `ranges.json`; a "save setup as..." function; the settings listed in the table below that the catalogue lacks.
+- Concept (not implemented): turbo sound for cars that get a turbo kit: [CONCEPT_TURBO_SOUND.md](CONCEPT_TURBO_SOUND.md). Phase 0 (read-only investigation on the PC) comes first.
 
 **Known limits and open decisions:**
 - The ranges in `ranges.json` show what the game stores: some mix units (`brake_bias_hw` percent and fraction) or are wide (`gear_1` up to 13.97 on one car); they are not recommendations. `ranges.json` is not refreshed by the page.

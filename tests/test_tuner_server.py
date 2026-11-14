@@ -974,6 +974,12 @@ class TestStateRoutes(ServerCase):
         self.assertEqual(self.saved_state(), {})
         self.assertFalse(any(row["changed"] for row in self.get("/api/settings").json))
 
+    def test_reset_all_drops_the_garage_turbo_and_sound_choices_with_the_values(self):
+        self.write(self.state_file(), {"limiter": 8000, tune.TYRE_KEY: ["own:soft"], tune.TURBO_KEY: {"donor": "ks_b"},
+                                       tune.SOUND_KEY: {"turbo": "event:/parts/turbos/turbo_rx7"}})
+        self.assertEqual(self.post("/api/reset_all").status, 200)
+        self.assertEqual(self.saved_state(), {})
+
     def test_the_state_is_kept_per_car(self):
         self.post("/api/set", {"id": "limiter", "value": "8000"})
         self.assertFalse(os.path.exists(self.state_file("ks_y")))

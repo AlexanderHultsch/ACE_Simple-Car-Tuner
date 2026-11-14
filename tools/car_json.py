@@ -38,8 +38,9 @@ DESC = pathlib.Path(__file__).resolve().parent.parent / "schemas" / "acevo.desc"
 _SCHEMAS = {}
 
 # Only extensions where exactly one candidate message decoded every sample file with an exact round trip. Wire-type mismatches and unknown fields
-# (e.g. the legacy tail of .drivetrain) do not exclude a type: they are kept in _unknown. Unmapped on purpose: .actor, .cardisplaysystem, .carwipersystem, .tyremesh.
+# (e.g. the legacy tail of .drivetrain) do not exclude a type: they are kept in _unknown. Unmapped on purpose: .cardisplaysystem, .carwipersystem, .tyremesh.
 TYPES = {
+    "actor": "ActorData",
     "aicardata": "AiCarData",
     "brakesystem": "BrakesData",
     "car": "CarData",

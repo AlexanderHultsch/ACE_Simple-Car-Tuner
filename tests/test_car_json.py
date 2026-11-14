@@ -670,6 +670,11 @@ class Types(unittest.TestCase):
         for path in ("car.curve", "dir/CAR.CURVE", "a\\b\\Wing.Wing"):
             self.assertEqual(cj.message_for(path), cj.TYPES[path.lower().rsplit(".", 1)[1]])
 
+    def test_actor_files_are_decoded_as_ActorData(self):
+        self.assertEqual(cj.TYPES["actor"], "ActorData")
+        for path in ("ks_x.actor", "dir/KS_X.ACTOR"):
+            self.assertEqual(cj.message_for(path), "ActorData")
+
     def test_message_for_rejects_unmapped_and_missing_extensions(self):
         for path in ("file.xyz", "noextension", "x.", ".hidden"):
             with self.subTest(path=path):

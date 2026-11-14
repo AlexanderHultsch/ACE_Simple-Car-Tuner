@@ -24,6 +24,9 @@ usage:
   python tools/tune.py turbo-add    <donor> [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py turbo-remove [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py turbo-kit    [--tune ID | --draft] [--car ID] [--work <dir>]
+  python tools/tune.py sounds       [--tune ID | --draft] [--car ID] [--work <dir>]
+  python tools/tune.py sound-set    <slot> <key> [--tune ID | --draft] [--car ID] [--work <dir>]
+  python tools/tune.py sound-reset  [<slot>] [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py ranges       [--work <dir>]
 
 --car ID picks any car of the game (default: the default car of tuner/cars.json); an id that is not a game car is
@@ -147,6 +150,20 @@ on; a kit whose inputs changed is built again on the next use (a failed build le
 tune whose state has "_turbo" and base otherwise; resolve_defaults reads it for a tune, set, show and apply use it, the turbo settings of
 the catalogue then resolve against the donor's values, and apply builds from it and adds the notes "note: turbo kit: ...".
 turbo-kit:    builds or refreshes the kit root of the tune (or draft) and prints it with the kind of kit, the files and the engine and .car fields.
+Sound picker (module tools/sounds.py, library functions sound_options, sound_own, sound_choices, set_sound, reset_sounds): a modded car can take the
+turbo sound and the backfire sound of any installed car. The slots are turbo (audio entry type TurboEvent) and backfire (type Backfire) in the
+car's <id>.actor file; entries are found by their type, never by position (the order differs from car to car). A sound is an option named by its
+key: the event text (event:/parts/turbos/turbo_rx7), with #<optionalParam> appended when the entry has an optionalParam other than 0. The choice is
+the object "_sounds" = {"turbo": <option key>, "backfire": <option key>} in the state file (tune_state.json, draft_state.json); a missing slot or
+no "_sounds" entry = the car keeps its own sound. Like "_tyres" and "_turbo" it is not a setting: never reported as unknown, shown in show or
+counted as an applied setting, and duplicate and Create copy it with the rest of the state; Reset all drops it. apply and the build ignore it for
+now. The options are read from the .actor file of every car with an extracted base; a car whose file is missing or cannot be decoded is skipped
+and reported.
+sounds:       lists per slot "<slot> (own: <key or none>, selected: <key or ->)" and one line per option: a mark (* selected, = the car's own
+          sound, else blank), the key and the cars that use it (at most 4, then +N more); the none sound comes first, then by event name. A saved
+          sound that is not offered any more is a warning.
+sound-set:    chooses the option with the given key for a slot (turbo or backfire); the car's own sound removes the choice of the slot.
+sound-reset:  removes the choice of one slot, or of every slot without an argument.
 ranges:       the soft borders for the settings page (library functions compute_ranges, write_ranges, load_ranges): reads the
           defaults of every car with an extracted base in the work folder (every <work>/<car>/base) and writes the lowest and
           highest default of every numeric setting (kind value, type int or float; a field a car does not store does not
@@ -214,6 +231,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import car_json  # noqa: E402
 import clone_car  # noqa: E402
 import kspkg  # noqa: E402
+import sounds  # noqa: E402
 from kspkg import parse_args  # noqa: E402
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
@@ -262,6 +280,7 @@ TYRE_UNAVAILABLE = "shared tyre files not extracted"
 TYRES_DIR = "tyres"
 TYRE_KEY = "_tyres"
 TURBO_KEY = "_turbo"
+SOUND_KEY = "_sounds"
 KIT_DIR = "kit"
 KIT_JSON = "kit.json"
 KIT_WORDS = ("turbo", "boost", "bov")
@@ -537,7 +556,7 @@ def save_state(work, car_id, state, tune=None):
 
 def unknown_state_ids(work, car_id, catalogue=None, tune=None):
     known = {s["id"] for s in (catalogue or load_catalogue())["settings"]}
-    return [sid for sid in load_state(work, car_id, tune) if sid not in known and sid not in (TYRE_KEY, TURBO_KEY)]
+    return [sid for sid in load_state(work, car_id, tune) if sid not in known and sid not in (TYRE_KEY, TURBO_KEY, SOUND_KEY)]
 
 
 def to_f32(x):
@@ -639,7 +658,7 @@ def set_value(work, car_id, setting_id, text, catalogue=None, tune=None):
 
 def unset_value(work, car_id, setting_id, catalogue=None, tune=None):
     state = load_state(work, car_id, tune)
-    if setting_id not in state or setting_id in (TYRE_KEY, TURBO_KEY):
+    if setting_id not in state or setting_id in (TYRE_KEY, TURBO_KEY, SOUND_KEY):
         find_setting(catalogue or load_catalogue(), setting_id)
     removed = state.pop(setting_id, None) is not None
     if removed:
@@ -2800,6 +2819,119 @@ def write_garage(root, car_id, new_id, car_root, plan, cache):
             + ["note: garage: %d tyre(s), starting on %s" % (len(plan["entries"]), first["label"])])
 
 
+def actor_path(work, car_id):
+    """The <car id>.actor file in the base car folder (matched case-insensitively); the car must be extracted."""
+    root = base_dir(work, car_id)
+    car_root = car_root_of(root, car_id)
+    if not os.path.isdir(kspkg.long_path(car_root)):
+        raise ValueError("no base car in %s, run init first" % root)
+    return find_ci(car_root, car_id + ".actor")
+
+
+def load_actor(work, car_id):
+    return load_msg(actor_path(work, car_id))[0]
+
+
+def sound_options(work):
+    """The sounds the installed cars offer, read from the .actor file of every car with an extracted base (installed_cars):
+    ({slot: [{key, event, bank, optional, cars}]}, skipped); see sounds.collect_options. A car whose actor file is missing or cannot
+    be decoded is skipped and listed in skipped as {car, reason}."""
+    actors, skipped = {}, []
+    for car_id in installed_cars(work):
+        try:
+            actors[car_id] = load_actor(work, car_id)
+        except (ValueError, OSError) as e:
+            skipped.append({"car": car_id, "reason": str(e)})
+    return sounds.collect_options(actors), skipped
+
+
+def sound_own(work, car_id):
+    """The sound the stock car has in each slot: {slot: option key, None when the car has no entry of the slot's type}."""
+    actor = load_actor(work, car_id)
+    own = {}
+    for slot in sounds.SLOTS:
+        found = sounds.slot_entries(actor, slot)
+        own[slot] = sounds.option_of(found[0][1])["key"] if found else None
+    return own
+
+
+def saved_sounds(state):
+    """The {slot: option key} of the "_sounds" entry of a state, {} when it has none."""
+    if SOUND_KEY not in state:
+        return {}
+    saved = state[SOUND_KEY]
+    if not (isinstance(saved, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in saved.items())):
+        raise ValueError("damaged sound choice in the saved state")
+    return saved
+
+
+def sound_view(options, skipped, own, saved):
+    """{slots: {slot: {options, own, selected}}, skipped, missing}: selected is the saved key of the slot when it is one of the options;
+    a saved key that is no option any more is not selected and is listed in missing as {slot, key}."""
+    slots, missing = {}, []
+    for slot in sounds.SLOTS:
+        chosen = saved.get(slot)
+        if chosen is not None and chosen not in {o["key"] for o in options[slot]}:
+            missing.append({"slot": slot, "key": chosen})
+            chosen = None
+        slots[slot] = {"options": options[slot], "own": own[slot], "selected": chosen}
+    return {"slots": slots, "skipped": skipped, "missing": missing}
+
+
+def sound_choices(work, car_id, tune=None):
+    """The sound picker of a car: {slots: {slot: {options, own (key of the stock car's sound or None), selected (the saved key
+    or None)}}, skipped (cars sound_options could not read), missing (saved choices that are not offered any more)}."""
+    saved = saved_sounds(load_state(work, car_id, tune))
+    options, skipped = sound_options(work)
+    return sound_view(options, skipped, sound_own(work, car_id), saved)
+
+
+def set_sound(work, car_id, slot, key, tune=None):
+    """Choose the sound with the option key for a slot of a car and store it in the "_sounds" entry of the state (written only when
+    it changes). key None or the car's own sound removes the slot's entry, an empty "_sounds" entry is removed from the state. The
+    slot must exist and the key must be an option of sound_options. Returns sound_choices."""
+    sounds.slot_type(slot)
+    if key is not None and not isinstance(key, str):
+        raise ValueError("the sound key must be text, got %r" % (key,))
+    own = sound_own(work, car_id)
+    options, skipped = sound_options(work)
+    if key is not None and key not in {o["key"] for o in options[slot]}:
+        raise ValueError("unknown %s sound %s, sounds lists the sounds of the game cars" % (slot, key))
+    state = load_state(work, car_id, tune)
+    saved = dict(saved_sounds(state))
+    if key is None or key == own[slot]:
+        saved.pop(slot, None)
+    else:
+        saved[slot] = key
+    if (saved or None) != state.get(SOUND_KEY):
+        if saved:
+            state[SOUND_KEY] = saved
+        else:
+            del state[SOUND_KEY]
+        save_state(work, car_id, state, tune)
+    return sound_view(options, skipped, own, saved)
+
+
+def reset_sounds(work, car_id, tune=None, slot=None):
+    """Remove the sound choice of one slot, or of every slot (slot None), from a state: the car keeps its own sounds. Returns {removed}."""
+    if slot is not None:
+        sounds.slot_type(slot)
+    state = load_state(work, car_id, tune)
+    if slot is None:
+        removed = state.pop(SOUND_KEY, None) is not None
+    else:
+        saved = dict(saved_sounds(state))
+        removed = saved.pop(slot, None) is not None
+        if removed:
+            if saved:
+                state[SOUND_KEY] = saved
+            else:
+                del state[SOUND_KEY]
+    if removed:
+        save_state(work, car_id, state, tune)
+    return {"removed": removed}
+
+
 def ranges_path(work):
     return os.path.join(work, RANGES_FILE)
 
@@ -3310,6 +3442,44 @@ def cmd_turbo_kit():
     print(".car fields: %s" % (", ".join(info["inline_fields"]) or "none"))
 
 
+def cars_text(cars):
+    return ", ".join(cars[:4]) + (" +%d more" % (len(cars) - 4) if len(cars) > 4 else "")
+
+
+def cmd_sounds():
+    pos, opts = cli_args(("car", "tune", "work"), ("draft",))
+    if pos or ("tune" in opts and "draft" in opts):
+        usage()
+    work, car_id = start(opts)
+    res = sound_choices(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    for s in res["skipped"]:
+        print("skipped %s: %s" % (s["car"], s["reason"]), file=sys.stderr)
+    for slot, info in res["slots"].items():
+        print("%s (own: %s, selected: %s)" % (slot, info["own"] or "none", info["selected"] or "-"))
+        for o in info["options"]:
+            print("%s %s  %s" % ("*" if o["key"] == info["selected"] else "=" if o["key"] == info["own"] else " ", o["key"], cars_text(o["cars"])))
+    for m in res["missing"]:
+        print("warning: the saved %s sound %s is not available any more" % (m["slot"], m["key"]), file=sys.stderr)
+
+
+def cmd_sound_set():
+    pos, opts = cli_args(("car", "tune", "work"), ("draft",))
+    if len(pos) != 2 or ("tune" in opts and "draft" in opts):
+        usage()
+    work, car_id = start(opts)
+    res = set_sound(work, car_id, pos[0], pos[1], DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    print("%s sound: %s%s" % (pos[0], pos[1], "" if res["slots"][pos[0]]["selected"] else " (the own sound of the car, nothing is stored)"))
+
+
+def cmd_sound_reset():
+    pos, opts = cli_args(("car", "tune", "work"), ("draft",))
+    if len(pos) > 1 or ("tune" in opts and "draft" in opts):
+        usage()
+    work, car_id = start(opts)
+    res = reset_sounds(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts), pos[0] if pos else None)
+    print("%ssound selection %s" % (pos[0] + " " if pos else "", "removed from the state" if res["removed"] else "was not set"))
+
+
 def cmd_ranges():
     pos, opts = cli_args(("work",))
     if pos:
@@ -3348,6 +3518,9 @@ COMMANDS = {
     "turbo-add": cmd_turbo_add,
     "turbo-remove": cmd_turbo_remove,
     "turbo-kit": cmd_turbo_kit,
+    "sounds": cmd_sounds,
+    "sound-set": cmd_sound_set,
+    "sound-reset": cmd_sound_reset,
     "ranges": cmd_ranges,
 }
 

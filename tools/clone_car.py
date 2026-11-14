@@ -14,6 +14,9 @@ build:   copies <car_dir> (basename = old car id) to <out_dir>/content/cars/<new
          one line whose key ends with _preset_base gets --variant as its value (default: the stock text). Without
          --loc, or when the stock file has no line for the car, no file is written (a note is printed). Then
          self-checks and packs <out_dir>/<new_id>.kspkg (--no-pack skips the packing).
+         The old id is kept in file contents where it directly follows event:/evo_cars/, content\\sfx\\ or content/sfx/ (any
+         case): those are the car's engine sound references and name the game's own sound banks, which a mod package does not
+         contain. The build prints how many such references it kept; self-check (c) fails on the new id after these prefixes.
          <new_id> must have the same length as the old id (plain byte replacement, no length prefix changes),
          use only a-z, 0-9 and _, and <out_dir>/content/cars/<new_id> must not exist yet.
          All file operations use extended-length paths (see kspkg.long_path), printed paths stay normal.
@@ -44,6 +47,17 @@ DEFAULT_PROPERTIES = {"property_1": "Property1_Road", "property_2": "Property2_Y
                       "property_3": "Property3_ICE"}
 VARIANT_SUFFIX = "_preset_base"
 LOC_PATH = ("uiresources", "localization", "en.cars.loc")
+AUDIO_PREFIXES = (rb"event:/evo_cars/", rb"content\\sfx\\", rb"content/sfx/")
+
+
+def content_pattern(old_id):
+    """The old id in file contents, except directly after an audio prefix (the game's own sound banks and events)."""
+    return re.compile(b"".join(rb"(?<!%s)" % p for p in AUDIO_PREFIXES) + re.escape(old_id.encode()), re.IGNORECASE)
+
+
+def audio_pattern(car_id):
+    """<car_id> directly after an audio prefix."""
+    return re.compile(rb"(?:%s)%s" % (b"|".join(AUDIO_PREFIXES), re.escape(car_id.encode())), re.IGNORECASE)
 
 
 def replacer(new_id):
@@ -78,6 +92,7 @@ def validate(old_id, new_id, out_dir):
 
 def copy_renamed(src, dst, old_id, new_id):
     pat = re.compile(re.escape(old_id.encode()), re.IGNORECASE)
+    content_pat = content_pattern(old_id)
     repl = replacer(new_id)
 
     def rename(name):
@@ -92,7 +107,7 @@ def copy_renamed(src, dst, old_id, new_id):
         os.makedirs(out, exist_ok=True)
         for n in names:
             with open(os.path.join(root, n), "rb") as f:
-                data, hits = pat.subn(repl, f.read())
+                data, hits = content_pat.subn(repl, f.read())
             target = os.path.join(out, rename(n))
             with open(target, "wb") as f:
                 f.write(data)
@@ -100,6 +115,19 @@ def copy_renamed(src, dst, old_id, new_id):
             if hits:
                 counts[target[len(dst):].strip(os.sep)] = hits
     return files, counts
+
+
+def kept_audio_references(root, old_id):
+    """(occurrences, files) of the old id after an audio prefix in the copied tree under root."""
+    pat = audio_pattern(old_id)
+    refs = files = 0
+    for dp, _, names in os.walk(kspkg.long_path(root)):
+        for n in names:
+            with open(os.path.join(dp, n), "rb") as f:
+                hits = len(pat.findall(f.read()))
+            refs += hits
+            files += bool(hits)
+    return refs, files
 
 
 def write_modded_content(car_root, new_id, name, brand, year, properties=None):
@@ -149,16 +177,21 @@ def write_localization(car_root, old_id, new_id, stock_loc, variant):
 
 def self_check(out_dir, old_id, modded):
     path, sch, msg, fields = modded
+    new_id = os.path.basename(path)[:-len("." + MODDED_TYPE)]
     pat = re.compile(re.escape(old_id.encode()), re.IGNORECASE)
-    bad_names, bad_content = [], []
+    content_pat, audio_pat = content_pattern(old_id), audio_pattern(new_id)
+    bad_names, bad_content, bad_audio = [], [], []
     for root, dirs, names in os.walk(kspkg.long_path(out_dir)):
         for n in dirs + names:
             if pat.search(n.encode()):
                 bad_names.append(kspkg.plain_path(os.path.join(root, n)))
         for n in names:
             with open(os.path.join(root, n), "rb") as f:
-                if pat.search(f.read()):
-                    bad_content.append(kspkg.plain_path(os.path.join(root, n)))
+                data = f.read()
+            if content_pat.search(data):
+                bad_content.append(kspkg.plain_path(os.path.join(root, n)))
+            if audio_pat.search(data):
+                bad_audio.append(kspkg.plain_path(os.path.join(root, n)))
     with open(kspkg.long_path(path), "rb") as f:
         decoded = car_json.decode_msg(sch, msg, f.read())
     ok_modded = decoded == fields
@@ -167,7 +200,10 @@ def self_check(out_dir, old_id, modded):
     for p in (bad_names + bad_content)[:15]:
         print("  " + p)
     print("self-check (b) %s decodes to the written values: %s" % (os.path.basename(path), "ok" if ok_modded else "MISMATCH"))
-    return not (bad_names or bad_content) and ok_modded
+    print("self-check (c) audio references to the new id: %s" % ("none" if not bad_audio else "%d FOUND" % len(bad_audio)))
+    for p in bad_audio[:15]:
+        print("  " + p)
+    return not (bad_names or bad_content or bad_audio) and ok_modded
 
 
 def build(car_dir, new_id, out_dir, name, year, brand, variant=None, stock_loc=None, properties=None, pack=True):
@@ -187,6 +223,8 @@ def build(car_dir, new_id, out_dir, name, year, brand, variant=None, stock_loc=N
     print("changed by replacement: %d files, %d replacements" % (len(counts), sum(counts.values())))
     for rel, n in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))[:15]:
         print("  %6d  %s" % (n, rel))
+    kept, kept_files = kept_audio_references(car_root, old_id)
+    print("kept %d audio references to the stock sound bank in %d files" % (kept, kept_files))
     modded = write_modded_content(car_root, new_id, name, brand, year, properties)
     if stock_loc is None:
         loc, notes = None, ["note: no stock localization given, no en.cars.loc written"]

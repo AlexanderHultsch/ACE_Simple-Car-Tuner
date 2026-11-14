@@ -180,6 +180,67 @@ class TestCopyRenamed(Base):
         self.assertTrue((self.d / "out" / "ax_x_data" / "f.txt").is_file())
 
 
+AUDIO_REFS = [b"event:/evo_cars/ks_x/engine_int", b"event:/evo_cars/ks_x/engine_ext", b"content\\sfx\\ks_x.bank",
+              b"content\\sfx\\ks_x_stock.bank", b"content/sfx/ks_x.bank", b"EVENT:/EVO_CARS/KS_X/ENGINE_INT",
+              b"CONTENT\\SFX\\KS_X.BANK", b"Content/Sfx/Ks_X.bank"]
+
+
+class TestAudioReferences(Base):
+    def copy(self, files):
+        src = self.d / "ks_x"
+        for rel, data in files.items():
+            self.write(src / rel, data)
+        dst = self.d / "out"
+        n, counts = clone_car.copy_renamed(str(src), str(dst), "ks_x", "ax_x")
+        return dst, n, counts
+
+    def test_audio_references_keep_the_old_id(self):
+        dst, _, counts = self.copy({"f%d.actor" % i: b"<" + ref + b">" for i, ref in enumerate(AUDIO_REFS)})
+        for i, ref in enumerate(AUDIO_REFS):
+            with self.subTest(ref):
+                self.assertEqual(self.read(dst / ("f%d.actor" % i)), b"<" + ref + b">")
+        self.assertEqual(counts, {})
+
+    def test_cars_paths_and_bare_ids_next_to_audio_references_are_replaced(self):
+        data = (b"content\\cars\\ks_x\\data\\x.car;event:/evo_cars/ks_x/engine_int;ks_x;content\\sfx\\ks_x.bank;"
+                b"content\\cars\\KS_X\\a;/content/cars/ks_x/b;content/sfx/ks_x_stock.bank;KS_X")
+        dst, _, _ = self.copy({"a.actor": data})
+        self.assertEqual(self.read(dst / "a.actor"),
+                         b"content\\cars\\ax_x\\data\\x.car;event:/evo_cars/ks_x/engine_int;ax_x;content\\sfx\\ks_x.bank;"
+                         b"content\\cars\\AX_X\\a;/content/cars/ax_x/b;content/sfx/ks_x_stock.bank;AX_X")
+
+    def test_file_and_folder_names_are_replaced_whatever_their_neighbours(self):
+        dst, _, _ = self.copy({"content/sfx/ks_x.bank": b"x", "event/ks_x.txt": b"x"})
+        self.assertTrue((dst / "content" / "sfx" / "ax_x.bank").is_file())
+        self.assertTrue((dst / "event" / "ax_x.txt").is_file())
+
+    def test_the_file_size_does_not_change(self):
+        data = b"".join(ref + b"|ks_x|" for ref in AUDIO_REFS)
+        dst, _, _ = self.copy({"a.actor": data})
+        self.assertEqual(os.path.getsize(dst / "a.actor"), len(data))
+
+    def test_counts_and_replacements_leave_out_the_preserved_occurrences(self):
+        dst, n, counts = self.copy({"a.actor": b"event:/evo_cars/ks_x/engine_int content\\sfx\\ks_x.bank ks_x content\\cars\\ks_x",
+                                    "b.carpart": b"content\\sfx\\ks_x_stock.bank",
+                                    "c.txt": b"plain"})
+        self.assertEqual(n, 3)
+        self.assertEqual(counts, {"a.actor": 2})
+
+    def test_protobuf_like_binary_with_a_length_prefix(self):
+        ref = b"event:/evo_cars/ks_x/engine_int"
+        data = b"\x0a" + bytes([len(ref)]) + ref + b"\x12\x16content\\cars\\ks_x\\a.car" + b"\x1a" + bytes([len(b"content\\sfx\\ks_x.bank")]) + b"content\\sfx\\ks_x.bank" + b"\x2c" + ref
+        dst, _, counts = self.copy({"a.actor": data})
+        self.assertEqual(self.read(dst / "a.actor"), data.replace(b"content\\cars\\ks_x", b"content\\cars\\ax_x"))
+        self.assertEqual(counts, {"a.actor": 1})
+        self.assertEqual(len(self.read(dst / "a.actor")), len(data))
+
+    def test_kept_audio_references_counts_occurrences_and_files(self):
+        dst, _, _ = self.copy({"a.actor": b"event:/evo_cars/ks_x/a event:/evo_cars/KS_X/b ks_x", "b.carpart": b"content/sfx/ks_x.bank",
+                               "c.txt": b"content\\cars\\ks_x", "sub/d.bin": b"\x2c" + b"content\\sfx\\ks_x_stock.bank"})
+        self.assertEqual(clone_car.kept_audio_references(str(dst), "ks_x"), (4, 3))
+        self.assertEqual(clone_car.kept_audio_references(str(dst), "ax_x"), (0, 0))
+
+
 class TestModdedContentAndLocalization(Base):
     LOC = ("ks_x_name=Car X\r\nks_x_preset_base=Stock Variant\r\nks_x_desc=D = é ü\r\nKS_X_upper=U\r\n"
            "ks_y_name=Other\r\nks_xyz_name=Not ours\r\nplain=1\r\nks_x_no_equals_sign\r\n").encode("utf-8")
@@ -268,7 +329,8 @@ class TestSelfCheck(Base):
         ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
         self.assertTrue(ok)
         self.assertEqual(out.splitlines(), ["self-check (a) old id in names: none", "self-check (a) old id in contents: none",
-                                            "self-check (b) ax_x.moddedcarcontent decodes to the written values: ok"])
+                                            "self-check (b) ax_x.moddedcarcontent decodes to the written values: ok",
+                                            "self-check (c) audio references to the new id: none"])
 
     def test_old_id_in_a_name_or_content_fails(self):
         modded = self.modded()
@@ -286,6 +348,51 @@ class TestSelfCheck(Base):
         ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
         self.assertFalse(ok)
         self.assertIn("MISMATCH", out)
+
+    def test_kept_audio_references_to_the_old_id_pass(self):
+        modded = self.modded()
+        base = self.d / "out" / "content" / "cars" / "ax_x"
+        self.write(base / "ax_x.actor", b"\x2c" + b"event:/evo_cars/ks_x/engine_int content\\sfx\\ks_x.bank ax_x")
+        self.write(base / "b.carpart", b"CONTENT/SFX/KS_X_stock.bank")
+        ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
+        self.assertTrue(ok)
+        self.assertIn("self-check (a) old id in contents: none", out)
+
+    def test_another_old_id_occurrence_next_to_kept_audio_references_fails(self):
+        modded = self.modded()
+        base = self.d / "out" / "content" / "cars" / "ax_x"
+        self.write(base / "ax_x.actor", b"event:/evo_cars/ks_x/engine_int content\\cars\\ks_x\\data")
+        self.write(base / "b.carpart", b"content\\sfx\\ks_x.bank")
+        ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
+        self.assertFalse(ok)
+        self.assertIn("self-check (a) old id in contents: 1 FOUND", out)
+        self.assertIn("  " + str(base / "ax_x.actor"), out.splitlines())
+        self.assertNotIn("b.carpart", out)
+
+    def test_an_audio_reference_to_the_new_id_fails_check_c(self):
+        modded = self.modded()
+        base = self.d / "out" / "content" / "cars" / "ax_x"
+        self.write(base / "a.actor", b"content\\sfx\\ax_x.bank")
+        self.write(base / "b.actor", b"EVENT:/EVO_CARS/AX_X/engine_ext")
+        self.write(base / "c.actor", b"content/sfx/ax_x_stock.bank")
+        self.write(base / "d.actor", b"content\\cars\\ax_x\\data ax_x")
+        ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
+        self.assertFalse(ok)
+        lines = out.splitlines()
+        self.assertIn("self-check (c) audio references to the new id: 3 FOUND", lines)
+        self.assertEqual(sorted(lines[lines.index("self-check (c) audio references to the new id: 3 FOUND") + 1:]),
+                         sorted("  " + str(base / n) for n in ("a.actor", "b.actor", "c.actor")))
+        self.assertIn("self-check (a) old id in contents: none", lines)
+
+    def test_check_c_lists_at_most_15_paths(self):
+        modded = self.modded()
+        base = self.d / "out" / "content" / "cars" / "ax_x"
+        for i in range(20):
+            self.write(base / ("f%d.actor" % i), b"content\\sfx\\ax_x.bank")
+        ok, out = self.capture(clone_car.self_check, str(self.d / "out"), "ks_x", modded)
+        self.assertFalse(ok)
+        self.assertIn("self-check (c) audio references to the new id: 20 FOUND", out)
+        self.assertEqual(len([line for line in out.splitlines() if line.startswith("  ")]), 15)
 
 
 class TestBuild(Base):
@@ -319,6 +426,25 @@ class TestBuild(Base):
         self.assertIn("self-check (b) ax_x.moddedcarcontent decodes to the written values: ok", out)
         self.assertEqual(notes, ["note: no stock localization given, no en.cars.loc written"])
         self.assertEqual(self.packed, [])
+
+    def test_build_keeps_the_audio_references_and_prints_how_many(self):
+        self.write(self.src / "ks_x.actor", b"\x2c" + b"event:/evo_cars/ks_x/engine_int event:/evo_cars/ks_x/engine_ext content\\cars\\ks_x\\a")
+        self.write(self.src / "presets" / "e.carpart", b"content\\sfx\\ks_x_stock.bank ks_x")
+        _, out = self.build()
+        root = self.out / "content" / "cars" / "ax_x"
+        self.assertEqual(self.read(root / "ax_x.actor"),
+                         b"\x2c" + b"event:/evo_cars/ks_x/engine_int event:/evo_cars/ks_x/engine_ext content\\cars\\ax_x\\a")
+        self.assertEqual(self.read(root / "presets" / "e.carpart"), b"content\\sfx\\ks_x_stock.bank ax_x")
+        lines = out.splitlines()
+        self.assertIn("kept 3 audio references to the stock sound bank in 2 files", lines)
+        self.assertEqual(lines.index("kept 3 audio references to the stock sound bank in 2 files") + 1,
+                         [i for i, line in enumerate(lines) if line.startswith("localization:")][0])
+        self.assertIn("changed by replacement: 3 files, 3 replacements", out)
+        self.assertIn("self-check (c) audio references to the new id: none", lines)
+
+    def test_build_without_audio_references_prints_zero(self):
+        _, out = self.build()
+        self.assertIn("kept 0 audio references to the stock sound bank in 0 files", out.splitlines())
 
     def test_build_with_a_stock_localization_writes_en_cars_loc(self):
         loc = self.write(self.d / "stock.loc", b"ks_x_name=Car X\r\nks_x_preset_base=Base\r\n")

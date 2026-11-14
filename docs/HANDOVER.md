@@ -81,7 +81,14 @@ Read this first in a new session, then [TUNER_SPEC.md](TUNER_SPEC.md) (state of 
   - the description of the group Turbo in `tuner/catalogue.json` still says that only cars whose engine has a turbo show these settings: update it for the kit and regenerate `docs/settings` with `tune.py doc --all` on the PC;
   - the extra turbo settings of the task table below (lag up / down, wastegate, controllers) will also apply to cars with a kit once they are added to the catalogue.
 
-### Short task list for the next local session: turbo sound gate (decided by Alex, 2026-11-14)
+### Turbo sound gate: DONE on 2026-11-14 (result: implementable; plus an engine sound problem of modded cars)
+
+Result in [review/PC-REVIEW.md](review/PC-REVIEW.md) ("Turbo sound, Phase 0"): the turbo sound is a separate `TurboEvent` entry in the car's `.actor` pointing at an event of the shared global `content\sfx\turbo.bank` (no extra bank, no FMOD Studio); the kill criterion does not apply. Not tested in the game (laptop cannot drive). New tool `tools/bank_strings.py` (printable strings of binary files). **Open tasks, in this order, each needs a plan and Alex's OK:**
+1. **Fix the engine sound of modded cars (high value, small):** the clone renames the stock id inside the `.actor` audio entries (`event:/evo_cars/<id>/engine_int|engine_ext`, bank `content\sfx\<id>.bank`), which names events and a bank that do not exist: modded cars probably have no engine sound. Keep the stock id in those two entries (the strings have equal length), test on the gaming PC. Map `.actor` as `ActorData` in `car_json` if the edit goes through the codec (it round-trips 71/71; the root message of `.actor` is `ActorData`, not `CarActorData`).
+2. **Turbo sound as part of the turbo kit:** a "Sound" choice in the Turbo kit panel (default: the donor's turbo event; any of the 29 existing events selectable) that sets the `TurboEvent` entry of the built `.actor` (find it by type, not by position; add an entry when the car has none, as the 992 GT3 R Rennsport); optional: the backfire entry. Tests with synthetic `.actor` files, docs, a PC checklist row, then a drive test on the gaming PC.
+3. In-game tests E1/E2 of the concept need driving: gaming PC only.
+
+Original short task list (kept as the record):
 
 Goal: find out in one short session whether a turbo sound can be taken from a car easily. If it cannot, the turbo sound idea is dropped. Background and options: [CONCEPT_TURBO_SOUND.md](CONCEPT_TURBO_SOUND.md).
 

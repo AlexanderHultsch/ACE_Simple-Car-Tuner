@@ -38,7 +38,11 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
   POST /api/apply       {"tune": ..., "new_id": ..., "suffix": ...}   builds and installs (background job): a modded car
                         (without "tune": the default one, which must exist) is updated, the draft ("tune": "draft") creates a new modded car (new_id and suffix are optional,
                         automatic when left out; ignored when a modded car is updated) and builds it, the draft is
-                        cleared after a successful build; the job result has new_id, tune, name_suffix and created
+                        cleared after a successful build; the job result has new_id, tune, name_suffix, created and
+                        changes ({"since": "last build" or null for a first build, "settings": [{id, from, to}], "extras":
+                        [{kind turbo_kit / garage / sound, slot, from, to, text}], "total"}: what differs from the last build
+                        of that modded car, everything compared to the stock car on its first build, see tune.py apply); the
+                        job log lists these changes (not every setting) and the notes of the build
   GET  /api/tyres       the tyre library ("tyres": id, name, source {front, rear}, changed; {id, error} for a damaged file) and
                         the tyre pairs the extracted cars offer ("sources": key, front, rear, label, cars)
   GET  /api/tyre?id=<tyre id>
@@ -60,10 +64,11 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
   GET  /api/turbo       the turbo kit of the car and the tune (the turbo setup of another installed car, the donor, built into
                         a modded car that has none): "donor" (saved donor car id or null), "available" (false when the car has a
                         turbo itself or no donor exists) with "reason", "donors" (car, label, count, kind "single turbo" / "twin
-                        turbo" / "<n> turbos", boost in bar; never the car itself), "picked" (the entry of the saved donor, null
+                        turbo" / "<n> turbos", boost in bar, one value per turbo file; boost_ref, the engine's reference value
+                        in bar or null, when boost is empty; never the car itself), "picked" (the entry of the saved donor, null
                         when it has none or is not offered any more), "car", "tune" and "has_turbo" (the car has a turbo itself);
                         needs the base car
-  POST /api/turbo_set   {"donor": car id}                 chooses the donor; answers {"result": {donor, count, kind, boost},
+  POST /api/turbo_set   {"donor": car id}                 chooses the donor; answers {"result": {donor, count, kind, boost, boost_ref},
                         "turbo": the answer of GET /api/turbo, "sounds", "sound_link"}: the turbo sound follows the donor, so
                         after the donor is stored the turbo sound of the car and tune is set to the donor's own turbo sound
                         (tune.sound_own; the stored choice is removed when it is the car's own sound); "sound_link" is
@@ -267,10 +272,7 @@ def init_task(car):
 
 
 def apply_lines(res):
-    lines = ["applied %d setting(s)" % len(res["applied"])]
-    for a in res["applied"]:
-        lines.append("  %s: %s -> %s  [%s]" % (a["id"], tune.fmt(a["old"]), tune.fmt(a["new"]), ", ".join(a["files"])))
-    lines += res["notes"]
+    lines = tune.change_lines(res)
     lines.append("package: %s (%d bytes)" % (res["package"], res["size"]))
     if res["installed"]:
         lines.append("installed: %s" % res["installed"])

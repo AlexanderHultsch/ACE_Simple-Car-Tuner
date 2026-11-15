@@ -38,7 +38,8 @@ ROW_KEYS = {"id", "group", "label", "kind", "type", "unit", "description", "veri
 INIT_RESULT = {"present": False, "dir": "/w/ks_x/base/content/cars/ks_x", "files": 3, "dirs": 1, "bytes": 10}
 APPLY_RESULT = {"new_id": "ax_x", "tune": "ax_x", "name_suffix": "MY", "build_dir": "/w/ks_x/build/ax_x", "package": "/w/ks_x/build/ax_x/ax_x.kspkg", "size": 7,
                 "applied": [{"id": "limiter", "old": 7000, "new": 8000, "files": ["data/engine.carengine", "data/x.car"]}],
-                "notes": ["note: from build"], "installed": "/m/ax_x.kspkg", "backup": None}
+                "notes": ["note: from build"], "installed": "/m/ax_x.kspkg", "backup": None,
+                "changes": {"since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}], "extras": [], "total": 1}}
 GS = "content\\cars\\common_phsx\\"
 ROAD_A, ROAD_B, SLICK_S = GS + "tyres\\road\\a.tyre", GS + "tyres\\road\\b.tyre", GS + "tyres\\slick\\s.tyre"
 KEY_AB, KEY_SS = ROAD_A + "|" + ROAD_B, SLICK_S + "|" + SLICK_S
@@ -48,9 +49,9 @@ TYRE_ROW_KEYS = {"id", "label", "group", "unit", "type", "kind", "description", 
                  "changed", "applicable", "reason"}
 GARAGE_KEYS = {"choices", "custom", "missing", "car", "tune"}
 TURBO_KEYS = {"donor", "available", "reason", "donors", "picked", "car", "tune", "has_turbo"}
-TWIN = {"car": "ks_b", "label": "Twin B", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]}
-OWN = {"car": "ks_t", "label": "Car T", "count": 1, "kind": "single turbo", "boost": [1.0]}
-SINGLE = {"car": "ks_a", "label": "Single A", "count": 1, "kind": "single turbo", "boost": [0.9]}
+TWIN = {"car": "ks_b", "label": "Twin B", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7], "boost_ref": None}
+OWN = {"car": "ks_t", "label": "Car T", "count": 1, "kind": "single turbo", "boost": [1.0], "boost_ref": None}
+SINGLE = {"car": "ks_a", "label": "Single A", "count": 1, "kind": "single turbo", "boost": [0.9], "boost_ref": None}
 SOUND_KEYS = {"slots", "missing", "skipped", "car", "tune"}
 SLOT_KEYS = {"options", "own", "selected"}
 OPTION_KEYS = {"key", "event", "bank", "optional", "cars"}
@@ -1264,6 +1265,26 @@ class TestApplyRoute(TuneCase):
         self.assertEqual(self.tune_ids(), ["ax01"])
         self.assertEqual(self.tune_state(tune.DRAFT), {"limiter": 9000})
 
+    def test_the_job_result_in_the_state_answer_carries_the_changes(self):
+        self.make_tune()
+        self.post("/api/apply", {})
+        self.wait_job()
+        result = self.get("/api/state").json["job"]["result"]
+        self.assertEqual(result["changes"], APPLY_RESULT["changes"])
+        self.assertEqual(result["applied"], APPLY_RESULT["applied"])
+
+    def test_the_job_result_carries_every_kind_of_change_unchanged(self):
+        changes = {"since": "last build", "total": 4, "settings": [{"id": "a", "from": 1.5, "to": 2.5}, {"id": "b", "from": False, "to": True}],
+                   "extras": [{"kind": "turbo_kit", "from": None, "to": "A", "text": "Turbo kit: none -> A"},
+                              {"kind": "sound", "slot": "turbo", "from": "e1", "to": None, "text": "Sound turbo: e1 -> own sound"}]}
+        self.patch(tune, "apply", lambda *a, **k: dict(APPLY_RESULT, changes=changes))
+        self.make_tune()
+        self.post("/api/apply", {})
+        snap = self.wait_job()
+        self.assertEqual(self.get("/api/state").json["job"]["result"]["changes"], changes)
+        self.assertEqual(snap["log"][1:5], ["4 change(s) since the last build (4 changed settings compared to the stock car in total)",
+                                            "  a: 1.5 -> 2.5", "  b: false -> true", "  Turbo kit: none -> A"])
+
     def test_without_a_tune_the_default_modded_car_is_updated(self):
         self.make_tune()
         self.assertEqual(self.post("/api/apply", {}).status, 202)
@@ -1309,8 +1330,8 @@ class TestApplyRoute(TuneCase):
         self.make_tune()
         self.post("/api/apply", {})
         self.assertEqual(self.wait_job()["log"], [
-            "building ax_x, this takes a while ...", "applied 1 setting(s)",
-            "  limiter: 7000 -> 8000  [data/engine.carengine, data/x.car]", "note: from build",
+            "building ax_x, this takes a while ...", "first build of this car: 1 changed settings compared to the stock car",
+            "  limiter: 7000 -> 8000", "note: from build",
             "package: /w/ks_x/build/ax_x/ax_x.kspkg (7 bytes)", "installed: /m/ax_x.kspkg", "backup: no previous install"])
 
     def test_apply_is_refused_while_the_game_runs_and_creates_no_modded_car(self):
@@ -2648,8 +2669,8 @@ class TurboCase(TuneCase):
         fc.add("data/%s.car" % car_id, {"engine_path": gp("data/engine.carengine")})
         fc.add("data/engine.carengine", {"limiter": 7000, "turbos_to_load": [gp("data/" + t) for t in turbos],
                                          "turbos": [{"max_boost": b} for b in boost]})
-        for t in turbos:
-            fc.add("data/" + t, {"max_boost": 1.0})
+        for t, b in zip(turbos, boost):
+            fc.add("data/" + t, {"max_boost": b})
         return fc
 
     def turbo(self, query=""):
@@ -2718,7 +2739,7 @@ class TestTurboRoutes(TurboCase):
     def test_turbo_set_chooses_the_donor_of_the_default_tune(self):
         r = self.post("/api/turbo_set", {"donor": "ks_b"})
         self.assertEqual((r.status, set(r.json)), (200, {"result", "turbo", "sounds", "sound_link"}))
-        self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]})
+        self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7], "boost_ref": None})
         self.assertEqual(r.json["turbo"], self.turbo().json)
         self.assertEqual((r.json["turbo"]["donor"], r.json["turbo"]["picked"], r.json["turbo"]["has_turbo"]), ("ks_b", TWIN, False))
         self.assertEqual(self.saved_state(), self.kit("ks_b"))
@@ -2727,6 +2748,18 @@ class TestTurboRoutes(TurboCase):
         r = self.post("/api/turbo_set", {"donor": "ks_a"})
         self.assertEqual((r.json["result"]["kind"], r.json["result"]["boost"], r.json["turbo"]["picked"]["kind"], r.json["turbo"]["picked"]["boost"]),
                          ("single turbo", [0.9], "single turbo", [0.9]))
+
+    def test_turbo_and_turbo_set_carry_the_reference_boost_of_a_donor_without_a_boost(self):
+        engine_key = self.fc.key(os.path.join(tune.car_root_of(tune.base_dir(self.work, "ks_a"), "ks_a"), "data", "engine.carengine"))
+        turbo_key = self.fc.key(os.path.join(tune.car_root_of(tune.base_dir(self.work, "ks_a"), "ks_a"), "data", "t0.turbo"))
+        del self.fc.store[engine_key]["turbos"]
+        self.fc.store[engine_key]["max_turbo_boost"] = 1.2
+        self.fc.store[turbo_key].clear()
+        ref = dict(SINGLE, boost=[], boost_ref=1.2)
+        self.assertEqual(self.turbo().json["donors"], [OWN, ref, TWIN])
+        r = self.post("/api/turbo_set", {"donor": "ks_a"})
+        self.assertEqual(r.json["result"], {"donor": "ks_a", "count": 1, "kind": "single turbo", "boost": [], "boost_ref": 1.2})
+        self.assertEqual(r.json["turbo"]["picked"], ref)
 
     def test_turbo_set_replaces_the_donor_and_keeps_the_other_values_of_the_state(self):
         self.write(self.state_file(), {"limiter": 8000})
@@ -3241,7 +3274,7 @@ class TestKitLinkedSound(SoundCase):
 
     def test_the_old_answer_keys_of_turbo_set_stay_as_they_were(self):
         r = self.post("/api/turbo_set", {"donor": "ks_a"})
-        self.assertEqual(r.json["result"], {"donor": "ks_a", "count": 1, "kind": "single turbo", "boost": [0.9]})
+        self.assertEqual(r.json["result"], {"donor": "ks_a", "count": 1, "kind": "single turbo", "boost": [0.9], "boost_ref": None})
         self.assertEqual((r.json["turbo"], set(r.json["turbo"])), (self.turbo().json, TURBO_KEYS))
         self.assertEqual((r.json["turbo"]["donor"], r.json["turbo"]["picked"]), ("ks_a", SINGLE))
 
@@ -3249,7 +3282,7 @@ class TestKitLinkedSound(SoundCase):
         self.write(self.state_file(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}})
         r = self.post("/api/turbo_set", {"donor": "ks_b"})
         self.assertEqual((r.status, r.json["sounds"], r.json["sound_link"]), (200, None, None))
-        self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7]})
+        self.assertEqual(r.json["result"], {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [0.7, 0.7], "boost_ref": None})
         self.assertEqual(r.json["turbo"]["donor"], "ks_b")
         self.assertEqual(self.saved_state(), {tune.SOUND_KEY: {"turbo": T_RX7, "backfire": B_B}, tune.TURBO_KEY: {"donor": "ks_b"}})
 
@@ -3800,15 +3833,24 @@ class TestHelpers(Env):
         self.assertTrue(ts.installed_info("ks_bmw_m3")["path"].endswith("ax_bmw_m3.kspkg"))
 
     def test_apply_lines_with_an_install_and_a_backup(self):
-        res = dict(APPLY_RESULT, applied=[{"id": "a", "old": 1.5, "new": 2.0, "files": ["f1", "f2"]}, {"id": "b", "old": None, "new": True, "files": []}],
-                   notes=["n1", "n2"], backup="/b/old.kspkg")
+        changes = {"since": "last build", "total": 5, "settings": [{"id": "a", "from": 1.5, "to": 2.0}, {"id": "b", "from": None, "to": True}],
+                   "extras": [{"kind": "sound", "slot": "turbo", "from": None, "to": "e/turbo_rx7", "text": "Sound turbo: own sound -> turbo_rx7"}]}
+        res = dict(APPLY_RESULT, changes=changes, notes=["n1", "n2"], backup="/b/old.kspkg")
         self.assertEqual(ts.apply_lines(res), [
-            "applied 2 setting(s)", "  a: 1.5 -> 2.0  [f1, f2]", "  b: - -> true  []", "n1", "n2",
+            "3 change(s) since the last build (5 changed settings compared to the stock car in total)", "  a: 1.5 -> 2.0", "  b: - -> true",
+            "  Sound turbo: own sound -> turbo_rx7", "n1", "n2",
             "package: /w/ks_x/build/ax_x/ax_x.kspkg (7 bytes)", "installed: /m/ax_x.kspkg", "backup: /b/old.kspkg"])
 
     def test_apply_lines_without_an_install(self):
-        res = dict(APPLY_RESULT, applied=[], notes=[], installed=None)
-        self.assertEqual(ts.apply_lines(res), ["applied 0 setting(s)", "package: /w/ks_x/build/ax_x/ax_x.kspkg (7 bytes)"])
+        res = dict(APPLY_RESULT, changes={"since": "last build", "settings": [], "extras": [], "total": 0}, notes=[], installed=None)
+        self.assertEqual(ts.apply_lines(res), ["no change since the last build (0 changed settings compared to the stock car in total)",
+                                               "package: /w/ks_x/build/ax_x/ax_x.kspkg (7 bytes)"])
+
+    def test_apply_lines_of_a_first_build_name_the_total_and_do_not_list_the_applied_settings(self):
+        res = dict(APPLY_RESULT, applied=[{"id": "x", "old": 1, "new": 2, "files": ["f"]}] * 3, notes=[], installed=None,
+                   changes={"since": None, "settings": [{"id": "x", "from": 1, "to": 2}], "extras": [], "total": 3})
+        self.assertEqual(ts.apply_lines(res), ["first build of this car: 3 changed settings compared to the stock car", "  x: 1 -> 2",
+                                               "package: /w/ks_x/build/ax_x/ax_x.kspkg (7 bytes)"])
 
     def test_request_car(self):
         self.write_index([{"id": "ks_x", "display_name": "Car X"}, {"id": "ks_y", "display_name": "Car Y"}])

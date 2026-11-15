@@ -901,6 +901,27 @@ class TestApplyResult(Apply):
         self.apply()
         self.assertEqual(self.state(), before)
 
+    def test_the_selection_is_a_change_of_the_build_and_a_later_build_reports_what_differs(self):
+        self.tyres()
+        self.select("own:soft", ST_AB)
+        first = self.apply()
+        self.assertEqual(first["changes"]["extras"], [{"kind": "garage", "from": None, "to": "own:soft, " + ST_AB,
+                                                       "text": "Garage tyres: own:soft, %s; starts on own:soft" % ST_AB}])
+        with open(tune.snapshot_path(self.work, "ks_x", "ax_x"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["garage"], {"keys": ["own:soft", ST_AB], "start": "own:soft"})
+        self.assertEqual(self.apply()["changes"]["extras"], [])
+        self.select("own:soft", "own:slicky", ST_AB)
+        second = self.apply()
+        self.assertEqual([e["text"] for e in second["changes"]["extras"]], ["Garage tyres: +own:slicky; starts on own:slicky"])
+        self.select("own:slicky", ST_SS)
+        third = self.apply()
+        self.assertEqual([e["text"] for e in third["changes"]["extras"]], ["Garage tyres: +%s, -own:soft, -%s; starts on own:slicky" % (ST_SS, ST_AB)])
+        tune.reset_garage(self.work, "ks_x")
+        last = self.apply()
+        self.assertEqual(last["changes"]["extras"], [{"kind": "garage", "from": "own:slicky, " + ST_SS, "to": None,
+                                                      "text": "Garage tyres: stock compounds again (were own:slicky, %s)" % ST_SS}])
+        self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax_x")["garage"])
+
     def test_apply_prints_nothing_and_the_command_prints_the_notes(self):
         self.tyres()
         self.select("own:soft")
@@ -912,7 +933,7 @@ class TestApplyResult(Apply):
         self.assertEqual((code, err), (0, ""))
         self.assertIn("note: garage: own tyre soft -> data/tyres/own_soft_front.tyre, data/tyres/own_soft_rear.tyre\n", out)
         self.assertIn("note: garage: 1 tyre(s), starting on Soft\n", out)
-        self.assertIn("applied 0 setting(s)\n", out)
+        self.assertIn("no change since the last build (0 changed settings compared to the stock car in total)\n", out)
 
     def test_a_modded_car_builds_its_own_selection(self):
         self.tyres()

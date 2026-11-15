@@ -931,30 +931,59 @@ class TestInstallCars(unittest.TestCase):
 
 
 class TestProgressDetails(unittest.TestCase):
-    def test_the_applied_settings_are_a_collapsed_details_with_the_count_in_the_summary(self):
+    def test_the_changes_since_the_last_build_are_an_open_details_with_the_count_in_the_summary(self):
         body = function_body("summaryApply")
-        self.assertIn("if (res.applied.length) {", body)
-        self.assertIn('const details = el("details");', body)
-        self.assertIn('el("summary", "", "Settings applied (" + res.applied.length + ")")', body)
-        self.assertIn("details.appendChild(ul);", body)
-        self.assertIn("box.appendChild(details);", body)
-        self.assertNotIn("Settings applied:", HTML)
-        self.assertNotRegex(body, r"\bopen\b")
+        fresh = body[:body.index("} else if (res.applied.length) {")]
+        self.assertIn("if (res.changes) {", fresh)
+        self.assertIn("const count = ch.settings.length + ch.extras.length;", fresh)
+        self.assertIn('const details = el("details");', fresh)
+        self.assertIn("details.open = true;", fresh)
+        self.assertIn('el("summary", "", "Changes (" + count + ")")', fresh)
+        self.assertIn("details.appendChild(ul);", fresh)
+        self.assertIn("box.appendChild(details);", fresh)
+        self.assertNotIn("Settings applied", fresh)
 
-    def test_the_list_sits_inside_the_details_and_the_closing_lines_stay_outside(self):
+    def test_the_changes_list_has_one_item_per_setting_then_one_per_extra(self):
+        fresh = function_body("summaryApply")
+        fresh = fresh[:fresh.index("} else if (res.applied.length) {")]
+        setting = 'ul.appendChild(el("li", "", c.id + ": " + fmtVal("", c.from) + " -> " + fmtVal("", c.to)));'
+        extra = 'for (const e of ch.extras) ul.appendChild(el("li", "", e.text));'
+        self.assertIn("for (const c of ch.settings) {", fresh)
+        self.assertIn(setting, fresh)
+        self.assertIn(extra, fresh)
+        self.assertLess(fresh.index(setting), fresh.index(extra))
+        self.assertLess(fresh.index('el("summary"'), fresh.index('const ul = el("ul");'))
+        self.assertLess(fresh.index("details.appendChild(ul);"), fresh.index("box.appendChild(details);"))
+
+    def test_the_heading_line_tells_the_first_build_the_changes_or_no_change(self):
+        fresh = function_body("summaryApply")
+        fresh = fresh[:fresh.index("} else if (res.applied.length) {")]
+        self.assertIn("if (ch.since === null) {", fresh)
+        self.assertIn('addLine(box, "First build of this car: " + ch.total + (ch.total === 1 ? " changed setting" : " changed settings") +', fresh)
+        self.assertIn('" compared to the stock car.");', fresh)
+        self.assertIn('addLine(box, count + (count === 1 ? " change" : " changes") + " since the last build.");', fresh)
+        self.assertIn('addLine(box, "No change since the last build.");', fresh)
+        self.assertLess(fresh.index("First build of this car"), fresh.index("since the last build."))
+        self.assertLess(fresh.index("since the last build."), fresh.index("No change since the last build."))
+        self.assertNotIn("No setting was changed", HTML)
+        self.assertNotIn("the stock values were built", HTML)
+
+    def test_a_result_without_changes_falls_back_to_the_applied_settings_list(self):
         body = function_body("summaryApply")
-        self.assertLess(body.index('el("summary"'), body.index('const ul = el("ul");'))
-        self.assertLess(body.index("details.appendChild(ul);"), body.index("box.appendChild(details);"))
-        self.assertLess(body.index("box.appendChild(details);"), body.index('addLine(box, "Package: "'))
+        fallback = body[body.index("} else if (res.applied.length) {"):body.index('addLine(box, "Package: "')]
+        self.assertIn('el("summary", "", "Settings applied (" + res.applied.length + ")")', fallback)
+        self.assertIn("for (const a of res.applied) {", fallback)
+        self.assertIn('a.id + ": " + fmtVal("", a.old) + " -> " + fmtVal("", a.new)', fallback)
+        self.assertNotRegex(fallback, r"\bopen\b")
+        self.assertNotIn("Settings applied:", HTML)
+
+    def test_the_closing_lines_stay_outside_the_changes_details(self):
+        body = function_body("summaryApply")
+        end = body.rindex("box.appendChild(details);")
+        self.assertLess(end, body.index('addLine(box, "Package: "'))
         for line in ('"Installed to: "', '"Backup of the previous install: "', "Close the game before applying again."):
             with self.subTest(line):
-                self.assertLess(body.index("box.appendChild(details);"), body.index(line))
-
-    def test_no_applied_setting_still_shows_the_plain_paragraph_without_details(self):
-        body = function_body("summaryApply")
-        empty = body[body.index("} else {"):body.index('addLine(box, "Package: "')]
-        self.assertIn('addLine(box, "No setting was changed, the stock values were built.");', empty)
-        self.assertNotIn("details", empty)
+                self.assertLess(end, body.index(line))
 
     def test_a_finished_job_wraps_the_build_log_in_a_collapsed_details(self):
         body = function_body("renderProgress")
@@ -1758,7 +1787,7 @@ class TestGarage(unittest.TestCase):
 class TestTurboKit(unittest.TestCase):
     CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
     PANEL = re.search(r'<div id="turbo" class="panel garage" hidden>.*?\n      </div>\n', MARKUP, re.S).group(0)
-    FUNCTIONS = ("boostText", "turboOptionText", "turboSummary", "turboPickedText", "renderTurboToggle", "renderTurboLines", "lockTurbo",
+    FUNCTIONS = ("boostText", "turboBoostText", "turboOptionText", "turboSummary", "turboPickedText", "renderTurboToggle", "renderTurboLines", "lockTurbo",
                  "renderTurbo", "renderTurboControls", "loadTurbo", "showTurbo", "turboFailed", "sendTurboSet", "sendTurboReset",
                  "turboChanged", "toggleTurbo")
 
@@ -1797,6 +1826,9 @@ class TestTurboKit(unittest.TestCase):
                       "fields into your car; the turbo settings then appear in the Turbo group of the table. A turbo multiplies the engine "
                       "power on top of its curve, so lower the boost settings if the car becomes too strong. Unverified: whether the game "
                       "accepts a turbo on a car that has none is not tested yet.", body)
+        self.assertIn("In the list, a boost like 0.7 / 0.9 bar is one value per turbo (the max boost of each turbo file); '(reference)' is "
+                      "the engine's own reference value when the turbo files carry none, and no bar means the game data has no boost value "
+                      "for that car.</p>", body)
         self.assertRegex(body, r'<label for="turbo-donor">Turbo from</label>\s*<select id="turbo-donor" disabled></select>')
         self.assertRegex(body, r'</select>\s*</div>\s*<p id="turbo-picked"></p>\s*<p id="turbo-error" class="msg err" role="alert" hidden></p>')
         self.assertNotIn("aria-live", self.PANEL)
@@ -1831,8 +1863,8 @@ class TestTurboKit(unittest.TestCase):
         self.assertIn('"(" + turbo.donor + ", not available any more)"', body)
 
     def test_an_option_is_the_name_the_kind_and_the_boost_of_a_donor_and_the_boost_is_left_out_when_unknown(self):
-        self.assertIn('entry.label + " - " + entry.kind + (entry.boost.length ? ", " + boostText(entry.boost) + " bar" : "")',
-                      function_body("turboOptionText"))
+        self.assertIn('entry.label + " - " + entry.kind + (boost ? ", " + boost : "")', function_body("turboOptionText"))
+        self.assertIn("const boost = turboBoostText(entry);", function_body("turboOptionText"))
         self.assertIn('list.map((b) => String(Math.round(b * 100) / 100)).join(" / ")', function_body("boostText"))
         body = function_body("renderTurbo")
         self.assertIn('el("option", "", "No turbo kit (stock engine)")', body)
@@ -1841,6 +1873,13 @@ class TestTurboKit(unittest.TestCase):
         self.assertIn("o.value = entry.car;", body)
         self.assertIn("turboOptionText(entry)", body)
         self.assertLess(body.index("No turbo kit (stock engine)"), body.index("turboOptionText(entry)"))
+
+    def test_the_boost_text_is_the_values_per_turbo_else_the_reference_else_nothing(self):
+        body = function_body("turboBoostText")
+        self.assertIn('if (entry.boost.length) return boostText(entry.boost) + " bar";', body)
+        self.assertIn('return entry.boost_ref ? "~" + boostText([entry.boost_ref]) + " bar (reference)" : "";', body)
+        self.assertLess(body.index("entry.boost.length"), body.index("entry.boost_ref"))
+        self.assertNotIn("unknown", body)
 
     def test_the_saved_donor_is_preselected_and_one_that_is_gone_is_a_disabled_selected_option(self):
         body = function_body("renderTurbo")
@@ -1858,7 +1897,7 @@ class TestTurboKit(unittest.TestCase):
         self.assertIn('" is not available any more. Choose another donor or no turbo kit."', body)
         self.assertIn('" (" + entry.count + (entry.count === 1 ? " turbo)" : " turbos)")', body)
         self.assertIn("entry.count <= 2", body)
-        self.assertIn('", boost " + boostText(entry.boost) + " bar"', body)
+        self.assertIn('const boost = turboBoostText(entry) ? ", boost " + turboBoostText(entry) : "";', body)
         self.assertIn('"Chosen: " + entry.kind + count + boost + ", from " + entry.label', body)
         self.assertIn('$("turbo-picked").textContent = turboPickedText();', function_body("renderTurboLines"))
 
@@ -1959,7 +1998,7 @@ class TestTurboKit(unittest.TestCase):
         source = inspect.getsource(ts.turbo_json)
         sent = quoted_words(ts.tune.turbo_choice, ts.tune.list_turbo_donors, ts.turbo_json) | set(re.findall(r"\b(\w+)=", source))
         read = set(re.findall(r"\b(?:turbo|entry)\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS)))
-        self.assertTrue({"donor", "donors", "picked", "has_turbo", "label", "kind", "count", "boost", "car"} <= read, sorted(read))
+        self.assertTrue({"donor", "donors", "picked", "has_turbo", "label", "kind", "count", "boost", "boost_ref", "car"} <= read, sorted(read))
         self.assertEqual(sorted(read - sent - {"length"}), [])
 
     def test_the_server_routes_the_page_calls_exist(self):

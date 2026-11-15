@@ -69,8 +69,9 @@ class World(unittest.TestCase):
         fc.add("data/%s.car" % car_id, {"engine_path": gp("data/engine.carengine")})
         fc.add("data/engine.carengine", {"limiter": 7000, "turbos_to_load": [gp("data/" + t) for t in turbos],
                                          "turbos": [{"max_boost": b} for b in boost]})
+        values = dict(zip(turbos, boost))
         for t in turbos if present is None else present:
-            fc.add("data/" + t, {"max_boost": 1.0})
+            fc.add("data/" + t, {"max_boost": values.get(t, 1.0)})
         fc.add("presets/p.mechanicalcarpreset", {"brand": "B", "description": "D"})
         if name:
             self.write(tune.stock_info_path(self.work, car_id),
@@ -95,6 +96,17 @@ class World(unittest.TestCase):
 
     def parts(self, car_id, cache=None):
         return tune.turbo_parts(tune.base_dir(self.work, car_id), car_id, cache)
+
+    def listing(self, car_id):
+        return tune.turbo_listing(tune.base_dir(self.work, car_id), car_id)
+
+    def engine_of(self, car_id):
+        fc = self.fakes[car_id]
+        return fc.store[fc.key(os.path.join(fc.car_root, "data", "engine.carengine"))]
+
+    def turbo_file(self, car_id, name="t0.turbo"):
+        fc = self.fakes[car_id]
+        return fc.store[fc.key(os.path.join(fc.car_root, "data", name))]
 
     def donor_ids(self):
         return [d["car"] for d in tune.list_turbo_donors(self.work)]
@@ -236,26 +248,42 @@ class TestTurboParts(World):
             with self.subTest(repr(bad)):
                 self.assertEqual(self.parts("ks_a"), {"files": [], "boost": [], "count": 0})
 
-    def test_boost_lists_only_the_turbos_that_have_a_number(self):
-        fc = self.fakes["ks_a"]
-        engine = fc.store[fc.key(os.path.join(fc.car_root, "data", "engine.carengine"))]
-        engine["turbos"] = [{"max_boost": 1}, {"x": 1}, {"max_boost": "a"}, {"max_boost": True}, {"max_boost": float("inf")}, 5,
-                            {"max_boost": tune.to_f32(0.8)}, {"max_boost": None}]
-        parts = self.parts("ks_a")
-        self.assertEqual(parts["boost"], [1.0, 0.8])
-        self.assertEqual({type(b) for b in parts["boost"]}, {float})
-        self.assertEqual(parts["count"], 1)
-        for bad in (None, "x", {"max_boost": 1}):
+    def test_boost_takes_only_the_numbers_of_the_turbo_files(self):
+        for value, want in ((1, [1.0]), (tune.to_f32(0.5), [0.5])):
+            self.turbo_file("ks_a")["max_boost"] = value
+            parts = self.parts("ks_a")
+            self.assertEqual(parts["boost"], want)
+            self.assertEqual({type(b) for b in parts["boost"]}, {float})
+        for bad in ("a", True, float("inf"), None):
+            self.turbo_file("ks_a")["max_boost"] = bad
+            with self.subTest(repr(bad)):
+                self.assertEqual(self.parts("ks_a")["boost"], [0.8])
+        del self.turbo_file("ks_a")["max_boost"]
+        self.assertEqual(self.parts("ks_a")["boost"], [0.8])
+
+    def test_the_engine_list_stands_in_only_with_a_number_for_every_turbo_file(self):
+        engine = self.engine_of("ks_a")
+        self.turbo_file("ks_a").clear()
+        for good, want in (([{"max_boost": 1}], [1.0]), ([{"max_boost": tune.to_f32(0.8)}], [0.8])):
+            engine["turbos"] = good
+            parts = self.parts("ks_a")
+            self.assertEqual(parts["boost"], want)
+            self.assertEqual({type(b) for b in parts["boost"]}, {float})
+        for bad in ([{"x": 1}], [{"max_boost": "a"}], [{"max_boost": True}], [{"max_boost": float("inf")}], [5], [{"max_boost": None}],
+                    [], [{"max_boost": 1}, {"max_boost": 1}], None, "x", {"max_boost": 1}):
             engine["turbos"] = bad
-            self.assertEqual(self.parts("ks_a")["boost"], [])
+            with self.subTest(repr(bad)):
+                self.assertEqual(self.parts("ks_a"), {"files": ["data/t0.turbo"], "boost": [], "count": 1})
         del engine["turbos"]
         self.assertEqual(self.parts("ks_a"), {"files": ["data/t0.turbo"], "boost": [], "count": 1})
 
     def test_a_float32_boost_is_its_shortest_decimal(self):
-        fc = self.fakes["ks_a"]
-        engine = fc.store[fc.key(os.path.join(fc.car_root, "data", "engine.carengine"))]
-        engine["turbos"] = [{"max_boost": car_json.F32(0.800000011920929)}]
-        engine["turbos"][0]["max_boost"].text = "0.8"
+        self.turbo_file("ks_a")["max_boost"] = car_json.F32(0.800000011920929)
+        self.turbo_file("ks_a")["max_boost"].text = "0.8"
+        self.assertEqual(self.parts("ks_a")["boost"], [0.8])
+        self.turbo_file("ks_a").clear()
+        self.engine_of("ks_a")["turbos"] = [{"max_boost": car_json.F32(0.800000011920929)}]
+        self.engine_of("ks_a")["turbos"][0]["max_boost"].text = "0.8"
         self.assertEqual(self.parts("ks_a")["boost"], [0.8])
 
     def test_the_cache_is_filled_and_reused(self):
@@ -270,6 +298,97 @@ class TestTurboParts(World):
         self.assertEqual(sorted(os.walk(self.work)), before)
 
 
+class TestTurboBoostSources(World):
+    def test_the_listing_has_files_boost_boost_ref_count_and_missing(self):
+        self.assertEqual(self.listing("ks_a"), {"files": ["data/t0.turbo"], "boost": [0.8], "boost_ref": None, "count": 1, "missing": []})
+        self.assertEqual(self.listing("ks_u"), {"files": [], "boost": [], "boost_ref": None, "count": 0, "missing": []})
+
+    def test_boost_is_the_max_boost_of_each_turbo_file_in_file_order_whatever_the_engine_list_says(self):
+        self.turbo_file("ks_a")["max_boost"] = 0.5
+        self.assertEqual(self.listing("ks_a")["boost"], [0.5])
+        self.turbo_file("ks_b", "t0.turbo")["max_boost"] = 1.1
+        self.turbo_file("ks_b", "t1.turbo")["max_boost"] = 0.9
+        self.assertEqual(self.listing("ks_b")["boost"], [1.1, 0.9])
+        self.engine_of("ks_b")["turbos_to_load"].reverse()
+        self.assertEqual(self.listing("ks_b")["boost"], [0.9, 1.1])
+        self.assertEqual(self.listing("ks_b")["files"], ["data/t1.turbo", "data/t0.turbo"])
+
+    def test_a_file_without_a_number_makes_the_engine_list_stand_in_when_it_has_one_number_per_file(self):
+        del self.turbo_file("ks_b", "t1.turbo")["max_boost"]
+        self.turbo_file("ks_b", "t0.turbo")["max_boost"] = 0.5
+        self.assertEqual(self.listing("ks_b")["boost"], [1.0, 1.2])
+
+    def test_a_turbo_file_that_cannot_be_read_or_is_not_on_disk_gives_nothing_and_the_engine_list_stands_in(self):
+        fc = self.fakes["ks_b"]
+        fc.store[fc.key(os.path.join(fc.car_root, "data", "t1.turbo"))] = ValueError("cannot decode")
+        self.assertEqual(self.listing("ks_b")["boost"], [1.0, 1.2])
+        self.assertEqual(self.listing("ks_m")["boost"], [1.0, 1.0])
+        self.assertEqual(self.listing("ks_m")["missing"], ["data/t1.turbo"])
+        self.engine_of("ks_m")["turbos"] = [{"max_boost": 0.4}]
+        self.assertEqual(self.listing("ks_m")["boost"], [])
+
+    def test_an_engine_list_of_another_length_is_ignored_the_porsche_case(self):
+        engine = self.engine_of("ks_a")
+        engine["turbos"] = [{"max_boost": 0.8}, {"max_boost": 1.2}]
+        self.assertEqual(self.listing("ks_a")["boost"], [0.8])
+        self.turbo_file("ks_a")["max_boost"] = 0.5
+        self.assertEqual(self.listing("ks_a")["boost"], [0.5])
+        del self.turbo_file("ks_a")["max_boost"]
+        self.assertEqual(self.listing("ks_a")["boost"], [])
+        self.assertEqual(self.parts("ks_a"), {"files": ["data/t0.turbo"], "boost": [], "count": 1})
+
+    def test_an_engine_list_entry_without_a_number_leaves_the_boost_empty_when_the_files_have_none(self):
+        self.turbo_file("ks_b", "t1.turbo").clear()
+        self.engine_of("ks_b")["turbos"] = [{"max_boost": 1.0}, {"lag": 0.3}]
+        self.assertEqual(self.listing("ks_b")["boost"], [])
+        self.engine_of("ks_b")["turbos"] = [{"max_boost": 1.0}]
+        self.assertEqual(self.listing("ks_b")["boost"], [])
+
+    def test_boost_ref_is_max_turbo_boost_when_no_boost_is_known(self):
+        self.turbo_file("ks_a").clear()
+        del self.engine_of("ks_a")["turbos"]
+        self.assertEqual(self.listing("ks_a")["boost_ref"], None)
+        self.engine_of("ks_a")["max_turbo_boost"] = 1.2
+        found = self.listing("ks_a")
+        self.assertEqual((found["boost"], found["boost_ref"], type(found["boost_ref"])), ([], 1.2, float))
+        self.engine_of("ks_a")["max_turbo_boost"] = 2
+        self.assertEqual(self.listing("ks_a")["boost_ref"], 2.0)
+        self.assertIs(type(self.listing("ks_a")["boost_ref"]), float)
+        self.engine_of("ks_a")["max_turbo_boost"] = tune.to_f32(0.9)
+        self.assertEqual(self.listing("ks_a")["boost_ref"], 0.9)
+
+    def test_boost_ref_is_none_when_there_is_a_boost_or_the_reference_is_no_positive_number(self):
+        engine = self.engine_of("ks_a")
+        engine["max_turbo_boost"] = 1.2
+        self.assertEqual((self.listing("ks_a")["boost"], self.listing("ks_a")["boost_ref"]), ([0.8], None))
+        self.turbo_file("ks_a").clear()
+        self.assertEqual((self.listing("ks_a")["boost"], self.listing("ks_a")["boost_ref"]), ([0.8], None))
+        del engine["turbos"]
+        for bad in (0, 0.0, -1.0, True, "1.2", None, float("inf"), float("nan"), [1.2]):
+            engine["max_turbo_boost"] = bad
+            with self.subTest(repr(bad)):
+                self.assertEqual((self.listing("ks_a")["boost"], self.listing("ks_a")["boost_ref"]), ([], None))
+        del engine["max_turbo_boost"]
+        self.assertEqual(self.listing("ks_a")["boost_ref"], None)
+
+    def test_boost_ref_is_not_part_of_turbo_parts(self):
+        self.turbo_file("ks_a").clear()
+        del self.engine_of("ks_a")["turbos"]
+        self.engine_of("ks_a")["max_turbo_boost"] = 1.2
+        self.assertEqual(self.parts("ks_a"), {"files": ["data/t0.turbo"], "boost": [], "count": 1})
+
+    def test_list_turbo_donors_and_set_turbo_carry_boost_ref(self):
+        self.turbo_file("ks_a").clear()
+        del self.engine_of("ks_a")["turbos"]
+        self.engine_of("ks_a")["max_turbo_boost"] = 1.3
+        donors = {d["car"]: d for d in tune.list_turbo_donors(self.work)}
+        self.assertEqual([(c, d["boost"], d["boost_ref"]) for c, d in sorted(donors.items())],
+                         [("ks_a", [], 1.3), ("ks_b", [1.0, 1.2], None), ("ks_c", [0.5, 0.6, 0.7], None)])
+        self.assertEqual(tune.set_turbo(self.work, "ks_x", "ks_a"),
+                         {"donor": "ks_a", "count": 1, "kind": "single turbo", "boost": [], "boost_ref": 1.3})
+        self.assertEqual(tune.turbo_choice(self.work, "ks_x")["picked"], donors["ks_a"])
+
+
 class TestTurboKind(unittest.TestCase):
     def test_the_words(self):
         self.assertEqual([tune.turbo_kind(n) for n in (0, 1, 2, 3, 4, 10)],
@@ -279,9 +398,9 @@ class TestTurboKind(unittest.TestCase):
 class TestListDonors(World):
     def test_only_installed_cars_with_all_their_turbo_files_are_donors_in_order(self):
         self.assertEqual(tune.list_turbo_donors(self.work), [
-            {"car": "ks_b", "label": "Alpha", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2]},
-            {"car": "ks_a", "label": "Beta", "count": 1, "kind": "single turbo", "boost": [0.8]},
-            {"car": "ks_c", "label": "ks_c", "count": 3, "kind": "3 turbos", "boost": [0.5, 0.6, 0.7]}])
+            {"car": "ks_b", "label": "Alpha", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2], "boost_ref": None},
+            {"car": "ks_a", "label": "Beta", "count": 1, "kind": "single turbo", "boost": [0.8], "boost_ref": None},
+            {"car": "ks_c", "label": "ks_c", "count": 3, "kind": "3 turbos", "boost": [0.5, 0.6, 0.7], "boost_ref": None}])
 
     def test_cars_without_turbo_with_a_missing_file_with_an_unreadable_engine_or_without_a_base_are_skipped(self):
         for car_id in ("ks_x", "ks_n", "ks_m", "ks_u", "ks_z"):
@@ -308,6 +427,7 @@ class TestListDonors(World):
     def test_a_car_with_a_turbo_file_and_no_boost_number_is_a_donor_with_an_empty_boost(self):
         fc = self.fakes["ks_a"]
         del fc.store[fc.key(os.path.join(fc.car_root, "data", "engine.carengine"))]["turbos"]
+        del self.turbo_file("ks_a")["max_boost"]
         self.assertEqual(next(d for d in tune.list_turbo_donors(self.work) if d["car"] == "ks_a")["boost"], [])
 
     def test_a_work_folder_without_cars_has_no_donors(self):
@@ -345,7 +465,7 @@ class TestTurboChoice(World):
         tune.save_state(self.work, "ks_x", {KEY: KIT_B})
         res = tune.turbo_choice(self.work, "ks_x")
         self.assertEqual(res["donor"], "ks_b")
-        self.assertEqual(res["picked"], {"car": "ks_b", "label": "Alpha", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2]})
+        self.assertEqual(res["picked"], {"car": "ks_b", "label": "Alpha", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2], "boost_ref": None})
         self.assertIs(res["picked"], next(d for d in res["donors"] if d["car"] == "ks_b"))
 
     def test_each_tune_and_the_draft_have_their_own_choice(self):
@@ -382,7 +502,7 @@ class TestTurboChoice(World):
 class TestSetTurbo(World):
     def test_the_donor_is_stored_and_described(self):
         res = tune.set_turbo(self.work, "ks_x", "ks_b")
-        self.assertEqual(res, {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2]})
+        self.assertEqual(res, {"donor": "ks_b", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2], "boost_ref": None})
         self.assertEqual(self.state(), {KEY: KIT_B})
         with open(tune.state_path(self.work, "ks_x"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {KEY: KIT_B})
@@ -536,6 +656,7 @@ class TestCommands(World):
     def test_turbo_add_without_boost_numbers_says_unknown(self):
         fc = self.fakes["ks_a"]
         del fc.store[fc.key(os.path.join(fc.car_root, "data", "engine.carengine"))]["turbos"]
+        del self.turbo_file("ks_a")["max_boost"]
         self.assertEqual(self.run_main("turbo-add", "ks_a", "--car", "ks_n")[1], "ks_a: single turbo, boost unknown bar\n")
 
     def test_turbo_add_errors_are_error_lines_with_exit_1(self):

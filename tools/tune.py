@@ -36,7 +36,7 @@ Cars outside that list are untested: init and apply print "note: <id> is not in 
 unverified". <car> below is the chosen stock car id, <new_id> its tuned copy (default: ax_ plus the stock id without
 its ks_, e.g. ks_bmw_m3_e46_csl -> ax_bmw_m3_e46_csl; other prefixes: ax plus the id without its first two
 characters; same length as the stock id).
-Work folder layout: <work>/<car>/{base, build/<new_id>, tune_state.json, stock_info.json, defaults.json} per car,
+Work folder layout: <work>/<car>/{base, build/<new_id>, snapshots/<new_id>.json, tune_state.json, stock_info.json, defaults.json} per car,
 shared <work>/backups, <work>/stock_loc/en.cars.loc and <work>/cars_index.json. The first command that runs moves the
 old single-car layout (<work>/base, build, tune_state.json, stock_info.json, defaults.json) into <work>/<default car>
 and prints what moved.
@@ -90,6 +90,19 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           --new-id ID alone builds the state of the tune with that id (the default tune when it is left out); an id
           that is not a modded car is refused once the stock car has modded cars, but accepted for a stock car without any
           (old "new copy" use: no state, defaults only).
+          What a build reports is the change since the last build of the same modded car (library functions make_snapshot,
+          load_snapshot, save_snapshot, build_changes, change_lines). After the package is packed (a failed build changes nothing),
+          apply compares the build with <work>/<car>/snapshots/<new_id>.json, the record of the previous build = {"version": 1,
+          "settings": {setting id: value} of the changed settings, "kit": null or {"donor", "label", "kind", "boost"}, "garage": null
+          or {"keys": ticked tyres in order, "start"}, "sounds": {slot: option key} of the changed slots, "name", "time"}, then writes
+          the record of this build (--no-install builds too). A missing, unreadable, damaged or other-version record counts as no
+          previous build. The result key "changes" = {"since": "last build" or None (first build), "settings": [{id, from, to}] in
+          catalogue order (a value set back to the default goes to the stock value), "extras": [{kind turbo_kit / garage / sound, slot
+          (sound only), from, to, text}] for the turbo kit, the garage tyres and the sound slots, "total": the number of settings
+          that differ from the stock car}; a first build lists everything compared to the stock car, every later one only the
+          difference to the last build (floats within the tolerance of same() are equal). The result keys "applied" (all changed
+          settings compared to the stock car) and "notes" are unchanged. change_lines(result) gives the lines the command and the
+          server log print: the count line, one line per setting and per extra, then the notes.
 duplicate: copies the saved values of a modded car (--tune SRC; default the default tune), or of the unsaved draft (--draft),
           to a new modded car of the stock car and prints its id and name suffix. --new-id picks the id (valid, same length
           as the stock id, unused; the default id <new_id> only while the default tune has neither state nor build),
@@ -132,7 +145,9 @@ turbo can take the turbo setup of a donor, an installed car whose engine lists t
 {"donor": <stock car id of the donor>} in the state file (tune_state.json, draft_state.json). Like "_tyres" it is not a setting: never
 reported as unknown, shown in show or counted as an applied setting, and duplicate and Create copy it with the rest of the state; no
 "_turbo" entry = the car is not touched. A donor is an extracted car (base folder present) whose engine (@engine) lists turbos_to_load
-files that are all present in its base; turbo_parts reads the files, their number and the max_boost of the engine's turbos.
+files that are all present in its base; turbo_parts reads the files, their number and the max_boost of each turbo file (the
+engine's turbos list stands in when a file gives none and the list has a number for every file; boost_ref is the engine's
+max_turbo_boost when no boost is known).
 turbo-donors: lists the donors (car id, name, kind: no turbo / single turbo / twin turbo / <n> turbos, boost in bar); with --car it adds the
           kit the car has chosen in its default tune ("chosen: <donor>" or "no turbo kit chosen"). It extracts nothing.
 turbo-add:    chooses the donor for a car that has no turbo itself and has been extracted; turbo-remove removes the choice.
@@ -216,6 +231,7 @@ Stdlib only. Needs schemas/acevo.desc (see tools/extract_protos.py).
 """
 import contextlib
 import copy
+import datetime
 import difflib
 import io
 import json
@@ -272,6 +288,8 @@ TYRE_KEY = "_tyres"
 TURBO_KEY = "_turbo"
 SOUND_KEY = "_sounds"
 KIT_DIR = "kit"
+SNAPSHOT_DIR = "snapshots"
+SNAPSHOT_VERSION = 1
 KIT_JSON = "kit.json"
 KIT_WORDS = ("turbo", "boost", "bov")
 TYRE_ID = re.compile(r"[a-z0-9_]{1,24}")
@@ -1465,6 +1483,11 @@ def apply_plan(work, car_id, new_id, install, mods_dir, cat):
     return {"root": root, "mods": mods, "rows": rows, "changed": changed, "info": info, "garage": garage, "kit": kit, "sounds": sound_steps}
 
 
+def plan_name(car_id, plan, suffix):
+    """The game name of the car a plan builds: car_name of the stock display name (stock_info.json, else the preset) and the suffix."""
+    return car_name(plan["info"].get("display_name") or preset_display_name(car_root_of(plan["root"], car_id)), suffix)
+
+
 def build_partial(work, car_id, new_id, out_dir, plan, cat, game):
     """Clone the car under the new id into <out_dir>.partial (an old one is removed first). Returns (folder, meta values, notes)."""
     root, rows, info = plan["root"], plan["rows"], plan["info"]
@@ -1476,7 +1499,7 @@ def build_partial(work, car_id, new_id, out_dir, plan, cat, game):
     with contextlib.suppress(ValueError, OSError):
         ensure_stock_loc(work, game)
     stock_loc = stock_loc_path(work) if os.path.isfile(stock_loc_path(work)) else None
-    name = car_name(info.get("display_name") or preset_display_name(car_root_of(root, car_id)), meta["name_suffix"])
+    name = plan_name(car_id, plan, meta["name_suffix"])
     log = io.StringIO()
     try:
         # kspkg and clone_car print their progress: keep it out of this command's output
@@ -1585,6 +1608,136 @@ def install_package(work, pkg, mods):
     return backup, os.path.join(mods, os.path.basename(pkg))
 
 
+def snapshot_path(work, car_id, new_id):
+    return os.path.join(car_work(work, car_id), SNAPSHOT_DIR, new_id + ".json")
+
+
+def make_snapshot(work, car_id, plan, applied, name):
+    """The record of a build that the next build of the same modded car is compared with: the changed settings (id -> value), the
+    turbo kit (donor, its label, kind and boost), the garage selection (ticked keys in order, starting tyre), the sound slots that
+    differ from the car's own and the game name; kit_info and the plan carry no label or boost, so the donor's come from list_turbo_donors."""
+    kit, garage = plan["kit"], plan["garage"]
+    donor = next((d for d in list_turbo_donors(work) if d["car"] == kit["donor"]), None) if kit else None
+    return {"version": SNAPSHOT_VERSION,
+            "settings": {a["id"]: plain(a["new"]) for a in applied},
+            "kit": {"donor": kit["donor"], "label": donor["label"] if donor else kit["donor"], "kind": kit["kind"],
+                    "boost": donor["boost"] if donor else []} if kit else None,
+            "garage": {"keys": [e["key"] for e in garage["entries"]], "start": garage["entries"][0]["key"]} if garage else None,
+            "sounds": {step["slot"]: step["option"]["key"] for step in plan["sounds"]},
+            "name": name, "time": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")}
+
+
+def valid_snapshot(data):
+    if not (isinstance(data, dict) and type(data.get("version")) is int and data["version"] == SNAPSHOT_VERSION
+            and "kit" in data and "garage" in data and isinstance(data.get("settings"), dict)
+            and all(isinstance(k, str) and (isinstance(v, (bool, int, str)) or finite_number(v)) for k, v in data["settings"].items())
+            and isinstance(data.get("name"), str) and isinstance(data.get("time"), str)):
+        return False
+    kit, garage, sounds_ = data.get("kit"), data.get("garage"), data.get("sounds")
+    return ((kit is None or (isinstance(kit, dict) and all(isinstance(kit.get(k), str) for k in ("donor", "label", "kind"))
+                             and isinstance(kit.get("boost"), list) and all(finite_number(b) for b in kit["boost"])))
+            and (garage is None or (isinstance(garage, dict) and isinstance(garage.get("start"), str) and isinstance(garage.get("keys"), list)
+                                    and all(isinstance(k, str) for k in garage["keys"])))
+            and isinstance(sounds_, dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in sounds_.items()))
+
+
+def load_snapshot(work, car_id, new_id):
+    """The record of the last build of the modded car new_id, None when it is missing, unreadable, damaged or of another version."""
+    try:
+        data = read_json(kspkg.long_path(snapshot_path(work, car_id, new_id)))
+    except (ValueError, OSError):
+        return None
+    return data if valid_snapshot(data) else None
+
+
+def save_snapshot(work, car_id, new_id, snapshot):
+    save_json(kspkg.long_path(snapshot_path(work, car_id, new_id)), snapshot)
+
+
+def same_setting(s, a, b):
+    """same() for values read from a snapshot: a float setting whose value is not a finite number there is only equal to itself."""
+    if s["type"] == "float" and not (finite_number(a) and finite_number(b)):
+        return a == b
+    return same(s, a, b)
+
+
+def kit_text(kit):
+    """A turbo kit as the people read it: <label> (<kind>, <boost> bar), None for no kit."""
+    if kit is None:
+        return None
+    return "%s (%s%s)" % (kit["label"], kit["kind"], ", %s bar" % "/".join(fmt(b) for b in kit["boost"]) if kit["boost"] else "")
+
+
+def short_event(key):
+    """The last part of the event path of a sound option key, "own sound" for the car's own sound."""
+    return "own sound" if key is None else key.replace("\\", "/").rsplit("/", 1)[-1]
+
+
+def garage_text(before, after):
+    """The sentence of a changed garage selection: the tyres added and removed and the tyre the garage starts on."""
+    if after is None:
+        return "Garage tyres: stock compounds again (were %s)" % ", ".join(before["keys"])
+    if before is None:
+        return "Garage tyres: %s; starts on %s" % (", ".join(after["keys"]), after["start"])
+    moves = ["+" + k for k in after["keys"] if k not in before["keys"]] + ["-" + k for k in before["keys"] if k not in after["keys"]]
+    return "Garage tyres: %s; starts on %s" % (", ".join(moves) if moves else "other order", after["start"])
+
+
+def build_extras(previous, current):
+    """The changes of the turbo kit, the garage selection and the sound slots between two records (previous None: nothing before)."""
+    before = previous or {"kit": None, "garage": None, "sounds": {}}
+    extras = []
+    if (before["kit"] or {}).get("donor") != (current["kit"] or {}).get("donor"):
+        old, new = kit_text(before["kit"]), kit_text(current["kit"])
+        extras.append({"kind": "turbo_kit", "from": old, "to": new, "text": "Turbo kit: %s -> %s" % (old or "none", new or "none")})
+    if before["garage"] != current["garage"]:
+        old, new = [", ".join(g["keys"]) if g else None for g in (before["garage"], current["garage"])]
+        extras.append({"kind": "garage", "from": old, "to": new, "text": garage_text(before["garage"], current["garage"])})
+    for slot in sounds.SLOTS:
+        old, new = before["sounds"].get(slot), current["sounds"].get(slot)
+        if old != new:
+            extras.append({"kind": "sound", "slot": slot, "from": old, "to": new,
+                           "text": "Sound %s: %s -> %s" % (slot, short_event(old), short_event(new))})
+    return extras
+
+
+def build_changes(previous, current, cat, rows):
+    """What a build changed compared with the previous build of the same modded car: {since ("last build", None without a previous
+    record), settings ([{id, from, to}] in catalogue order: every setting whose value differs from the previous record, a setting
+    that is not changed any more goes back to its stock default; without a previous record every changed setting from its stock
+    default), extras (build_extras), total (the settings that differ from the stock car)}. previous and current are records (see
+    make_snapshot), rows the rows of the build (the stock default of each setting). Reads nothing."""
+    defaults = {r["id"]: plain(r["default"]) for r in rows}
+    old_values = previous["settings"] if previous else {}
+    new_values = current["settings"]
+    settings = []
+    for s in cat["settings"]:
+        i = s["id"]
+        if i in old_values or i in new_values:
+            was, now = old_values.get(i, defaults[i]), new_values.get(i, defaults[i])
+            if not same_setting(s, was, now):
+                settings.append({"id": i, "from": was, "to": now})
+    return {"since": "last build" if previous else None, "settings": settings, "extras": build_extras(previous, current),
+            "total": len(new_values)}
+
+
+def change_lines(res):
+    """The lines that tell what an apply result changed (res["changes"]), then its notes: the count, one line per changed setting
+    and one per extra (turbo kit, garage tyres, sound)."""
+    changes = res["changes"]
+    count = len(changes["settings"]) + len(changes["extras"])
+    total = "%d changed settings compared to the stock car" % changes["total"]
+    if changes["since"] is None:
+        lines = ["first build of this car: " + total]
+    elif count:
+        lines = ["%d change(s) since the last build (%s in total)" % (count, total)]
+    else:
+        lines = ["no change since the last build (%s in total)" % total]
+    lines += ["  %s: %s -> %s" % (c["id"], fmt(c["from"]), fmt(c["to"])) for c in changes["settings"]]
+    lines += ["  " + e["text"] for e in changes["extras"]]
+    return lines + res["notes"]
+
+
 def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
     cat = catalogue or load_catalogue()
     new_id = new_id or new_id_for(car_id)
@@ -1600,8 +1753,11 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     changed_sounds = write_sounds(car_root, new_id, plan["sounds"])
     notes += sound_notes(changed_sounds)
     pkg = pack_build(work, new_id, part, out_dir)
+    snapshot = make_snapshot(work, car_id, plan, applied, plan_name(car_id, plan, meta["name_suffix"]))
+    changes = build_changes(load_snapshot(work, car_id, new_id), snapshot, cat, plan["rows"])
+    save_snapshot(work, car_id, new_id, snapshot)
     result = {"new_id": new_id, "tune": new_id, "name_suffix": meta["name_suffix"], "build_dir": out_dir, "package": pkg, "size": os.path.getsize(pkg),
-              "applied": applied, "notes": notes, "sounds": changed_sounds, "installed": None, "backup": None}
+              "applied": applied, "notes": notes, "sounds": changed_sounds, "changes": changes, "installed": None, "backup": None}
     if install:
         result["backup"], result["installed"] = install_package(work, pkg, plan["mods"])
     return result
@@ -2256,11 +2412,13 @@ def turbo_rel(root, car_id, text):
 
 def turbo_listing(root, car_id, cache=None):
     """What the engine file (@engine) of a car lists: {files (path below the car folder of each turbos_to_load entry, in
-    order; as @turbo[N] resolves it, else the path the entry names), boost (max_boost of each entry of turbos that has a
-    number), count (len(files)), missing (the files that are not on disk)}. An engine that cannot be read, or whose
-    turbos_to_load is not a list of texts, lists nothing."""
+    order; as @turbo[N] resolves it, else the path the entry names), boost (the max_boost of each turbo file, in file order;
+    when a file gives none, the max_boost of the engine's turbos instead if that list has a number for every file, else
+    empty), boost_ref (max_turbo_boost of the engine, a reference value, when it is above 0 and boost is empty, else None),
+    count (len(files)), missing (the files that are not on disk)}. An engine that cannot be read, or whose turbos_to_load is
+    not a list of texts, lists nothing."""
     cache = {} if cache is None else cache
-    nothing = {"files": [], "boost": [], "count": 0, "missing": []}
+    nothing = {"files": [], "boost": [], "boost_ref": None, "count": 0, "missing": []}
     try:
         engine = read_file(car_root_of(root, car_id), resolve_file("@engine", root, car_id, cache), cache)
     except (ValueError, OSError):
@@ -2275,16 +2433,27 @@ def turbo_listing(root, car_id, cache=None):
         except ValueError:
             files.append(turbo_rel(root, car_id, text))
             missing.append(files[-1])
-    turbos = engine.get("turbos", [])
-    boost = [float(b) for b in (plain(t.get("max_boost")) for t in turbos if isinstance(t, dict))
-             if finite_number(b)] if isinstance(turbos, list) else []
-    return {"files": files, "boost": boost, "count": len(files), "missing": missing}
+    boost = []
+    for rel in files:
+        try:
+            value = plain(read_file(car_root_of(root, car_id), rel, cache).get("max_boost"))
+        except (ValueError, OSError):
+            continue
+        if finite_number(value):
+            boost.append(float(value))
+    if len(boost) != len(files):
+        turbos = engine.get("turbos", [])
+        listed = [plain(t.get("max_boost")) if isinstance(t, dict) else None for t in turbos] if isinstance(turbos, list) else []
+        boost = [float(b) for b in listed] if len(listed) == len(files) and all(finite_number(b) for b in listed) else []
+    reference = plain(engine.get("max_turbo_boost"))
+    boost_ref = float(reference) if not boost and finite_number(reference) and reference > 0 else None
+    return {"files": files, "boost": boost, "boost_ref": boost_ref, "count": len(files), "missing": missing}
 
 
 def turbo_parts(root, car_id, cache=None):
     """The turbo setup of a car in root (a base folder, as resolve_file takes it): {files (the turbo files turbos_to_load of
-    its engine names, in order, as @turbo[N] resolves them), boost (max_boost of each entry of the engine's turbos that has
-    one), count (len(files))}. A car whose engine lists no turbo file or cannot be read has count 0."""
+    its engine names, in order, as @turbo[N] resolves them), boost (as turbo_listing gives it), count (len(files))}. A car
+    whose engine lists no turbo file or cannot be read has count 0."""
     found = turbo_listing(root, car_id, cache)
     return {"files": found["files"], "boost": found["boost"], "count": found["count"]}
 
@@ -2296,7 +2465,8 @@ def turbo_kind(count):
 def list_turbo_donors(work):
     """The cars that can give their turbo setup: every extracted car (base folder present; a car that cannot be read counts
     as having no turbo) whose engine lists at least one turbo file and has all of them in its base, sorted by display name,
-    then id: {car, label (stock_info.json, else the cached car index, else the id), count, kind, boost}. Nothing is
+    then id: {car, label (stock_info.json, else the cached car index, else the id), count, kind, boost, boost_ref (as
+    turbo_listing gives them)}. Nothing is
     extracted, the game package is not needed."""
     names = {c["id"]: c["display_name"] for c in load_cars_index(work, "") or []}
     donors = []
@@ -2311,7 +2481,8 @@ def list_turbo_donors(work):
         except (ValueError, OSError):
             info = None
         donors.append({"car": car_id, "label": info["display_name"] if info else names.get(car_id) or car_id,
-                       "count": found["count"], "kind": turbo_kind(found["count"]), "boost": found["boost"]})
+                       "count": found["count"], "kind": turbo_kind(found["count"]), "boost": found["boost"],
+                       "boost_ref": found["boost_ref"]})
     return sorted(donors, key=lambda d: (d["label"].lower(), d["car"]))
 
 
@@ -2340,7 +2511,7 @@ def turbo_choice(work, car_id, tune=None):
 def set_turbo(work, car_id, donor, tune=None):
     """Choose the donor of a car's turbo kit and store {"donor": donor} in the state (written only when it changes); the car
     must be extracted and have no turbo itself, the donor must be one of list_turbo_donors and not the car. Returns
-    {donor, count, kind, boost} of the donor."""
+    {donor, count, kind, boost, boost_ref} of the donor."""
     root = base_dir(work, car_id)
     if turbo_parts(root, car_id)["count"] >= 1:
         raise ValueError("%s has a turbo already" % car_id)
@@ -2357,7 +2528,8 @@ def set_turbo(work, car_id, donor, tune=None):
     if state.get(TURBO_KEY) != {"donor": donor}:
         state[TURBO_KEY] = {"donor": donor}
         save_state(work, car_id, state, tune)
-    return {"donor": donor, "count": picked["count"], "kind": picked["kind"], "boost": picked["boost"]}
+    return {"donor": donor, "count": picked["count"], "kind": picked["kind"], "boost": picked["boost"],
+            "boost_ref": picked["boost_ref"]}
 
 
 def reset_turbo(work, car_id, tune=None):
@@ -3260,11 +3432,8 @@ def cmd_apply():
     warn_unknown_state(work, car_id, cat, new_id)
     res = apply(work, car_id, new_id, "no-install" not in opts, mods_arg(opts), cat)
     print("car: %s, new id: %s" % (car_id, res["new_id"]))
-    print("applied %d setting(s)" % len(res["applied"]))
-    for a in res["applied"]:
-        print("  %s: %s -> %s  [%s]" % (a["id"], fmt(a["old"]), fmt(a["new"]), ", ".join(a["files"])))
-    for n in res["notes"]:
-        print(n)
+    for line in change_lines(res):
+        print(line)
     print("package: %s (%d bytes)" % (res["package"], res["size"]))
     if res["installed"]:
         print("installed: %s" % res["installed"])

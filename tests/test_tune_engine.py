@@ -24,6 +24,7 @@ REAL_LOAD_CATALOGUE = tune.load_catalogue
 REAL_RENAME = os.rename
 USAGE = tune.__doc__.split("\n\n")[1]
 GAME_SHARED = "content\\cars\\common_phsx\\"
+NO_CHANGES = {"since": None, "settings": [], "extras": [], "total": 0}
 
 
 def limiter(**kw):
@@ -2647,6 +2648,427 @@ class TestApply(CarCase):
             self.apply(self.settings())
         not_chained(self, cm.exception)
 
+    def snapshot_file(self, tune_id="ax_x"):
+        return os.path.join(self.work, "ks_x", "snapshots", tune_id + ".json")
+
+    def test_the_first_build_lists_everything_compared_to_the_stock_car_and_writes_the_snapshot(self):
+        res = self.apply(self.settings(limiter(), mini_setting("f", targets=[("@engine", "minimum")])), {"limiter": 8000, "f": 1.5})
+        self.assertEqual(res["changes"], {"since": None, "total": 2, "extras": [],
+                                          "settings": [{"id": "limiter", "from": 7000, "to": 8000}, {"id": "f", "from": 800, "to": 1.5}]})
+        self.assertEqual([a["id"] for a in res["applied"]], ["limiter", "f"])
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            record = json.load(f)
+        self.assertRegex(record.pop("time"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(record, {"version": 1, "settings": {"limiter": 8000, "f": 1.5}, "kit": None, "garage": None, "sounds": {}, "name": "Car X MY"})
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.snapshot_file()))), ["ax_x.json"])
+
+    def test_the_changes_are_json_text_without_nan_and_the_applied_list_stays_the_full_list(self):
+        s = self.settings(limiter(), mini_setting("f", targets=[("@engine", "minimum")]))
+        self.apply(s, {"limiter": 8000, "f": 1.5})
+        res = self.apply(s, {"limiter": 8000, "f": 1.6})
+        json.dumps(res["changes"], allow_nan=False)
+        self.assertEqual(res["changes"], {"since": "last build", "total": 2, "extras": [], "settings": [{"id": "f", "from": 1.5, "to": 1.6}]})
+        self.assertEqual([(a["id"], a["old"], a["new"]) for a in res["applied"]], [("limiter", 7000, 8000), ("f", 800, 1.6)])
+
+    def test_a_second_build_with_one_changed_value_has_exactly_that_change(self):
+        s = self.settings(limiter())
+        self.apply(s, {"limiter": 8000})
+        res = self.apply(s, {"limiter": 9000})
+        self.assertEqual(res["changes"], {"since": "last build", "total": 1, "extras": [], "settings": [{"id": "limiter", "from": 8000, "to": 9000}]})
+
+    def test_a_second_build_without_a_change_has_nothing_and_a_new_setting_starts_from_the_stock_value(self):
+        s = self.settings(limiter(), mini_setting("f", targets=[("@engine", "minimum")]))
+        self.apply(s, {"limiter": 8000})
+        self.assertEqual(self.apply(s)["changes"], {"since": "last build", "total": 1, "extras": [], "settings": []})
+        res = self.apply(s, {"limiter": 8000, "f": 1.5})
+        self.assertEqual(res["changes"]["settings"], [{"id": "f", "from": 800, "to": 1.5}])
+
+    def test_a_setting_set_back_to_the_default_goes_to_the_stock_value(self):
+        s = self.settings(limiter())
+        self.apply(s, {"limiter": 8000})
+        res = self.apply(s, {})
+        self.assertEqual(res["changes"], {"since": "last build", "total": 0, "extras": [], "settings": [{"id": "limiter", "from": 8000, "to": 7000}]})
+        self.assertEqual(res["applied"], [])
+
+    def test_float_noise_between_two_builds_is_no_change(self):
+        s = self.settings(mini_setting("f", targets=[("@engine", "minimum")]))
+        self.apply(s, {"f": 1.1})
+        self.assertEqual(self.apply(s, {"f": 1.1 + 1e-9})["changes"]["settings"], [])
+
+    def test_the_snapshot_is_written_after_the_pack_and_not_before(self):
+        seen = []
+        real_pack = self.pack
+
+        def pack(indir, pkg):
+            seen.append(os.path.exists(self.snapshot_file()))
+            real_pack(indir, pkg)
+        self.patch(kspkg, "cmd_pack", pack)
+        self.apply(self.settings())
+        self.assertEqual((seen, os.path.isfile(self.snapshot_file())), ([False], True))
+        self.apply(self.settings())
+        self.assertEqual(seen, [False, True])
+
+    def test_a_failed_build_or_pack_leaves_no_snapshot_and_keeps_the_previous_one(self):
+        s = self.settings(limiter())
+        for error_name, error in (("build_error", ValueError("disk full")), ("pack_error", OSError(28, "No space left on device"))):
+            with self.subTest(error_name):
+                shutil.rmtree(os.path.join(self.work, "ks_x", "snapshots"), ignore_errors=True)
+                setattr(self, error_name, error)
+                with self.assertRaises((ValueError, OSError)):
+                    self.apply(s, {"limiter": 8000})
+                self.assertFalse(os.path.exists(os.path.dirname(self.snapshot_file())))
+                setattr(self, error_name, None)
+                self.apply(s, {"limiter": 8000})
+                with open(self.snapshot_file(), encoding="utf-8") as f:
+                    before = f.read()
+                setattr(self, error_name, error)
+                with self.assertRaises((ValueError, OSError)):
+                    self.apply(s, {"limiter": 9000})
+                with open(self.snapshot_file(), encoding="utf-8") as f:
+                    self.assertEqual(f.read(), before)
+                setattr(self, error_name, None)
+                self.assertEqual(self.apply(s)["changes"]["settings"], [{"id": "limiter", "from": 8000, "to": 9000}])
+
+    def test_a_failure_before_the_build_leaves_the_snapshot_alone(self):
+        s = self.settings(limiter())
+        self.apply(s, {"limiter": 8000})
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            before = f.read()
+        with self.assertRaisesRegex(ValueError, "not applicable"):
+            self.apply(self.settings(limiter(), mini_setting("deep", targets=[("@engine", "q.r")])), {"limiter": 9000, "deep": 1.0})
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            self.assertEqual(f.read(), before)
+
+    def test_a_missing_damaged_or_foreign_snapshot_makes_a_first_build_and_is_replaced(self):
+        s = self.settings(limiter())
+        self.apply(s, {"limiter": 8000})
+        good = os.path.getsize(self.snapshot_file())
+        for text in ("", "{", "[]", '{"version": 2, "settings": {}}', '{"version": 1, "settings": []}'):
+            with self.subTest(text):
+                self.write(self.snapshot_file(), text)
+                res = self.apply(s)
+                self.assertEqual((res["changes"]["since"], res["changes"]["settings"]), (None, [{"id": "limiter", "from": 7000, "to": 8000}]))
+                self.assertEqual(os.path.getsize(self.snapshot_file()), good)
+        os.remove(self.snapshot_file())
+        self.assertIsNone(self.apply(s)["changes"]["since"])
+
+    def test_the_build_does_not_depend_on_the_snapshot(self):
+        s = self.settings(limiter(), mini_setting("f", targets=[("@engine", "minimum")]))
+        state = {"limiter": 8000, "f": 1.5, "name_suffix": "_Z"}
+
+        def built():
+            self.calls.clear()
+            res = self.apply(s, state)
+            root = self.fc.key(res["build_dir"])
+            with open(res["package"], "rb") as f:
+                package = f.read()
+            return (res["notes"], res["applied"], res["size"], res["name_suffix"], list(self.calls), package,
+                    {k[len(root):]: json.dumps(v, sort_keys=True) for k, v in self.fc.store.items() if k.startswith(root + os.sep)},
+                    sorted(os.path.relpath(os.path.join(dp, n), res["build_dir"]) for dp, _, names in os.walk(res["build_dir"]) for n in names))
+        first = built()
+        self.assertTrue(os.path.isfile(self.snapshot_file()))
+        with_snapshot = built()
+        os.remove(self.snapshot_file())
+        without = built()
+        self.write(self.snapshot_file(), "damaged")
+        damaged = built()
+        self.assertEqual((with_snapshot, without, damaged), (first, first, first))
+
+    def test_every_modded_car_has_its_own_snapshot_and_a_new_id_is_a_first_build(self):
+        s = self.settings(limiter())
+        self.modded({"limiter": 8000, "name_suffix": "_A"})
+        tune.save_state(self.work, "ks_x", {"limiter": 7500, "name_suffix": "MY"})
+        default = self.apply(s)
+        self.assertEqual(self.apply(s)["changes"]["since"], "last build")
+        second = self.apply(s, new_id="ax01")
+        self.assertEqual((second["changes"]["since"], second["changes"]["settings"]), (None, [{"id": "name_suffix", "from": "MY", "to": "_A"},
+                                                                                           {"id": "limiter", "from": 7000, "to": 8000}]))
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.snapshot_file()))), ["ax01.json", "ax_x.json"])
+        self.modded({"limiter": 8500, "name_suffix": "_A"})
+        self.assertEqual(self.apply(s, new_id="ax01")["changes"]["settings"], [{"id": "limiter", "from": 8000, "to": 8500}])
+        self.assertEqual(self.apply(s)["changes"]["settings"], [])
+        self.assertEqual(default["changes"]["total"], 1)
+
+    def test_duplicate_does_not_copy_the_snapshot(self):
+        s = self.settings(limiter())
+        self.patch(tune, "load_catalogue", lambda path=None: s)
+        self.apply(s, {"limiter": 8000})
+        dup = tune.duplicate_tune(self.work, "ks_x", None, "ax01")
+        self.assertFalse(os.path.exists(self.snapshot_file("ax01")))
+        res = self.apply(s, new_id=dup["id"])
+        self.assertEqual((res["changes"]["since"], res["changes"]["total"]), (None, 2))
+        self.assertEqual(sorted(os.listdir(os.path.dirname(self.snapshot_file()))), ["ax01.json", "ax_x.json"])
+
+    def test_no_install_builds_write_the_snapshot_too_and_so_do_installing_builds(self):
+        s = self.settings(limiter())
+        res = self.apply(s, {"limiter": 8000}, install=False)
+        self.assertEqual((res["installed"], res["changes"]["since"], os.path.isfile(self.snapshot_file())), (None, None, True))
+        mods = str(self.d / "mods")
+        res = self.apply(s, {"limiter": 9000}, install=True, mods_dir=mods)
+        self.assertTrue(res["installed"])
+        self.assertEqual(res["changes"], {"since": "last build", "total": 1, "extras": [], "settings": [{"id": "limiter", "from": 8000, "to": 9000}]})
+
+    def test_the_name_of_the_build_is_in_the_snapshot(self):
+        self.apply(self.settings(), {"name_suffix": "_Z"})
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["name"], "Car X _Z")
+
+
+RECORD_CAT = mini_catalogue(suffix(), mini_setting("limiter", type="int", targets=[("@engine", "limiter")]),
+                            mini_setting("f", targets=[("@engine", "minimum")]), mini_setting("g", targets=[("@engine", "maximum")]),
+                            mini_setting("mode", type="enum", choices=["a", "b"], targets=[("@engine", "mode")]),
+                            mini_setting("aids", kind="flag", type="bool", value=0, targets=[("@car", "aids")]))
+RECORD_ROWS = [{"id": "name_suffix", "default": "MY"}, {"id": "limiter", "default": 7000}, {"id": "f", "default": 0.5}, {"id": "g", "default": 2.0},
+               {"id": "mode", "default": "a"}, {"id": "aids", "default": False}]
+KIT_A = {"donor": "ks_a", "label": "Single A", "kind": "single turbo", "boost": [0.8]}
+KIT_B = {"donor": "ks_b", "label": "Twin B", "kind": "twin turbo", "boost": [1.0, 1.2]}
+GARAGE_AB = {"keys": ["own:fast", "stock:a|b"], "start": "own:fast"}
+GARAGE_B = {"keys": ["stock:a|b"], "start": "stock:a|b"}
+T_EVENT, T_RX7_EVENT, B_EVENT = "event:/parts/turbos/turbo_none", "event:/parts/turbos/turbo_rx7", "event:/parts/backfires/backfire_classic#8"
+
+
+def record(settings=None, kit=None, garage=None, sounds=None):
+    return {"version": 1, "settings": dict(settings or {}), "kit": kit, "garage": garage, "sounds": dict(sounds or {}), "name": "Car X MY",
+            "time": "2026-11-15T10:00:00Z"}
+
+
+def changes(previous, current):
+    return tune.build_changes(previous, current, RECORD_CAT, RECORD_ROWS)
+
+
+class TestBuildChanges(unittest.TestCase):
+    def test_a_first_build_lists_every_changed_setting_from_the_stock_value_in_catalogue_order(self):
+        res = changes(None, record({"f": 1.5, "name_suffix": "_Z", "limiter": 8000, "aids": True}))
+        self.assertEqual(res, {"since": None, "total": 4, "extras": [], "settings": [
+            {"id": "name_suffix", "from": "MY", "to": "_Z"}, {"id": "limiter", "from": 7000, "to": 8000}, {"id": "f", "from": 0.5, "to": 1.5},
+            {"id": "aids", "from": False, "to": True}]})
+
+    def test_a_first_build_describes_the_kit_the_garage_and_the_sounds_as_additions(self):
+        res = changes(None, record(kit=KIT_A, garage=GARAGE_AB, sounds={"turbo": T_RX7_EVENT, "backfire": B_EVENT}))
+        self.assertEqual(res["since"], None)
+        self.assertEqual(res["extras"], [
+            {"kind": "turbo_kit", "from": None, "to": "Single A (single turbo, 0.8 bar)", "text": "Turbo kit: none -> Single A (single turbo, 0.8 bar)"},
+            {"kind": "garage", "from": None, "to": "own:fast, stock:a|b", "text": "Garage tyres: own:fast, stock:a|b; starts on own:fast"},
+            {"kind": "sound", "slot": "turbo", "from": None, "to": T_RX7_EVENT, "text": "Sound turbo: own sound -> turbo_rx7"},
+            {"kind": "sound", "slot": "backfire", "from": None, "to": B_EVENT, "text": "Sound backfire: own sound -> backfire_classic#8"}])
+
+    def test_a_first_build_without_anything_has_no_settings_and_no_extras(self):
+        self.assertEqual(changes(None, record()), {"since": None, "settings": [], "extras": [], "total": 0})
+
+    def test_an_unchanged_build_has_no_changes_but_the_total(self):
+        same = record({"limiter": 8000, "f": 1.5}, KIT_A, GARAGE_AB, {"turbo": T_RX7_EVENT})
+        self.assertEqual(changes(same, copy_of(same)), {"since": "last build", "settings": [], "extras": [], "total": 2})
+
+    def test_a_changed_value_goes_from_the_previous_value(self):
+        res = changes(record({"limiter": 8000, "f": 1.5}), record({"limiter": 9000, "f": 1.5}))
+        self.assertEqual(res["settings"], [{"id": "limiter", "from": 8000, "to": 9000}])
+
+    def test_a_new_setting_goes_from_the_stock_value(self):
+        res = changes(record({"limiter": 8000}), record({"limiter": 8000, "f": 1.5, "mode": "b"}))
+        self.assertEqual(res["settings"], [{"id": "f", "from": 0.5, "to": 1.5}, {"id": "mode", "from": "a", "to": "b"}])
+        self.assertEqual(res["total"], 3)
+
+    def test_a_setting_set_back_to_the_default_goes_to_the_stock_value(self):
+        res = changes(record({"limiter": 8000, "aids": True, "f": 1.5}), record({"f": 1.5}))
+        self.assertEqual(res, {"since": "last build", "total": 1, "extras": [], "settings": [
+            {"id": "limiter", "from": 8000, "to": 7000}, {"id": "aids", "from": True, "to": False}]})
+
+    def test_float_noise_is_ignored_but_a_real_difference_is_not(self):
+        res = changes(record({"f": 1.1, "g": 3.0}), record({"f": 1.1 + 1e-9, "g": 3.0001}))
+        self.assertEqual(res["settings"], [{"id": "g", "from": 3.0, "to": 3.0001}])
+
+    def test_an_int_is_not_compared_with_a_tolerance(self):
+        self.assertEqual(len(changes(record({"limiter": 8000}), record({"limiter": 8001}))["settings"]), 1)
+
+    def test_a_previous_value_of_the_wrong_kind_is_a_change_and_does_not_break(self):
+        res = changes(record({"f": "text", "g": True}), record({"f": 1.5, "g": 2.0}))
+        self.assertEqual(res["settings"], [{"id": "f", "from": "text", "to": 1.5}, {"id": "g", "from": True, "to": 2.0}])
+
+    def test_a_setting_that_the_catalogue_does_not_know_any_more_is_left_out(self):
+        res = changes(record({"gone": 5, "limiter": 8000}), record({"limiter": 8000}))
+        self.assertEqual((res["settings"], res["total"]), ([], 1))
+
+    def test_the_stock_value_is_the_plain_number_of_a_float32_default(self):
+        f32 = tune.to_f32(0.1)
+        rows = [dict(r, default=f32) if r["id"] == "f" else r for r in RECORD_ROWS]
+        res = tune.build_changes(None, record({"f": 0.25}), RECORD_CAT, rows)
+        self.assertEqual(res["settings"], [{"id": "f", "from": 0.1, "to": 0.25}])
+        self.assertIs(type(res["settings"][0]["from"]), float)
+
+    def test_a_kit_added_changed_and_removed(self):
+        added = changes(record(), record(kit=KIT_A))
+        self.assertEqual(added["extras"], [{"kind": "turbo_kit", "from": None, "to": "Single A (single turbo, 0.8 bar)",
+                                            "text": "Turbo kit: none -> Single A (single turbo, 0.8 bar)"}])
+        swapped = changes(record(kit=KIT_A), record(kit=KIT_B))
+        self.assertEqual(swapped["extras"], [{"kind": "turbo_kit", "from": "Single A (single turbo, 0.8 bar)", "to": "Twin B (twin turbo, 1.0/1.2 bar)",
+                                              "text": "Turbo kit: Single A (single turbo, 0.8 bar) -> Twin B (twin turbo, 1.0/1.2 bar)"}])
+        removed = changes(record(kit=KIT_B), record())
+        self.assertEqual(removed["extras"], [{"kind": "turbo_kit", "from": "Twin B (twin turbo, 1.0/1.2 bar)", "to": None,
+                                              "text": "Turbo kit: Twin B (twin turbo, 1.0/1.2 bar) -> none"}])
+
+    def test_the_same_donor_with_other_details_is_no_change_and_a_kit_without_boost_has_no_bar(self):
+        self.assertEqual(changes(record(kit=KIT_A), record(kit=dict(KIT_A, label="Renamed", boost=[0.9])))["extras"], [])
+        res = changes(record(), record(kit=dict(KIT_A, boost=[])))
+        self.assertEqual(res["extras"][0]["text"], "Turbo kit: none -> Single A (single turbo)")
+
+    def test_garage_tyres_added_and_removed(self):
+        res = changes(record(garage=GARAGE_B), record(garage=GARAGE_AB))
+        self.assertEqual(res["extras"], [{"kind": "garage", "from": "stock:a|b", "to": "own:fast, stock:a|b",
+                                          "text": "Garage tyres: +own:fast; starts on own:fast"}])
+        res = changes(record(garage=GARAGE_AB), record(garage=GARAGE_B))
+        self.assertEqual(res["extras"][0]["text"], "Garage tyres: -own:fast; starts on stock:a|b")
+        both = changes(record(garage={"keys": ["own:a", "stock:x"], "start": "own:a"}), record(garage={"keys": ["own:b", "stock:x"], "start": "own:b"}))
+        self.assertEqual(both["extras"][0]["text"], "Garage tyres: +own:b, -own:a; starts on own:b")
+
+    def test_garage_start_changes_alone_and_the_order_alone(self):
+        res = changes(record(garage={"keys": ["own:a", "own:b"], "start": "own:a"}), record(garage={"keys": ["own:b", "own:a"], "start": "own:b"}))
+        self.assertEqual(res["extras"][0]["text"], "Garage tyres: other order; starts on own:b")
+        res = changes(record(garage={"keys": ["own:a", "own:b"], "start": "own:a"}), record(garage={"keys": ["own:a", "own:b"], "start": "own:b"}))
+        self.assertEqual(res["extras"][0]["text"], "Garage tyres: other order; starts on own:b")
+
+    def test_a_garage_selection_that_is_gone_or_new(self):
+        res = changes(record(garage=GARAGE_AB), record())
+        self.assertEqual(res["extras"], [{"kind": "garage", "from": "own:fast, stock:a|b", "to": None,
+                                          "text": "Garage tyres: stock compounds again (were own:fast, stock:a|b)"}])
+        res = changes(record(), record(garage=GARAGE_B))
+        self.assertEqual(res["extras"][0]["text"], "Garage tyres: stock:a|b; starts on stock:a|b")
+
+    def test_a_sound_slot_changed_added_and_removed(self):
+        res = changes(record(sounds={"turbo": T_EVENT, "backfire": B_EVENT}), record(sounds={"turbo": T_RX7_EVENT}))
+        self.assertEqual(res["extras"], [
+            {"kind": "sound", "slot": "turbo", "from": T_EVENT, "to": T_RX7_EVENT, "text": "Sound turbo: turbo_none -> turbo_rx7"},
+            {"kind": "sound", "slot": "backfire", "from": B_EVENT, "to": None, "text": "Sound backfire: backfire_classic#8 -> own sound"}])
+        res = changes(record(sounds={"turbo": T_RX7_EVENT}), record(sounds={"turbo": T_RX7_EVENT, "backfire": B_EVENT}))
+        self.assertEqual(res["extras"], [{"kind": "sound", "slot": "backfire", "from": None, "to": B_EVENT, "text": "Sound backfire: own sound -> backfire_classic#8"}])
+
+    def test_an_unchanged_sound_slot_is_no_extra(self):
+        same = record(sounds={"turbo": T_RX7_EVENT, "backfire": B_EVENT})
+        self.assertEqual(changes(same, copy_of(same))["extras"], [])
+
+    def test_the_extras_come_in_the_order_kit_garage_turbo_backfire(self):
+        res = changes(record(), record(kit=KIT_A, garage=GARAGE_B, sounds={"backfire": B_EVENT, "turbo": T_RX7_EVENT}))
+        self.assertEqual([(e["kind"], e.get("slot")) for e in res["extras"]], [("turbo_kit", None), ("garage", None), ("sound", "turbo"), ("sound", "backfire")])
+
+    def test_nothing_is_read_or_changed(self):
+        previous, current = record({"limiter": 8000}, KIT_A), record({"limiter": 9000})
+        before = copy_of(previous), copy_of(current)
+        res = changes(previous, current)
+        json.dumps(res, allow_nan=False)
+        self.assertEqual((previous, current), before)
+
+
+def copy_of(data):
+    return json.loads(json.dumps(data))
+
+
+class TestChangeLines(unittest.TestCase):
+    def res(self, since, settings=(), extras=(), total=0, notes=("note: a", "note: b")):
+        return {"changes": {"since": since, "settings": list(settings), "extras": list(extras), "total": total}, "notes": list(notes)}
+
+    def test_a_first_build_names_the_total_and_lists_everything_then_the_notes(self):
+        res = self.res(None, [{"id": "limiter", "from": 7000, "to": 8000}, {"id": "f", "from": 0.5, "to": 1.5}, {"id": "aids", "from": False, "to": True},
+                              {"id": "v", "from": None, "to": "x"}],
+                       [{"kind": "turbo_kit", "from": None, "to": "A", "text": "Turbo kit: none -> A"}], total=4)
+        self.assertEqual(tune.change_lines(res), [
+            "first build of this car: 4 changed settings compared to the stock car", "  limiter: 7000 -> 8000", "  f: 0.5 -> 1.5", "  aids: false -> true",
+            "  v: - -> x", "  Turbo kit: none -> A", "note: a", "note: b"])
+
+    def test_a_later_build_counts_settings_and_extras_and_names_the_total(self):
+        res = self.res("last build", [{"id": "limiter", "from": 8000, "to": 9000}],
+                       [{"kind": "sound", "slot": "turbo", "from": None, "to": "e", "text": "Sound turbo: own sound -> turbo_rx7"}], total=7)
+        self.assertEqual(tune.change_lines(res), [
+            "2 change(s) since the last build (7 changed settings compared to the stock car in total)", "  limiter: 8000 -> 9000",
+            "  Sound turbo: own sound -> turbo_rx7", "note: a", "note: b"])
+
+    def test_an_empty_delta_says_so(self):
+        self.assertEqual(tune.change_lines(self.res("last build", total=3, notes=())),
+                         ["no change since the last build (3 changed settings compared to the stock car in total)"])
+
+    def test_the_applied_list_and_its_files_are_not_printed_and_the_result_is_not_changed(self):
+        res = dict(self.res("last build", total=1), applied=[{"id": "limiter", "old": 7000, "new": 8000, "files": ["data/x.car"]}])
+        before = copy_of(res)
+        lines = tune.change_lines(res)
+        self.assertFalse([line for line in lines if "limiter" in line or "applied" in line or "data/x.car" in line])
+        lines.append("more")
+        self.assertEqual(res, before)
+
+
+class TestSnapshotFile(Base):
+    def test_the_snapshot_of_a_modded_car_lives_below_its_stock_car(self):
+        self.assertEqual(tune.snapshot_path(self.work, "ks_x", "ax01"), os.path.join(self.work, "ks_x", "snapshots", "ax01.json"))
+
+    def test_save_and_load_round_trip_and_leave_no_temporary_file(self):
+        data = record({"limiter": 8000, "f": 1.5, "name_suffix": "_Z", "aids": True}, KIT_B, GARAGE_AB, {"turbo": T_RX7_EVENT})
+        tune.save_snapshot(self.work, "ks_x", "ax01", data)
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), data)
+        self.assertEqual(os.listdir(os.path.join(self.work, "ks_x", "snapshots")), ["ax01.json"])
+        tune.save_snapshot(self.work, "ks_x", "ax01", record())
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), record())
+
+    def test_a_missing_file_or_folder_is_no_previous_build(self):
+        self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax01"))
+        tune.save_snapshot(self.work, "ks_x", "ax01", record())
+        self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax02"))
+
+    def test_a_damaged_or_foreign_file_is_ignored(self):
+        path = tune.snapshot_path(self.work, "ks_x", "ax01")
+        good = record({"f": 1.5}, KIT_A, GARAGE_AB, {"turbo": T_RX7_EVENT})
+        bad = [b"", b"{", b"\xff\xfe\x00", b"null", b"[]", b'"text"', b'{"version": 1, "settings": {"f": NaN}, "kit": null, "garage": null, "sounds": {}, "name": "n", "time": "t"}']
+        bad += [json.dumps(dict(good, **change)).encode() for change in (
+            {"version": 2}, {"version": "1"}, {"version": True}, {"settings": []}, {"settings": {"f": None}}, {"settings": {"f": [1]}}, {"settings": {"f": {"a": 1}}},
+            {"kit": []}, {"kit": dict(KIT_A, donor=5)}, {"kit": dict(KIT_A, boost="1")}, {"kit": dict(KIT_A, boost=[None])}, {"kit": {"donor": "x"}},
+            {"garage": []}, {"garage": {"keys": "a", "start": "a"}}, {"garage": {"keys": [1], "start": "a"}}, {"garage": {"keys": ["a"]}},
+            {"sounds": []}, {"sounds": {"turbo": 5}}, {"name": 5}, {"time": None})]
+        bad += [json.dumps({k: v for k, v in good.items() if k != missing}).encode() for missing in good]
+        for text in bad:
+            with self.subTest(text[:60]):
+                self.write(path, text, binary=True)
+                self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax01"))
+        self.write(path, json.dumps(good), binary=False)
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), good)
+
+    def test_a_snapshot_with_a_utf8_bom_is_read(self):
+        self.write(tune.snapshot_path(self.work, "ks_x", "ax01"), b"\xef\xbb\xbf" + json.dumps(record({"f": 1.5})).encode(), binary=True)
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), record({"f": 1.5}))
+
+
+class TestMakeSnapshot(Base):
+    def plan(self, kit=None, garage=None, sounds=()):
+        return {"kit": kit, "garage": garage, "sounds": list(sounds)}
+
+    def test_the_record_of_a_plain_build(self):
+        applied = [{"id": "limiter", "old": 7000, "new": 8000, "files": ["a"]}, {"id": "f", "old": tune.to_f32(0.1), "new": 0.25, "files": []}]
+        data = tune.make_snapshot(self.work, "ks_x", self.plan(), applied, "Car X MY")
+        self.assertRegex(data.pop("time"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        self.assertEqual(data, {"version": 1, "settings": {"limiter": 8000, "f": 0.25}, "kit": None, "garage": None, "sounds": {}, "name": "Car X MY"})
+
+    def test_the_new_values_are_plain_numbers(self):
+        applied = [{"id": "f", "old": 0.0, "new": tune.to_f32(0.1), "files": []}]
+        data = tune.make_snapshot(self.work, "ks_x", self.plan(), applied, "n")
+        self.assertEqual(json.dumps(data["settings"]), '{"f": 0.1}')
+
+    def test_the_kit_garage_and_sounds(self):
+        donors = [{"car": "ks_b", "label": "Twin B", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2]}]
+        kit = {"donor": "ks_b", "kind": "twin turbo", "files": [], "fields": [], "inline_fields": [], "stamp": []}
+        garage = {"entries": [{"key": "own:fast", "label": "Fast"}, {"key": "stock:a|b", "label": "A"}]}
+        sounds = [{"slot": "turbo", "option": {"key": T_RX7_EVENT}, "template": {}}, {"slot": "backfire", "option": {"key": B_EVENT}, "template": {}}]
+        with mock.patch.object(tune, "list_turbo_donors", lambda work: donors):
+            data = tune.make_snapshot(self.work, "ks_x", self.plan(kit, garage, sounds), [], "n")
+        self.assertEqual((data["kit"], data["garage"], data["sounds"]), (
+            {"donor": "ks_b", "label": "Twin B", "kind": "twin turbo", "boost": [1.0, 1.2]}, GARAGE_AB,
+            {"turbo": T_RX7_EVENT, "backfire": B_EVENT}))
+        json.dumps(data, allow_nan=False)
+
+    def test_a_donor_that_is_not_listed_any_more_keeps_its_id_as_the_label(self):
+        kit = {"donor": "ks_gone", "kind": "single turbo"}
+        with mock.patch.object(tune, "list_turbo_donors", lambda work: []):
+            data = tune.make_snapshot(self.work, "ks_x", self.plan(kit), [], "n")
+        self.assertEqual(data["kit"], {"donor": "ks_gone", "label": "ks_gone", "kind": "single turbo", "boost": []})
+        self.assertTrue(tune.valid_snapshot(data))
+
+    def test_a_record_it_makes_is_valid(self):
+        self.assertTrue(tune.valid_snapshot(tune.make_snapshot(self.work, "ks_x", self.plan(), [{"id": "x", "old": 1, "new": True, "files": []}], "n")))
+
 
 # --------------------------------------------------------------------------------------------- error chains
 class TestErrorChains(Base):
@@ -2863,10 +3285,49 @@ class TestCommands(CarCase):
         self.patch(tune, "game_running", lambda: True)
         applied = []
         self.patch(tune, "apply", lambda *a: applied.append(a) or {"new_id": "ax_x", "applied": [], "notes": [], "package": "p.kspkg", "size": 1,
-                                                                        "installed": None, "backup": None})
+                                                                        "changes": NO_CHANGES, "installed": None, "backup": None})
         code, out, err = self.main("apply", "--no-install")
         self.assertEqual((code, err, [a[3] for a in applied]), (0, "", [False]))
         self.assertIn("package: p.kspkg (1 bytes)", out)
+
+    def test_apply_prints_the_changes_since_the_last_build_and_not_every_applied_setting(self):
+        res = {"new_id": "ax_x", "package": "p.kspkg", "size": 1, "installed": "m.kspkg", "backup": None, "notes": ["note: from build"],
+               "applied": [{"id": "limiter", "old": 7000, "new": 9000, "files": ["data/engine.carengine"]}, {"id": "m", "old": 900, "new": 1000, "files": ["f"]}],
+               "changes": {"since": "last build", "total": 2, "settings": [{"id": "limiter", "from": 8000, "to": 9000}],
+                           "extras": [{"kind": "turbo_kit", "from": None, "to": "A (single turbo, 1.0 bar)", "text": "Turbo kit: none -> A (single turbo, 1.0 bar)"}]}}
+        self.patch(tune, "apply", lambda *a: res)
+        code, out, err = self.main("apply")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines(), [
+            "car: ks_x, new id: ax_x", "2 change(s) since the last build (2 changed settings compared to the stock car in total)",
+            "  limiter: 8000 -> 9000", "  Turbo kit: none -> A (single turbo, 1.0 bar)", "note: from build", "package: p.kspkg (1 bytes)",
+            "installed: m.kspkg", "backup: no previous install"])
+
+    def test_apply_prints_the_first_build_and_the_empty_delta(self):
+        res = {"new_id": "ax_x", "package": "p.kspkg", "size": 1, "installed": None, "backup": None, "notes": [], "applied": [],
+               "changes": {"since": None, "total": 3, "settings": [{"id": "limiter", "from": 7000, "to": 9000}], "extras": []}}
+        self.patch(tune, "apply", lambda *a: res)
+        code, out, err = self.main("apply", "--no-install")
+        self.assertEqual(out.splitlines()[1:3], ["first build of this car: 3 changed settings compared to the stock car", "  limiter: 7000 -> 9000"])
+        res["changes"] = {"since": "last build", "total": 3, "settings": [], "extras": []}
+        code, out, err = self.main("apply", "--no-install")
+        self.assertEqual(out.splitlines()[1], "no change since the last build (3 changed settings compared to the stock car in total)")
+
+    def test_apply_end_to_end_prints_the_first_build_then_only_the_delta(self):
+        self.patch(clone_car, "build", lambda car_dir, new_id, out_dir, *a, **k: (self.fc.clone_into(out_dir, new_id), [])[1])
+        self.patch(kspkg, "cmd_pack", lambda indir, pkg: open(pkg, "wb").close())
+        self.patch(tune, "ensure_stock_loc", lambda work, game=None: "present")
+        tune.save_state(self.work, "ks_x", {"limiter": 8000})
+        code, out, err = self.main("apply", "--no-install")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[:3], ["car: ks_x, new id: ax_x", "first build of this car: 1 changed settings compared to the stock car",
+                                                "  limiter: 7000 -> 8000"])
+        tune.save_state(self.work, "ks_x", {"limiter": 8500})
+        code, out, err = self.main("apply", "--no-install")
+        self.assertEqual(out.splitlines()[1:3], ["1 change(s) since the last build (1 changed settings compared to the stock car in total)",
+                                                 "  limiter: 8000 -> 8500"])
+        self.assertNotIn("applied", out)
+        self.assertNotIn("[data/", out)
 
     def test_init_is_not_refused_while_the_game_runs(self):
         self.patch(tune, "game_running", lambda: True)
@@ -2982,7 +3443,7 @@ class TestCommands(CarCase):
     def stub_apply(self):
         applied = []
         self.patch(tune, "apply", lambda *a: applied.append(a) or {"new_id": a[2] or "ax_x", "applied": [], "notes": [], "package": "p.kspkg", "size": 1,
-                                                                    "installed": None, "backup": None})
+                                                                    "changes": NO_CHANGES, "installed": None, "backup": None})
         return applied
 
     def test_apply_with_a_tune_builds_that_tune(self):

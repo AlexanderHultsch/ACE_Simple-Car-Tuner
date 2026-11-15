@@ -324,7 +324,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
           <span id="turbo-count" class="gcount"></span>
         </button>
         <div id="turbo-body" class="garage-body" hidden>
-          <p class="garage-help">Adds the turbo setup of another installed car to this modded car. Apply copies the donor's turbo files and engine turbo fields into your car; the turbo settings then appear in the Turbo group of the table. A turbo multiplies the engine power on top of its curve, so lower the boost settings if the car becomes too strong. Unverified: whether the game accepts a turbo on a car that has none is not tested yet.</p>
+          <p class="garage-help">Adds the turbo setup of another installed car to this modded car. Apply copies the donor's turbo files and engine turbo fields into your car; the turbo settings then appear in the Turbo group of the table. A turbo multiplies the engine power on top of its curve, so lower the boost settings if the car becomes too strong. Unverified: whether the game accepts a turbo on a car that has none is not tested yet. In the list, a boost like 0.7 / 0.9 bar is one value per turbo (the max boost of each turbo file); '(reference)' is the engine's own reference value when the turbo files carry none, and no bar means the game data has no boost value for that car.</p>
           <div class="garage-row">
             <label for="turbo-donor">Turbo from</label>
             <select id="turbo-donor" disabled></select>
@@ -755,7 +755,30 @@ function addLine(box, text, cls) {
 }
 
 function summaryApply(box, res) {
-  if (res.applied.length) {
+  if (res.changes) {
+    const ch = res.changes;
+    const count = ch.settings.length + ch.extras.length;
+    if (ch.since === null) {
+      addLine(box, "First build of this car: " + ch.total + (ch.total === 1 ? " changed setting" : " changed settings") +
+        " compared to the stock car.");
+    } else if (count) {
+      addLine(box, count + (count === 1 ? " change" : " changes") + " since the last build.");
+    } else {
+      addLine(box, "No change since the last build.");
+    }
+    if (count) {
+      const details = el("details");
+      details.open = true;
+      details.appendChild(el("summary", "", "Changes (" + count + ")"));
+      const ul = el("ul");
+      for (const c of ch.settings) {
+        ul.appendChild(el("li", "", c.id + ": " + fmtVal("", c.from) + " -> " + fmtVal("", c.to)));
+      }
+      for (const e of ch.extras) ul.appendChild(el("li", "", e.text));
+      details.appendChild(ul);
+      box.appendChild(details);
+    }
+  } else if (res.applied.length) {
     const details = el("details");
     details.appendChild(el("summary", "", "Settings applied (" + res.applied.length + ")"));
     const ul = el("ul");
@@ -764,8 +787,6 @@ function summaryApply(box, res) {
     }
     details.appendChild(ul);
     box.appendChild(details);
-  } else {
-    addLine(box, "No setting was changed, the stock values were built.");
   }
   addLine(box, "Package: " + res.package + " (" + fmtBytes(res.size) + ")");
   addLine(box, "Installed to: " + (res.installed || "-"));
@@ -1866,8 +1887,14 @@ function boostText(list) {
   return list.map((b) => String(Math.round(b * 100) / 100)).join(" / ");
 }
 
+function turboBoostText(entry) {
+  if (entry.boost.length) return boostText(entry.boost) + " bar";
+  return entry.boost_ref ? "~" + boostText([entry.boost_ref]) + " bar (reference)" : "";
+}
+
 function turboOptionText(entry) {
-  return entry.label + " - " + entry.kind + (entry.boost.length ? ", " + boostText(entry.boost) + " bar" : "");
+  const boost = turboBoostText(entry);
+  return entry.label + " - " + entry.kind + (boost ? ", " + boost : "");
 }
 
 function turboSummary() {
@@ -1886,7 +1913,7 @@ function turboPickedText() {
   const entry = turbo.picked;
   if (!entry) return turbo.donor + " is not available any more. Choose another donor or no turbo kit.";
   const count = entry.count <= 2 ? " (" + entry.count + (entry.count === 1 ? " turbo)" : " turbos)") : "";
-  const boost = entry.boost.length ? ", boost " + boostText(entry.boost) + " bar" : "";
+  const boost = turboBoostText(entry) ? ", boost " + turboBoostText(entry) : "";
   return "Chosen: " + entry.kind + count + boost + ", from " + entry.label;
 }
 

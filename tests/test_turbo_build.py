@@ -945,7 +945,7 @@ class TestApplyWithAKit(Apply):
         self.with_kit("ks_a")
         state = self.state()
         state[tune.TYRE_KEY] = ["stock:x|y"]
-        with mock.patch.object(tune, "garage_plan", return_value={"garage": True}) as plan, \
+        with mock.patch.object(tune, "garage_plan", return_value={"garage": True, "entries": [{"key": "stock:x|y"}]}) as plan, \
                 mock.patch.object(tune, "write_garage", return_value=["note: garage"]) as write:
             res = self.apply(state)
         self.assertEqual(res["notes"][-1], "note: garage")
@@ -954,9 +954,40 @@ class TestApplyWithAKit(Apply):
         self.assertEqual(write.call_args[0][0], os.path.join(self.work, "ks_x", "kit", "ks_a"))
 
 
+class TestApplyChanges(Apply):
+    def test_the_kit_is_a_change_of_the_build_and_a_later_build_reports_what_differs(self):
+        self.with_kit("ks_b")
+        first = self.apply()
+        twin = tune.list_turbo_donors(self.work)
+        label_b = next(d["label"] for d in twin if d["car"] == "ks_b")
+        label_a = next(d["label"] for d in twin if d["car"] == "ks_a")
+        self.assertEqual(first["changes"]["extras"], [{"kind": "turbo_kit", "from": None, "to": "%s (twin turbo, 1.0/1.2 bar)" % label_b,
+                                                       "text": "Turbo kit: none -> %s (twin turbo, 1.0/1.2 bar)" % label_b}])
+        with open(tune.snapshot_path(self.work, "ks_x", "ax_x"), encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["kit"], {"donor": "ks_b", "label": label_b, "kind": "twin turbo", "boost": [1.0, 1.2]})
+        self.assertEqual(self.apply()["changes"]["extras"], [])
+        self.with_kit("ks_a")
+        second = self.apply()
+        self.assertEqual([e["text"] for e in second["changes"]["extras"]],
+                         ["Turbo kit: %s (twin turbo, 1.0/1.2 bar) -> %s (single turbo, 0.8 bar)" % (label_b, label_a)])
+        tune.reset_turbo(self.work, "ks_x")
+        third = self.apply()
+        self.assertEqual([e["text"] for e in third["changes"]["extras"]], ["Turbo kit: %s (single turbo, 0.8 bar) -> none" % label_a])
+        self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax_x")["kit"])
+
+    def test_the_package_inputs_do_not_depend_on_the_snapshot(self):
+        self.with_kit("ks_a")
+        first = self.apply({KEY: {"donor": "ks_a"}, "limiter": 8000})
+        before = (self.tree(first), self.packed[-1], self.built(first, "data/engine.carengine"), first["notes"], first["applied"])
+        os.remove(tune.snapshot_path(self.work, "ks_x", "ax_x"))
+        again = self.apply()
+        self.assertEqual((self.tree(again), self.packed[-1], self.built(again, "data/engine.carengine"), again["notes"], again["applied"]), before)
+        self.assertEqual(again["changes"]["since"], None)
+
+
 class TestApplyWithoutAKit(Apply):
     def snapshot(self, res):
-        return {"result": {k: v for k, v in res.items()}, "tree": sha_tree(res["build_dir"]), "calls": list(self.calls)}
+        return {"result": {k: v for k, v in res.items() if k != "changes"}, "tree": sha_tree(res["build_dir"]), "calls": list(self.calls)}
 
     def test_a_car_without_the_key_never_touches_a_kit(self):
         self.patch(tune, "kit_root", lambda *a: self.fail("kit_root"))

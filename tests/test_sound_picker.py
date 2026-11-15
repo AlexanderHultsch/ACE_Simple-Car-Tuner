@@ -587,6 +587,28 @@ class TestApplyWithoutAChange(ApplySounds):
         self.assertEqual(tune.write_sounds(os.path.join(self.work, "nowhere"), "ax_x", []), [])
 
 
+class TestApplyChanges(ApplySounds):
+    def test_a_sound_choice_is_a_change_of_the_build_and_a_later_build_reports_what_differs(self):
+        first = self.apply({KEY: {"turbo": T_RX7}})
+        self.assertEqual(first["changes"], {"since": None, "settings": [], "total": 0, "extras": [
+            {"kind": "sound", "slot": "turbo", "from": None, "to": T_RX7, "text": "Sound turbo: own sound -> turbo_rx7"}]})
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["sounds"], {"turbo": T_RX7})
+        self.assertEqual(self.apply({KEY: {"turbo": T_RX7}})["changes"]["extras"], [])
+        second = self.apply({KEY: {"turbo": T_RX7, "backfire": B_CLASSIC}})
+        self.assertEqual(second["changes"]["extras"], [{"kind": "sound", "slot": "backfire", "from": None, "to": B_CLASSIC,
+                                                        "text": "Sound backfire: own sound -> backfire_classic#8"}])
+        third = self.apply({KEY: {"backfire": B_B}})
+        self.assertEqual([e["text"] for e in third["changes"]["extras"]], ["Sound turbo: turbo_rx7 -> own sound", "Sound backfire: backfire_classic#8 -> backfire_b"])
+        self.assertEqual(self.apply({})["changes"]["extras"][0]["text"], "Sound backfire: backfire_b -> own sound")
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["sounds"], {})
+
+    def test_a_choice_equal_to_the_own_sound_is_no_change(self):
+        self.apply({KEY: {"turbo": T_RX7}})
+        res = self.apply({KEY: {"turbo": T_NONE}})
+        self.assertEqual(res["changes"]["extras"], [{"kind": "sound", "slot": "turbo", "from": T_RX7, "to": None, "text": "Sound turbo: turbo_rx7 -> own sound"}])
+        self.assertEqual(self.apply({KEY: {"turbo": T_NONE}})["changes"]["extras"], [])
+
+
 class TestApplyChoice(ApplySounds):
     def test_turbo_only(self):
         res = self.apply({KEY: {"turbo": T_RX7}})
@@ -788,8 +810,9 @@ class TestApplyCommand(ApplySounds):
         with mock.patch.object(tune, "game_running", lambda: False):
             code, out, err = self.run_main("apply", "--no-install")
         self.assertEqual((code, err), (0, ""))
-        self.assertIn("applied 0 setting(s)\nnote: from build\nnote: sound turbo: %s -> %s\nnote: sound backfire: %s -> %s\n"
-                      % (T_NONE, T_RX7, B_A, B_CLASSIC), out)
+        self.assertIn("first build of this car: 0 changed settings compared to the stock car\n  Sound turbo: own sound -> turbo_rx7\n"
+                      "  Sound backfire: own sound -> backfire_classic#8\n"
+                      "note: from build\nnote: sound turbo: %s -> %s\nnote: sound backfire: %s -> %s\n" % (T_NONE, T_RX7, B_A, B_CLASSIC), out)
         self.assertNotIn("_sounds", out)
 
     def test_a_vanished_sound_is_an_error_line_with_exit_1_and_nothing_is_built(self):

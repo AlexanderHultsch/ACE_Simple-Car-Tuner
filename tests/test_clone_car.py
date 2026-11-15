@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import sys
 import unittest
 from unittest import mock
 
@@ -411,7 +412,7 @@ class TestBuild(Base):
         self.patch(kspkg, "cmd_pack", pack)
 
     def build(self, **kw):
-        args = dict(name="Car X_MY", year=1999, brand="Brand", variant=None, stock_loc=None, properties=None, pack=False)
+        args = dict(name="Car X MY", year=1999, brand="Brand", variant=None, stock_loc=None, properties=None, pack=False)
         args.update(kw)
         return self.capture(clone_car.build, str(self.src), "ax_x", str(self.out), args.pop("name"), args.pop("year"), args.pop("brand"), **args)
 
@@ -420,12 +421,21 @@ class TestBuild(Base):
         root = self.out / "content" / "cars" / "ax_x"
         self.assertEqual(self.read(root / "data" / "ax_x.car"), b"\x0a\x04ax_x data")
         self.assertTrue((root / "AX_X_thumb.png").is_file())
-        self.assertEqual(json.loads(self.read(root / "ax_x.moddedcarcontent")[6:])["display_name"], "Car X_MY")
+        self.assertEqual(json.loads(self.read(root / "ax_x.moddedcarcontent")[6:])["display_name"], "Car X MY")
         self.assertIn("copied 2 files to %s" % root, out)
         self.assertIn("changed by replacement: 1 files, 1 replacements", out)
         self.assertIn("self-check (b) ax_x.moddedcarcontent decodes to the written values: ok", out)
         self.assertEqual(notes, ["note: no stock localization given, no en.cars.loc written"])
         self.assertEqual(self.packed, [])
+
+    def test_the_command_line_names_the_car_with_the_new_id_a_space_and_MY_unless_name_is_given(self):
+        for extra, shown in (([], "ax_x MY"), (["--name", "Car X Supercharged"], "Car X Supercharged")):
+            with self.subTest(extra):
+                with mock.patch.object(sys, "argv", ["clone_car.py", "build", str(self.src), "ax_x", str(self.out), "--no-pack"] + extra):
+                    self.capture(clone_car.main)
+                root = self.out / "content" / "cars" / "ax_x"
+                self.assertEqual(json.loads(self.read(root / "ax_x.moddedcarcontent")[6:])["display_name"], shown)
+                shutil.rmtree(self.out)
 
     def test_build_keeps_the_audio_references_and_prints_how_many(self):
         self.write(self.src / "ks_x.actor", b"\x2c" + b"event:/evo_cars/ks_x/engine_int event:/evo_cars/ks_x/engine_ext content\\cars\\ks_x\\a")

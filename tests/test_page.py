@@ -429,6 +429,30 @@ class TestTexts(unittest.TestCase):
         self.assertIn('" characters: lower case letters, digits, underscore"', body)
 
 
+    def test_the_header_label_and_the_stock_name_end_in_a_space_that_is_not_collapsed(self):
+        body = function_body("buildHeaderRow")
+        self.assertIn('el("span", "label", "Name in the game\'s car list: ")', body)
+        self.assertIn('el("span", "stockname", carName() + " ")', body)
+        self.assertRegex(STYLE, r"\.namerow \.label \{[^}]*white-space: pre;")
+        self.assertRegex(STYLE, r"\.stockname \{[^}]*white-space: pre;")
+
+    def test_the_dialog_says_the_game_shows_the_stock_name_a_space_and_the_suffix(self):
+        panel = re.search(r'<section id="dialog".*?</section>', MARKUP, re.S).group(0)
+        self.assertIn('<p class="hint">The game shows the stock car\'s name, a space and the name suffix.</p>', panel)
+        self.assertLess(panel.index('id="dialog-suffix"'), panel.index("a space and the name suffix"))
+
+    def test_the_page_never_mentions_the_old_default_and_never_joins_a_name_and_a_suffix_itself(self):
+        self.assertNotIn("_MY", HTML)
+        self.assertEqual(re.findall(r"underscore", HTML), ["underscore"])
+        self.assertIn("underscore", function_body("openDialog"))
+        self.assertNotIn("name_suffix", CODE)
+
+    def test_the_suffix_field_is_trimmed_like_every_other_text_field(self):
+        body = function_body("commit")
+        self.assertIn("const text = r.field.value.trim();", body)
+        self.assertNotIn("name_suffix", body)
+
+
 class TestAccessibility(unittest.TestCase):
     def test_the_controls_have_accessible_names(self):
         self.assertIn('<select id="car-select" aria-label="Car"', MARKUP)

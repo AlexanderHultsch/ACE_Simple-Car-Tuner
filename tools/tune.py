@@ -44,13 +44,13 @@ Modded cars (tuned copies of a stock car; library functions list_tunes, list_mod
 the first one is the default tune <new_id> with the files above; every further one has its own tuned-car id (same length
 as the stock id) and lives in <work>/<car>/tunes/<id>/{tune_state.json, meta.json = {"stock": <car>}}; the unsaved working
 state of a stock car is <work>/<car>/draft_state.json (state functions take tune=None for the default tune, DRAFT or an id).
-Every modded car of a stock car has its own name suffix; the suffix of a copy is counted up (_MY -> _MY2 -> _MY3).
+Every modded car of a stock car has its own name suffix; the suffix of a copy is counted up (MY -> MY 2 -> MY 3).
 
 cars:    table of every game car sorted by display name: id, display name (stock_info.json when extracted, else the
           game's name), extracted yes/no, tested yes/no (listed in tuner/cars.json), new id, installed yes/no
           (<new_id>.kspkg in the mods folder), size of the extracted stock car. --tested lists only the tested cars.
           Without the cache and the game package (--game, default the Steam install) only the tested cars are
-          listed, with a note. --modded lists the modded cars instead: id, stock car, label (stock name plus suffix),
+          listed, with a note. --modded lists the modded cars instead: id, stock car, label (stock name, a space and the suffix),
           suffix, installed yes/no (<id>.kspkg in the mods folder), built yes/no (build/<id>/<id>.kspkg).
 init:    extracts the stock car from the game package into <work>/<car>/base (skipped when already there), the game's
           stock en.cars.loc into <work>/stock_loc once, and writes <work>/<car>/stock_info.json (car id, display name,
@@ -204,9 +204,11 @@ be optional) and nothing when it is false; a target whose field is absent in the
 other settings, so a flag wins over a value on the same field. set accepts true/false, yes/no, 1/0, on/off for bool
 (case-insensitive). An enum setting with "choice_values" (choice -> text) stores text in its field: the default is the
 choice whose text equals the field (case-insensitive, slash and backslash alike; any other text makes the setting not
-applicable), apply writes the text of the chosen choice. meta settings: variant_name, applicable only when the stock car has a variant name, and name_suffix (default _MY, 1 to 30 characters without
-control characters, not trimmed): apply names the tuned car "<stock display name><name_suffix>" (stock_info.json, else
-the car's mechanical preset), so the default lists it next to the stock car. "ui": "header" on a setting is only a hint
+applicable), apply writes the text of the chosen choice. meta settings: variant_name, applicable only when the stock car has a variant name, and name_suffix (default MY, trimmed, runs of inner spaces
+collapsed to one, then 1 to 30 characters without control characters): apply names the tuned car "<stock display name>
+<name_suffix>" (stock display name from stock_info.json, else the car's mechanical preset, one space, the suffix), so the
+default lists it next to the stock car. A suffix saved by the old version (MY or MY and a number, behind an
+underscore) reads as MY, MY 2, ... (legacy_suffix); any other saved value is kept as it is. "ui": "header" on a setting is only a hint
 for the web page (it shows the setting in its header, not in the table). "advanced": true is a hint for the web page too:
 it hides the setting unless the user ticks "show advanced settings" or the setting is changed; it has no effect on apply.
 
@@ -249,6 +251,7 @@ STOCK_PROPERTIES = ("property_1", "property_2", "property_3")
 # apply fallback for the default car when stock_info.json is missing and the game is not reachable: the values of the BMW M3 E46 CSL
 CLONE_YEAR, CLONE_BRAND = 2003, "BMW"
 NAME_SUFFIX_MAX = 30
+LEGACY_SUFFIX = re.compile(r"_MY(\d*)")
 GROUP_DESCRIPTION_MAX = 360
 KINDS = ("value", "curve_scale", "meta", "flag")
 VALUE_TYPES = ("int", "float", "string", "enum", "bool")
@@ -604,6 +607,8 @@ def coerce(s, v):
         if not math.isfinite(v):
             raise ValueError("%s expects a finite number, got %r" % (s["id"], v))
     elif s.get("handler") == "name_suffix":
+        if isinstance(v, str):
+            v = re.sub(" {2,}", " ", v.strip())
         if not isinstance(v, str) or not 1 <= len(v) <= NAME_SUFFIX_MAX or re.search(r"[\x00-\x1f]", v):
             raise ValueError("%s expects 1 to %d characters without control characters" % (s["id"], NAME_SUFFIX_MAX))
     else:
@@ -1341,7 +1346,7 @@ def effective_rows(work, car_id, catalogue=None, hidden=False, tune=None):
     rows = resolve_defaults(work, car_id, cat, hidden=hidden, tune=new_id_for(car_id) if tune is None else tune)
     for row in rows:
         s = find_setting(cat, row["id"])
-        row["value"] = coerce(s, state[s["id"]]) if s["id"] in state else row["default"]
+        row["value"] = saved_value(s, state[s["id"]]) if s["id"] in state else row["default"]
         row["changed"] = s["id"] in state and not same(s, row["value"], row["default"])
     return rows
 
@@ -1471,12 +1476,12 @@ def build_partial(work, car_id, new_id, out_dir, plan, cat, game):
     with contextlib.suppress(ValueError, OSError):
         ensure_stock_loc(work, game)
     stock_loc = stock_loc_path(work) if os.path.isfile(stock_loc_path(work)) else None
-    car_name = (info.get("display_name") or preset_display_name(car_root_of(root, car_id))) + meta["name_suffix"]
+    name = car_name(info.get("display_name") or preset_display_name(car_root_of(root, car_id)), meta["name_suffix"])
     log = io.StringIO()
     try:
         # kspkg and clone_car print their progress: keep it out of this command's output
         with _stdout_lock, contextlib.redirect_stdout(log):
-            notes = clone_car.build(car_root_of(root, car_id), new_id, part, car_name,
+            notes = clone_car.build(car_root_of(root, car_id), new_id, part, name,
                                     info.get("year", CLONE_YEAR), info.get("brand", CLONE_BRAND),
                                     meta["variant_name"], stock_loc, {k: info.get(k) for k in STOCK_PROPERTIES},
                                     pack=False)
@@ -1633,8 +1638,24 @@ def name_suffix_setting(catalogue=None):
     raise ValueError("the catalogue has no name_suffix setting")
 
 
+def car_name(stock_name, suffix):
+    """The name of a modded car in the game: the stock display name, one space, the (already trimmed) name suffix."""
+    return stock_name + " " + suffix
+
+
+def legacy_suffix(v):
+    """A name suffix saved by the old version (underscore, MY, optional number) as it reads now: MY, MY <n>. Any other value is returned as it is."""
+    m = LEGACY_SUFFIX.fullmatch(v) if isinstance(v, str) else None
+    return v if m is None else "MY" + (" " + m.group(1) if m.group(1) else "")
+
+
+def saved_value(s, v):
+    """The value of setting s as the saved state v reads: legacy name suffixes converted, then checked and normalised by coerce."""
+    return coerce(s, legacy_suffix(v) if s.get("handler") == "name_suffix" else v)
+
+
 def state_suffix(state, s):
-    return coerce(s, state[s["id"]]) if s["id"] in state else s["default"]
+    return saved_value(s, state[s["id"]]) if s["id"] in state else s["default"]
 
 
 def is_tune_id(work, car_id, name):
@@ -1723,17 +1744,18 @@ def suffix_taken(work, car_id, suffix, exclude=None):
 
 
 def free_suffix(work, car_id, wanted, exclude=None):
-    """wanted when no other tune of the stock car uses it, else the number at its end counted up (_MY -> _MY2 -> _MY3,
-    _T1 -> _T2; leading zeros keep their width), the stem cut to stay within the length limit of the setting."""
-    coerce(name_suffix_setting(), wanted)
-    stem, digits = re.fullmatch(r"(.*?)(\d*)", wanted).groups()
+    """wanted when no other tune of the stock car uses it, else the number after a space at its end counted up (MY -> MY 2 ->
+    MY 3, T 1 -> T 2; leading zeros keep their width; a number without a space is part of the text), the stem cut to stay
+    within the length limit of the setting."""
+    wanted = coerce(name_suffix_setting(), wanted)
+    stem, digits = re.fullmatch(r"(.*?)(?: (\d+))?", wanted).groups()
     candidate, n = wanted, int(digits or 1)
     while suffix_taken(work, car_id, candidate, exclude):
         n += 1
-        number = str(n).zfill(len(digits))
-        if len(number) > NAME_SUFFIX_MAX:
+        number = str(n).zfill(len(digits or ""))
+        if len(number) + 2 > NAME_SUFFIX_MAX:
             raise ValueError("no free name suffix left for %s" % wanted)
-        candidate = stem[:NAME_SUFFIX_MAX - len(number)] + number
+        candidate = stem[:NAME_SUFFIX_MAX - len(number) - 1].rstrip() + " " + number
     return candidate
 
 
@@ -1761,7 +1783,7 @@ def duplicate_tune(work, car_id, src, new_id=None, suffix=None, mods_dir=None):
     if suffix is None:
         suffix = free_suffix(work, car_id, state_suffix(state, s))
     else:
-        coerce(s, suffix)
+        suffix = coerce(s, suffix)
         owner = suffix_owner(work, car_id, suffix)
         if owner:
             raise ValueError("name suffix already used by %s" % owner)
@@ -1779,7 +1801,7 @@ def new_tune_from_draft(work, car_id, suffix=None, new_id=None, mods_dir=None):
 
 
 def list_modded(work, mods_dir=None):
-    """Every modded car of every stock car with a work folder: {id, stock, label (stock display name + suffix), name_suffix,
+    """Every modded car of every stock car with a work folder: {id, stock, label (car_name: stock display name, space, suffix), name_suffix,
     default, installed (<id>.kspkg in the mods folder), built (build/<id>/<id>.kspkg)}, sorted by label. Stock cars without
     tunes give nothing; a damaged stock_info.json falls back to the cached car index, the tested label or the car id."""
     s = name_suffix_setting()
@@ -1795,7 +1817,7 @@ def list_modded(work, mods_dir=None):
             info = None
         stock_name = info["display_name"] if info else names.get(car_id) or labels.get(car_id) or car_id
         for t in tunes:
-            rows.append({"id": t["id"], "stock": car_id, "label": stock_name + t["name_suffix"], "name_suffix": t["name_suffix"],
+            rows.append({"id": t["id"], "stock": car_id, "label": car_name(stock_name, t["name_suffix"]), "name_suffix": t["name_suffix"],
                          "default": t["default"], "installed": os.path.isfile(os.path.join(mods, t["id"] + ".kspkg")),
                          "built": os.path.isfile(kspkg.long_path(os.path.join(build_dir(work, car_id), t["id"], t["id"] + ".kspkg")))})
     return sorted(rows, key=lambda r: (r["label"].lower(), r["id"]))

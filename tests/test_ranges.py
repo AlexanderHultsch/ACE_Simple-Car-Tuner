@@ -126,7 +126,7 @@ class TestComputeRanges(Fleet):
             mini_setting("flag", kind="flag", type="bool", value=1, targets=[("@car", "engine.flag")]),
             mini_setting("label", type="string", targets=[("@car", "engine.label")]),
             mini_setting("mode", type="enum", choices=["x", "y"], targets=[("@car", "engine.mode")]),
-            mini_setting("name_suffix", kind="meta", type="string", default="_MY", handler="name_suffix"))
+            mini_setting("name_suffix", kind="meta", type="string", default="MY", handler="name_suffix"))
         rows = {r["id"]: r for r in tune.resolve_defaults(self.work, "ks_a", cat, "", hidden=True)}
         self.assertTrue(all(rows[i]["applicable"] for i in ("on", "flag", "label", "mode", "name_suffix")), {i: r["reason"] for i, r in rows.items()})
         self.assertEqual(sorted(self.compute(catalogue=cat)["ranges"]), ["gain", "limiter"])

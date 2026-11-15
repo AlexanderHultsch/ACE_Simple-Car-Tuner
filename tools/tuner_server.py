@@ -413,7 +413,7 @@ def api_reset_all(car, body):
             suffix_id = tune.name_suffix_setting()["id"]
             kept = tune.load_state(work, car, tune_id)
             if suffix_id in kept:
-                state[suffix_id] = kept[suffix_id]
+                state[suffix_id] = tune.legacy_suffix(kept[suffix_id])
         tune.save_state(work, car, state, tune_id)
     return {"ok": True}
 

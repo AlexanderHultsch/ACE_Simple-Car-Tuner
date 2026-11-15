@@ -33,7 +33,7 @@ NO_TUNE_ERROR = "tyre settings are changed but the stock starting tyre of the ca
 
 
 def tyre_cat():
-    meta = [mini_setting("name_suffix", kind="meta", type="string", default="_MY", handler="name_suffix"),
+    meta = [mini_setting("name_suffix", kind="meta", type="string", default="MY", handler="name_suffix"),
             mini_setting("variant_name", kind="meta", type="string", default_template="{stock_variant_name}", handler="variant_name")]
     return mini_catalogue(
         *meta,
@@ -177,7 +177,7 @@ class TestStateKey(World):
     def test_new_tune_from_draft_copies_the_key_and_the_draft_keeps_it(self):
         tune.save_state(self.work, "ks_x", {"limiter": 9000, tune.TYRE_KEY: ["own:soft"]}, tune.DRAFT)
         res = tune.new_tune_from_draft(self.work, "ks_x")
-        self.assertEqual(self.state(res["id"]), {"limiter": 9000, tune.TYRE_KEY: ["own:soft"], "name_suffix": "_MY"})
+        self.assertEqual(self.state(res["id"]), {"limiter": 9000, tune.TYRE_KEY: ["own:soft"], "name_suffix": "MY"})
         self.assertEqual(self.state(tune.DRAFT), {"limiter": 9000, tune.TYRE_KEY: ["own:soft"]})
         tune.save_state(self.work, "ks_x", {}, tune.DRAFT)
         self.assertEqual(self.state(tune.DRAFT), {})

@@ -68,7 +68,7 @@ def sha_tree(root):
 def kit_cat():
     boost = {"group": "Turbo", "min": 0, "max": 3, "hide_if_absent": True}
     return mini_catalogue(
-        mini_setting("name_suffix", kind="meta", type="string", default="_MY", handler="name_suffix"),
+        mini_setting("name_suffix", kind="meta", type="string", default="MY", handler="name_suffix"),
         mini_setting("variant_name", kind="meta", type="string", default_template="{stock_variant_name}", handler="variant_name"),
         mini_setting("limiter", type="int", targets=[("@engine", "limiter")]),
         mini_setting("turbo_boost_1", targets=[("@engine", "turbos[0].max_boost"), ("@turbo[0]", "max_boost"),

@@ -217,6 +217,14 @@ class TestCatalogueData(unittest.TestCase):
         s = BY_ID["name_suffix"]
         self.assertEqual(tune.coerce(s, s["default"]), s["default"])
 
+    def test_name_suffix_default_is_MY_without_an_underscore_and_the_description_says_a_space_separates_it(self):
+        s = BY_ID["name_suffix"]
+        self.assertEqual(s["default"], "MY")
+        self.assertNotIn("_", s["default"])
+        self.assertIn("separated by a space", s["description"])
+        self.assertIn("The default MY sorts the tuned car next to the stock car.", s["description"])
+        self.assertNotIn("_MY", s["description"])
+
     def test_optional_is_a_bool_on_targets_only(self):
         for s in SETTINGS:
             with self.subTest(s["id"]):

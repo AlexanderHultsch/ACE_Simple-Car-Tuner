@@ -61,7 +61,7 @@ body {
   border-radius: 6px;
 }
 .namerow.changed { background: var(--color-accent-tint); padding: 4px 8px; }
-.namerow .label { font-size: 13px; color: var(--color-text-muted); }
+.namerow .label { font-size: 13px; color: var(--color-text-muted); white-space: pre; }
 .namefield { display: inline-flex; align-items: center; gap: 2px; }
 .stockname { font-weight: 600; white-space: pre; }
 .namefield input {
@@ -267,6 +267,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
         <label for="dialog-suffix">Name suffix</label>
         <input id="dialog-suffix" type="text" autocomplete="off" spellcheck="false">
       </div>
+      <p class="hint">The game shows the stock car's name, a space and the name suffix.</p>
       <p id="dialog-hint" class="hint"></p>
       <p id="dialog-error" class="msg err" role="alert" hidden></p>
       <div class="actions">
@@ -912,8 +913,7 @@ function commit(r) {
     queue = queue.then(() => r.save(r, on));
     return;
   }
-  // the suffix keeps its spaces (the server does not trim it, tune.py "not trimmed")
-  const text = r.data.id === "name_suffix" ? r.field.value : r.field.value.trim();
+  const text = r.field.value.trim();
   if (text === r.shown) return;
   setMsg(r, "", "");
   queue = queue.then(() => r.save(r, text));
@@ -994,9 +994,9 @@ function newRow(data, target) {
 function buildHeaderRow(data, target) {
   const r = newRow(data, target);
   r.tr = el("div", "namerow");
-  r.tr.appendChild(el("span", "label", "Name in the game's car list:"));
+  r.tr.appendChild(el("span", "label", "Name in the game's car list: "));
   const joined = el("span", "namefield");
-  joined.appendChild(el("span", "stockname", carName()));
+  joined.appendChild(el("span", "stockname", carName() + " "));
   r.field = buildField(r);
   r.field.title = data.description;
   joined.appendChild(r.field);

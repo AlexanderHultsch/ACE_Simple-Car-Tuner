@@ -56,7 +56,7 @@ def actor(*entries):
 
 def sound_cat():
     return mini_catalogue(
-        mini_setting("name_suffix", kind="meta", type="string", default="_MY", handler="name_suffix"),
+        mini_setting("name_suffix", kind="meta", type="string", default="MY", handler="name_suffix"),
         mini_setting("variant_name", kind="meta", type="string", default_template="{stock_variant_name}", handler="variant_name"),
         mini_setting("limiter", type="int", targets=[("@engine", "limiter")]))
 
@@ -191,7 +191,7 @@ class TestStateKey(World):
     def test_duplicate_tune_copies_the_key_with_the_rest_of_the_state(self):
         tune.save_state(self.work, "ks_x", {"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_B}})
         res = tune.duplicate_tune(self.work, "ks_x", None)
-        self.assertEqual(self.state(res["id"]), {"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_B}, "name_suffix": "_MY2"})
+        self.assertEqual(self.state(res["id"]), {"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_B}, "name_suffix": "MY 2"})
         copied = self.state(res["id"])
         copied[KEY]["turbo"] = T_NONE
         tune.save_state(self.work, "ks_x", copied, res["id"])
@@ -205,7 +205,7 @@ class TestStateKey(World):
     def test_new_tune_from_draft_copies_the_key_and_the_draft_keeps_it(self):
         tune.save_state(self.work, "ks_x", {"limiter": 9000, KEY: {"turbo": T_RX7}}, tune.DRAFT)
         res = tune.new_tune_from_draft(self.work, "ks_x")
-        self.assertEqual(self.state(res["id"]), {"limiter": 9000, KEY: {"turbo": T_RX7}, "name_suffix": "_MY"})
+        self.assertEqual(self.state(res["id"]), {"limiter": 9000, KEY: {"turbo": T_RX7}, "name_suffix": "MY"})
         self.assertEqual(self.state(tune.DRAFT), {"limiter": 9000, KEY: {"turbo": T_RX7}})
         tune.save_state(self.work, "ks_x", {}, tune.DRAFT)
         self.assertEqual(self.state(res["id"])[KEY], {"turbo": T_RX7})

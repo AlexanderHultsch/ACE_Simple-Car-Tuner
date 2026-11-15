@@ -31,7 +31,7 @@ def limiter(**kw):
 
 
 def suffix():
-    return mini_setting("name_suffix", kind="meta", type="string", default="_MY", handler="name_suffix")
+    return mini_setting("name_suffix", kind="meta", type="string", default="MY", handler="name_suffix")
 
 
 def variant():
@@ -322,14 +322,30 @@ class TestCoerce(unittest.TestCase):
         with self.assertRaises(ValueError):
             tune.coerce(mini_setting("e", type="enum", choices=["a"]), "A")
 
-    def test_name_suffix_is_one_to_thirty_characters_and_not_trimmed(self):
+    def test_name_suffix_is_trimmed_and_one_to_thirty_characters(self):
         s = suffix()
-        self.assertEqual(tune.coerce(s, " _X "), " _X ")
+        self.assertEqual(tune.coerce(s, " _X "), "_X")
+        self.assertEqual(tune.coerce(s, "\t _X\n"), "_X")
         self.assertEqual(tune.coerce(s, "x" * tune.NAME_SUFFIX_MAX), "x" * 30)
-        for v in ("", "x" * 31, "a\tb", "\x1f", 3, None):
+        self.assertEqual(tune.coerce(s, "  " + "x" * 30 + "  "), "x" * 30)
+        self.assertEqual(tune.coerce(s, "x"), "x")
+        for v in ("", "   ", "x" * 31, " " + "x" * 31, "a\tb", "a\nb", "\x1f", "a\x00", 3, None):
             with self.subTest(repr(v)):
                 with self.assertRaisesRegex(ValueError, "name_suffix expects 1 to 30 characters"):
                     tune.coerce(s, v)
+
+    def test_name_suffix_keeps_single_inner_spaces_and_collapses_runs_of_them(self):
+        s = suffix()
+        self.assertEqual(tune.coerce(s, "MY 2"), "MY 2")
+        self.assertEqual(tune.coerce(s, "Super   charged"), "Super charged")
+        self.assertEqual(tune.coerce(s, " a  b   c "), "a b c")
+        self.assertEqual(tune.coerce(s, "x" * 20 + " " * 15 + "y" * 9), "x" * 20 + " " + "y" * 9)
+
+    def test_car_name_is_the_stock_name_a_space_and_the_suffix(self):
+        self.assertEqual(tune.car_name("BMW M3 E46 CSL", "MY"), "BMW M3 E46 CSL MY")
+        self.assertEqual(tune.car_name("BMW M3 E46 CSL", "Supercharged"), "BMW M3 E46 CSL Supercharged")
+        self.assertEqual(tune.car_name("BMW M3 E46 CSL", "MY 2"), "BMW M3 E46 CSL MY 2")
+        self.assertEqual(tune.car_name("Car X", "_Drift"), "Car X _Drift")
 
     def test_to_f32_rounds_to_single_precision_and_keeps_the_short_text(self):
         v = tune.to_f32(1.1)
@@ -376,6 +392,27 @@ class TestCoerce(unittest.TestCase):
         self.assertEqual(tune.range_warning(mini_setting("a", min=1.5), 1.0), "a=1.0 is outside the suggested range 1.5..-")
         self.assertIsNone(tune.range_warning(mini_setting("a", min=1.5), 99.0))
         self.assertIsNone(tune.range_warning(mini_setting("t", type="string", min=1), "x"))
+
+
+class TestLegacySuffix(unittest.TestCase):
+    def test_the_old_default_and_its_counted_forms_are_converted(self):
+        for old, new in (("_MY", "MY"), ("_MY2", "MY 2"), ("_MY3", "MY 3"), ("_MY12", "MY 12"), ("_MY007", "MY 007")):
+            with self.subTest(old):
+                self.assertEqual(tune.legacy_suffix(old), new)
+
+    def test_every_other_value_is_left_as_it_is(self):
+        for v in ("MY", "MY 2", "MY2", "_Drift", "_MYX", "_MY2x", "_MY 2", "_my", "x_MY", " _MY", "_MY ", "_MY\n", "", None, 5, ["_MY"]):
+            with self.subTest(repr(v)):
+                self.assertEqual(tune.legacy_suffix(v), v)
+
+    def test_saved_value_converts_the_name_suffix_only(self):
+        s, other = suffix(), mini_setting("label", type="string")
+        self.assertEqual(tune.saved_value(s, "_MY3"), "MY 3")
+        self.assertEqual(tune.saved_value(s, "_Drift"), "_Drift")
+        self.assertEqual(tune.saved_value(s, "  _Z  q "), "_Z q")
+        self.assertEqual(tune.saved_value(other, "_MY"), "_MY")
+        with self.assertRaisesRegex(ValueError, "name_suffix expects 1 to 30 characters"):
+            tune.saved_value(s, "")
 
 
 # --------------------------------------------------------------------------------------------- json files and state
@@ -547,14 +584,23 @@ class TestStateFlow(CarCase):
 
     def test_effective_rows_use_state_value_and_mark_changes(self):
         cat = self.cat()
-        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "_MY"})
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "MY"})
         rows = {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", cat)}
         self.assertEqual((rows["limiter"]["value"], rows["limiter"]["default"], rows["limiter"]["changed"]), (8000, 7000, True))
-        self.assertEqual((rows["name_suffix"]["value"], rows["name_suffix"]["changed"]), ("_MY", False))
+        self.assertEqual((rows["name_suffix"]["value"], rows["name_suffix"]["changed"]), ("MY", False))
+
+    def test_effective_rows_read_a_legacy_name_suffix_converted_and_leave_the_file_alone(self):
+        cat = self.cat()
+        for saved, shown, changed in (("_MY", "MY", False), ("_MY2", "MY 2", True), ("_Drift", "_Drift", True), ("  My   Car ", "My Car", True)):
+            with self.subTest(saved):
+                tune.save_state(self.work, "ks_x", {"name_suffix": saved})
+                row = {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", cat)}["name_suffix"]
+                self.assertEqual((row["value"], row["changed"]), (shown, changed))
+                self.assertEqual(tune.load_state(self.work, "ks_x"), {"name_suffix": saved})
 
     def test_effective_rows_without_state_show_defaults_unchanged(self):
         rows = tune.effective_rows(self.work, "ks_x", self.cat())
-        self.assertEqual([(r["value"], r["changed"]) for r in rows], [(7000, False), ("_MY", False)])
+        self.assertEqual([(r["value"], r["changed"]) for r in rows], [(7000, False), ("MY", False)])
 
     def test_effective_rows_a_state_value_equal_to_the_default_is_not_a_change(self):
         cat = self.cat(mini_setting("f", targets=[("@engine", "limiter")]))
@@ -751,7 +797,7 @@ class TestResolveDefaults(CarCase):
     def test_meta_has_no_targets_and_its_default(self):
         self.stock_info()
         rows = self.rows(*metas())
-        self.assertEqual((rows["name_suffix"]["default"], rows["name_suffix"]["targets"], rows["name_suffix"]["applicable"]), ("_MY", [], True))
+        self.assertEqual((rows["name_suffix"]["default"], rows["name_suffix"]["targets"], rows["name_suffix"]["applicable"]), ("MY", [], True))
 
     def test_variant_name_default_is_the_stock_variant_text(self):
         self.stock_info(variant_name="GT Base")
@@ -1363,7 +1409,7 @@ class TestListTunes(TuneCase):
     def test_default_is_listed_for_its_build_folder_without_a_state(self):
         self.build("ks_alpha", "ax_alpha")
         self.assertEqual(tune.list_tunes(self.work, "ks_alpha"),
-                         [{"id": "ax_alpha", "stock": "ks_alpha", "default": True, "name_suffix": "_MY", "has_state": False}])
+                         [{"id": "ax_alpha", "stock": "ks_alpha", "default": True, "name_suffix": "MY", "has_state": False}])
 
     def test_an_empty_build_folder_of_another_tune_does_not_list_it(self):
         self.build("ks_alpha", "ax_alp01")
@@ -1377,7 +1423,7 @@ class TestListTunes(TuneCase):
         self.write(os.path.join(self.work, "ks_alpha", "tunes", "ax_alp04", "meta.json"), {"stock": "ks_alpha"})
         rows = tune.list_tunes(self.work, "ks_alpha")
         self.assertEqual([(r["id"], r["default"], r["name_suffix"], r["has_state"]) for r in rows],
-                         [("ax_alpha", True, "_D", True), ("ax_alp01", False, "_MY", True), ("ax_alp02", False, "_Z", True)])
+                         [("ax_alpha", True, "_D", True), ("ax_alp01", False, "MY", True), ("ax_alp02", False, "_Z", True)])
         self.assertEqual({r["stock"] for r in rows}, {"ks_alpha"})
 
     def test_stray_and_reserved_folders_are_ignored(self):
@@ -1501,46 +1547,62 @@ class TestTuneSuffix(TuneCase):
 
     def test_the_default_suffix_counts_when_the_state_has_none(self):
         tune.save_state(self.work, "ks_alpha", {}, "ax_alp02")
-        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "_MY"))
+        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "MY"))
 
     def test_free_suffix_returns_a_free_one_unchanged(self):
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_NEW"), "_NEW")
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_C"), "_C")
 
     def test_free_suffix_counts_up_from_2(self):
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_A"), "_A2")
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A2"}, "ax_alp02")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_A"), "_A3")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_A"), "_A 2")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A 2"}, "ax_alp02")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_A"), "_A 3")
+
+    def test_free_suffix_treats_a_number_without_a_space_as_part_of_the_text(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY2"}, "ax_alp02")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY2"), "MY2 2")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY2 2"}, "ax_alp03")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY2"), "MY2 3")
 
     def test_free_suffix_counts_a_trailing_number_up_instead_of_appending(self):
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY"}, "ax_alp02")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_MY"), "_MY2")
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY2"}, "ax_alp03")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_MY"), "_MY3")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_MY2"), "_MY3")
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY3"}, "ax_alp04")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_MY2"), "_MY4")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY"}, "ax_alp02")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY"), "MY 2")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY 2"}, "ax_alp03")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY"), "MY 3")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY 2"), "MY 3")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY 3"}, "ax_alp04")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY 2"), "MY 4")
 
     def test_free_suffix_with_a_wanted_number_goes_to_the_next_one(self):
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T1"}, "ax_alp02")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T1"), "_T2")
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T2"}, "ax_alp03")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T1"), "_T3")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T3"), "_T3")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T 1"}, "ax_alp02")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T 1"), "_T 2")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T 2"}, "ax_alp03")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T 1"), "_T 3")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T 3"), "_T 3")
 
     def test_free_suffix_keeps_the_width_of_a_number_with_leading_zeros(self):
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T01"}, "ax_alp02")
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T09"}, "ax_alp03")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T01"), "_T02")
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T09"), "_T10")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T 01"}, "ax_alp02")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_T 09"}, "ax_alp03")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T 01"), "_T 02")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_T 09"), "_T 10")
 
     def test_free_suffix_cuts_the_stem_and_never_the_number(self):
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "x" * 29 + "9"}, "ax_alp02")
-        got = tune.free_suffix(self.work, "ks_alpha", "x" * 29 + "9")
-        self.assertEqual((got, len(got)), ("x" * 28 + "10", 30))
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "9" * 30}, "ax_alp03")
+        wanted = "x" * 28 + " 9"
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": wanted}, "ax_alp02")
+        got = tune.free_suffix(self.work, "ks_alpha", wanted)
+        self.assertEqual((got, len(got)), ("x" * 27 + " 10", 30))
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": got}, "ax_alp03")
+        got = tune.free_suffix(self.work, "ks_alpha", wanted)
+        self.assertEqual((got, len(got)), ("x" * 27 + " 11", 30))
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "x " + "9" * 28}, "ax_alp04")
         with self.assertRaisesRegex(ValueError, "no free name suffix left"):
-            tune.free_suffix(self.work, "ks_alpha", "9" * 30)
+            tune.free_suffix(self.work, "ks_alpha", "x " + "9" * 28)
+
+    def test_free_suffix_never_leaves_a_space_at_the_end_of_the_cut_stem(self):
+        wanted = "x" * 27 + " " + "y" * 2
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": wanted}, "ax_alp02")
+        got = tune.free_suffix(self.work, "ks_alpha", wanted)
+        self.assertEqual((got, len(got)), ("x" * 27 + " 2", 29))
 
     def test_free_suffix_with_exclude_keeps_its_own(self):
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_B", exclude="ax_alp01"), "_B")
@@ -1549,15 +1611,36 @@ class TestTuneSuffix(TuneCase):
         long = "x" * tune.NAME_SUFFIX_MAX
         tune.save_state(self.work, "ks_alpha", {"name_suffix": long}, "ax_alp02")
         got = tune.free_suffix(self.work, "ks_alpha", long)
-        self.assertEqual((got, len(got)), ("x" * 29 + "2", 30))
+        self.assertEqual((got, len(got)), ("x" * 28 + " 2", 30))
 
     def test_free_suffix_validates_the_wanted_suffix(self):
         for bad in ("", "x" * 31, "a\nb", 5, None):
             with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "name_suffix expects 1 to 30 characters"):
                 tune.free_suffix(self.work, "ks_alpha", bad)
 
-    def test_suffixes_are_not_trimmed(self):
-        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", " _A"), " _A")
+    def test_a_legacy_suffix_on_disk_reads_converted_and_is_not_rewritten(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY"}, "ax_alp02")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY3"}, "ax_alp03")
+        self.assertEqual([t["name_suffix"] for t in tune.list_tunes(self.work, "ks_alpha")], ["_A", "_B", "MY", "MY 3"])
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp02"), {"name_suffix": "_MY"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp03"), {"name_suffix": "_MY3"})
+        self.assertEqual(tune.suffix_owner(self.work, "ks_alpha", "MY"), "ax_alp02")
+        self.assertEqual(tune.suffix_owner(self.work, "ks_alpha", "MY 3"), "ax_alp03")
+        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_MY"))
+        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_MY3"))
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY"), "MY 2")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY 3"), "MY 4")
+
+    def test_another_saved_suffix_with_an_underscore_stays_as_it_is(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_Drift"}, "ax_alp02")
+        self.assertEqual(tune.list_tunes(self.work, "ks_alpha")[-1]["name_suffix"], "_Drift")
+        self.assertEqual(tune.state_suffix({"name_suffix": "_Drift"}, suffix()), "_Drift")
+        self.assertEqual(tune.state_suffix({"name_suffix": "_MY2"}, suffix()), "MY 2")
+        self.assertEqual(tune.state_suffix({}, suffix()), "MY")
+
+    def test_the_wanted_suffix_is_trimmed_and_its_inner_space_runs_collapsed_before_it_is_compared(self):
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", " _A"), "_A 2")
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "  _NEW   x "), "_NEW x")
 
 
 class TestDuplicateTune(TuneCase):
@@ -1572,11 +1655,27 @@ class TestDuplicateTune(TuneCase):
     def test_from_the_default_tune(self):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A", "limiter": 8000, "nested": {"a": [1]}})
         res = tune.duplicate_tune(self.work, "ks_alpha", None)
-        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "_A2"})
-        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"name_suffix": "_A2", "limiter": 8000, "nested": {"a": [1]}})
+        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "_A 2"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"name_suffix": "_A 2", "limiter": 8000, "nested": {"a": [1]}})
         self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"name_suffix": "_A", "limiter": 8000, "nested": {"a": [1]}})
         with open(os.path.join(self.work, "ks_alpha", "tunes", "ax_alp01", "meta.json"), encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"stock": "ks_alpha"})
+
+    def test_from_a_legacy_source_the_suffix_counts_up_from_the_converted_one(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY", "limiter": 8000})
+        res = tune.duplicate_tune(self.work, "ks_alpha", None)
+        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "MY 2"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"name_suffix": "MY 2", "limiter": 8000})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"name_suffix": "_MY", "limiter": 8000})
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY2"}, "ax_alp05")
+        self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", "ax_alp05")["name_suffix"], "MY 3")
+
+    def test_an_explicit_suffix_is_saved_trimmed_and_compared_trimmed(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A"})
+        self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", None, suffix="  Super   charged ")["name_suffix"], "Super charged")
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"name_suffix": "Super charged"})
+        with self.assertRaisesRegex(ValueError, "name suffix already used by ax_alpha"):
+            tune.duplicate_tune(self.work, "ks_alpha", None, suffix=" _A ")
 
     def test_the_default_id_as_src_is_the_default_tune(self):
         tune.save_state(self.work, "ks_alpha", {"limiter": 1})
@@ -1596,26 +1695,26 @@ class TestDuplicateTune(TuneCase):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "_DRIFT", "x": 2}, "ax_alp01")
         first = tune.duplicate_tune(self.work, "ks_alpha", "ax_alp01")
         second = tune.duplicate_tune(self.work, "ks_alpha", "ax_alp01")
-        self.assertEqual((first["id"], first["name_suffix"], second["id"], second["name_suffix"]), ("ax_alp02", "_DRIFT2", "ax_alp03", "_DRIFT3"))
-        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp03"), {"name_suffix": "_DRIFT3", "x": 2})
+        self.assertEqual((first["id"], first["name_suffix"], second["id"], second["name_suffix"]), ("ax_alp02", "_DRIFT 2", "ax_alp03", "_DRIFT 3"))
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp03"), {"name_suffix": "_DRIFT 3", "x": 2})
 
     def test_from_the_draft(self):
         tune.save_state(self.work, "ks_alpha", {"limiter": 9000}, tune.DRAFT)
         res = tune.duplicate_tune(self.work, "ks_alpha", tune.DRAFT)
-        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "_MY"})
-        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"limiter": 9000, "name_suffix": "_MY"})
+        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "MY"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"limiter": 9000, "name_suffix": "MY"})
         self.assertEqual(tune.load_state(self.work, "ks_alpha", tune.DRAFT), {"limiter": 9000})
 
     def test_an_absent_draft_or_default_state_copies_an_empty_state(self):
         self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", tune.DRAFT)["id"], "ax_alp01")
-        self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", None)["name_suffix"], "_MY2")
-        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp02"), {"name_suffix": "_MY2"})
+        self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", None)["name_suffix"], "MY 2")
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp02"), {"name_suffix": "MY 2"})
 
     def test_the_first_modded_car_can_take_the_default_id(self):
         tune.save_state(self.work, "ks_alpha", {"limiter": 9000}, tune.DRAFT)
         res = tune.duplicate_tune(self.work, "ks_alpha", tune.DRAFT, new_id="ax_alpha")
         self.assertEqual(res["id"], "ax_alpha")
-        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"limiter": 9000, "name_suffix": "_MY"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"limiter": 9000, "name_suffix": "MY"})
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_alpha", "tunes")))
         self.assertEqual([t["id"] for t in tune.list_tunes(self.work, "ks_alpha")], ["ax_alpha"])
 
@@ -1717,19 +1816,26 @@ class TestNewTuneFromDraft(TuneCase):
     def test_the_first_modded_car_takes_the_default_id(self):
         tune.save_state(self.work, "ks_alpha", {"limiter": 9000}, tune.DRAFT)
         res = tune.new_tune_from_draft(self.work, "ks_alpha")
-        self.assertEqual(res, {"id": "ax_alpha", "stock": "ks_alpha", "name_suffix": "_MY"})
-        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"limiter": 9000, "name_suffix": "_MY"})
+        self.assertEqual(res, {"id": "ax_alpha", "stock": "ks_alpha", "name_suffix": "MY"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"limiter": 9000, "name_suffix": "MY"})
         self.assertEqual(tune.load_state(self.work, "ks_alpha", tune.DRAFT), {"limiter": 9000})
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_alpha", "tunes")))
         self.assertEqual([(t["id"], t["default"]) for t in tune.list_tunes(self.work, "ks_alpha")], [("ax_alpha", True)])
+
+    def test_from_a_legacy_default_suffix_the_draft_gets_the_next_counted_one(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY"})
+        tune.save_state(self.work, "ks_alpha", {"limiter": 9000, "name_suffix": "_MY"}, tune.DRAFT)
+        res = tune.new_tune_from_draft(self.work, "ks_alpha")
+        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "MY 2"})
+        self.assertEqual(tune.new_tune_from_draft(self.work, "ks_alpha")["name_suffix"], "MY 3")
 
     def test_the_second_one_takes_a_free_id_and_a_counted_suffix(self):
         tune.save_state(self.work, "ks_alpha", {"limiter": 9000}, tune.DRAFT)
         tune.new_tune_from_draft(self.work, "ks_alpha")
         res = tune.new_tune_from_draft(self.work, "ks_alpha")
-        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "_MY2"})
-        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"limiter": 9000, "name_suffix": "_MY2"})
-        self.assertEqual(tune.new_tune_from_draft(self.work, "ks_alpha")["name_suffix"], "_MY3")
+        self.assertEqual(res, {"id": "ax_alp01", "stock": "ks_alpha", "name_suffix": "MY 2"})
+        self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"limiter": 9000, "name_suffix": "MY 2"})
+        self.assertEqual(tune.new_tune_from_draft(self.work, "ks_alpha")["name_suffix"], "MY 3")
 
     def test_a_build_of_the_default_id_without_a_state_counts_as_the_default_tune(self):
         self.build("ks_alpha", "ax_alpha")
@@ -1783,10 +1889,20 @@ class TestListModded(TuneCase):
         self.extract("ks_alpha")
         rows = tune.list_modded(self.work, self.mods)
         self.assertEqual([(r["label"], r["id"], r["stock"], r["name_suffix"], r["default"], r["installed"], r["built"]) for r in rows],
-                         [("Bravo Stock_MY", "ax_bra01", "ks_bravo", "_MY", False, True, False),
-                          ("Zeta Stock_A", "ax_alp01", "ks_alpha", "_A", False, True, True),
-                          ("Zeta Stock_Z", "ax_alpha", "ks_alpha", "_Z", True, False, True)])
+                         [("Bravo Stock MY", "ax_bra01", "ks_bravo", "MY", False, True, False),
+                          ("Zeta Stock _A", "ax_alp01", "ks_alpha", "_A", False, True, True),
+                          ("Zeta Stock _Z", "ax_alpha", "ks_alpha", "_Z", True, False, True)])
         self.assertEqual(set(rows[0]), {"id", "stock", "label", "name_suffix", "default", "installed", "built"})
+
+    def test_a_legacy_suffix_gives_a_label_with_a_space_and_the_converted_suffix(self):
+        self.info("ks_alpha", "Zeta Stock")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY"})
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_MY2"}, "ax_alp01")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "_Drift"}, "ax_alp02")
+        rows = tune.list_modded(self.work, self.mods)
+        self.assertEqual([(r["id"], r["label"], r["name_suffix"]) for r in rows],
+                         [("ax_alp02", "Zeta Stock _Drift", "_Drift"), ("ax_alpha", "Zeta Stock MY", "MY"), ("ax_alp01", "Zeta Stock MY 2", "MY 2")])
+        self.assertEqual(tune.load_state(self.work, "ks_alpha"), {"name_suffix": "_MY"})
 
     def test_a_build_only_default_tune_is_listed_and_built_needs_the_package(self):
         self.build("ks_bravo", "ax_bravo")
@@ -1800,7 +1916,7 @@ class TestListModded(TuneCase):
         for car_id in ("ks_alpha", "ks_bravo", "ks_other", "ks_zzz"):
             tune.save_state(self.work, car_id, {})
         self.assertEqual({r["stock"]: r["label"] for r in tune.list_modded(self.work, self.mods)},
-                         {"ks_alpha": "Alpha_MY", "ks_bravo": "Bravo Game_MY", "ks_other": "Other Game_MY", "ks_zzz": "ks_zzz_MY"})
+                         {"ks_alpha": "Alpha MY", "ks_bravo": "Bravo Game MY", "ks_other": "Other Game MY", "ks_zzz": "ks_zzz MY"})
 
     def test_an_unreadable_stock_info_does_not_break_the_list(self):
         self.info("ks_alpha", "Alpha Stock")
@@ -1809,7 +1925,7 @@ class TestListModded(TuneCase):
         for car_id in ("ks_alpha", "ks_bravo", "ks_other"):
             tune.save_state(self.work, car_id, {})
         self.assertEqual({r["stock"]: r["label"] for r in tune.list_modded(self.work, self.mods)},
-                         {"ks_alpha": "Alpha Stock_MY", "ks_bravo": "Bravo_MY", "ks_other": "ks_other_MY"})
+                         {"ks_alpha": "Alpha Stock MY", "ks_bravo": "Bravo MY", "ks_other": "ks_other MY"})
 
     def test_installed_is_the_exact_package_name(self):
         tune.save_state(self.work, "ks_alpha", {})
@@ -1828,7 +1944,7 @@ class TestListModded(TuneCase):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A"})
         tune.duplicate_tune(self.work, "ks_alpha", None)
         self.assertEqual([(r["id"], r["name_suffix"]) for r in tune.list_modded(self.work, self.mods)],
-                         [("ax_alpha", "_A"), ("ax_alp01", "_A2")])
+                         [("ax_alpha", "_A"), ("ax_alp01", "_A 2")])
 
 
 class TestPerTuneState(CarCase):
@@ -1886,7 +2002,7 @@ class TestPerTuneState(CarCase):
 
     def test_a_tune_without_a_state_shows_the_defaults(self):
         rows = {r["id"]: (r["value"], r["changed"]) for r in tune.effective_rows(self.work, "ks_x", self.cat, tune="ax02")}
-        self.assertEqual(rows, {"name_suffix": ("_MY", False), "limiter": (7000, False)})
+        self.assertEqual(rows, {"name_suffix": ("MY", False), "limiter": (7000, False)})
 
     def test_unknown_state_ids_and_their_warning_follow_the_tune(self):
         tune.save_state(self.work, "ks_x", {"old_m": 1}, "ax01")
@@ -2117,7 +2233,7 @@ class TestApply(CarCase):
         self.assertEqual((res["new_id"], res["applied"], res["notes"], res["installed"], res["backup"], res["size"]),
                          ("ax_x", [], ["note: from build"], None, None, 7))
         build = self.calls[0]
-        self.assertEqual(build[1:], (self.fc.car_root, "ax_x", os.path.join(self.work, "ks_x", "build", "ax_x.partial"), "Car X_MY", 1999, "Brand", "Base",
+        self.assertEqual(build[1:], (self.fc.car_root, "ax_x", os.path.join(self.work, "ks_x", "build", "ax_x.partial"), "Car X MY", 1999, "Brand", "Base",
                                      None, {"property_1": "P1", "property_2": "P2", "property_3": "P3"}, False))
         part = res["build_dir"] + ".partial"
         self.assertEqual(self.calls[1], ("pack", part, os.path.join(part, "ax_x.kspkg")))
@@ -2135,12 +2251,12 @@ class TestApply(CarCase):
 
     def test_name_suffix_and_variant_reach_the_build(self):
         self.apply(self.settings(), {"name_suffix": "_TUNED", "variant_name": "My Variant"})
-        self.assertEqual((self.calls[0][4], self.calls[0][7]), ("Car X_TUNED", "My Variant"))
+        self.assertEqual((self.calls[0][4], self.calls[0][7]), ("Car X _TUNED", "My Variant"))
 
     def test_meta_changes_are_listed_with_the_file_they_land_in(self):
         res = self.apply(self.settings(), {"name_suffix": "_TUNED", "variant_name": "My Variant"})
         self.assertEqual([(a["id"], a["old"], a["new"], a["files"]) for a in res["applied"]],
-                         [("name_suffix", "_MY", "_TUNED", ["ax_x.moddedcarcontent"]),
+                         [("name_suffix", "MY", "_TUNED", ["ax_x.moddedcarcontent"]),
                           ("variant_name", "Base", "My Variant", ["uiresources/localization/en.cars.loc"])])
 
     def test_a_changed_value_is_written_into_every_resolved_copy_of_the_build_only(self):
@@ -2159,8 +2275,19 @@ class TestApply(CarCase):
         self.assertEqual(len(self.fc.saved), 1)
 
     def test_state_equal_to_the_default_is_not_a_change(self):
-        res = self.apply(self.settings(limiter()), {"limiter": 7000, "name_suffix": "_MY"})
+        res = self.apply(self.settings(limiter()), {"limiter": 7000, "name_suffix": "MY"})
         self.assertEqual((res["applied"], self.fc.saved), ([], []))
+
+    def test_a_legacy_suffix_in_the_state_builds_the_converted_name(self):
+        res = self.apply(self.settings(), {"name_suffix": "_MY"})
+        self.assertEqual((self.calls[0][4], res["name_suffix"], res["applied"]), ("Car X MY", "MY", []))
+        res = self.apply(self.settings(), {"name_suffix": "_MY2"})
+        self.assertEqual(([c[4] for c in self.calls if c[0] == "build"][1], res["name_suffix"]), ("Car X MY 2", "MY 2"))
+        self.assertEqual(tune.load_state(self.work, "ks_x"), {"name_suffix": "_MY2"})
+
+    def test_the_build_name_is_the_stock_name_a_space_and_the_trimmed_suffix(self):
+        self.apply(self.settings(), {"name_suffix": "  Super   charged "})
+        self.assertEqual(self.calls[0][4], "Car X Super charged")
 
     def test_floats_are_written_as_f32_with_the_short_text(self):
         res = self.apply(self.settings(mini_setting("f", targets=[("@engine", "minimum")])), {"f": 1.1})
@@ -2256,7 +2383,7 @@ class TestApply(CarCase):
         self.apply(self.settings())
         build = self.calls[0]
         self.assertEqual((build[4], build[5], build[6], build[7], build[9]),
-                         ("Brand Name_MY", tune.CLONE_YEAR, tune.CLONE_BRAND, "Brand Name", {"property_1": None, "property_2": None, "property_3": None}))
+                         ("Brand Name MY", tune.CLONE_YEAR, tune.CLONE_BRAND, "Brand Name", {"property_1": None, "property_2": None, "property_3": None}))
 
     def test_stock_localization_is_passed_on_when_present(self):
         self.write(tune.stock_loc_path(self.work), b"ks_x_preset_base=Base\r\n", binary=True)
@@ -2353,12 +2480,12 @@ class TestApply(CarCase):
 
     def test_a_modded_car_builds_under_its_id_with_its_suffix_and_its_state_only(self):
         self.modded({"limiter": 8000, "name_suffix": "_DRIFT"})
-        tune.save_state(self.work, "ks_x", {"limiter": 9500, "name_suffix": "_MY"})
+        tune.save_state(self.work, "ks_x", {"limiter": 9500, "name_suffix": "MY"})
         res = self.apply(self.settings(limiter()), new_id="ax01")
         self.assertEqual((res["tune"], res["new_id"], res["name_suffix"]), ("ax01", "ax01", "_DRIFT"))
         self.assertEqual((res["build_dir"], res["package"]), (os.path.join(self.work, "ks_x", "build", "ax01"),
                                                              os.path.join(self.work, "ks_x", "build", "ax01", "ax01.kspkg")))
-        self.assertEqual((self.calls[0][2], self.calls[0][4]), ("ax01", "Car X_DRIFT"))
+        self.assertEqual((self.calls[0][2], self.calls[0][4]), ("ax01", "Car X _DRIFT"))
         self.assertEqual(self.built(res, "data/engine.carengine")["limiter"], 8000)
         self.assertEqual(self.built(res, "data/x.car")["engine"]["limiter"], 8000)
         self.assertEqual([(a["id"], a["new"]) for a in res["applied"]], [("name_suffix", "_DRIFT"), ("limiter", 8000)])
@@ -2377,7 +2504,7 @@ class TestApply(CarCase):
         self.modded({"limiter": 9000, "name_suffix": "_B"}, "ax02")
         first, second = (self.apply(self.settings(limiter()), new_id=t) for t in ("ax01", "ax02"))
         self.assertEqual([self.built(r, "data/engine.carengine")["limiter"] for r in (first, second)], [8000, 9000])
-        self.assertEqual([c[4] for c in self.calls if c[0] == "build"], ["Car X_A", "Car X_B"])
+        self.assertEqual([c[4] for c in self.calls if c[0] == "build"], ["Car X _A", "Car X _B"])
 
     def test_a_modded_car_is_installed_under_its_id(self):
         self.modded({"name_suffix": "_DRIFT"})
@@ -2404,7 +2531,7 @@ class TestApply(CarCase):
     def test_the_default_suffix_of_a_tune_without_one_collides_too(self):
         self.modded({"limiter": 8000})
         tune.save_state(self.work, "ks_x", {})
-        with self.assertRaisesRegex(ValueError, "name suffix _MY is already used by ax_x"):
+        with self.assertRaisesRegex(ValueError, "name suffix MY is already used by ax_x"):
             self.apply(self.settings(limiter()), new_id="ax01")
 
     def test_an_id_that_is_not_a_modded_car_is_refused_when_the_stock_car_has_modded_cars(self):
@@ -2698,7 +2825,7 @@ class TestCommands(CarCase):
         self.assertEqual((code, err), (0, ""))
         rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")] for line in out.splitlines()[2:]}
         self.assertEqual(rows["limiter"], ["*", "limiter", "8000", "7000", ""])
-        self.assertEqual(rows["name_suffix"][0:4], ["", "name_suffix", "_MY", "_MY"])
+        self.assertEqual(rows["name_suffix"][0:4], ["", "name_suffix", "MY", "MY"])
         self.assertNotIn("deep", rows)
         self.assertEqual(out.splitlines()[0].split("|")[1].strip(), "id")
 
@@ -2760,18 +2887,18 @@ class TestCommands(CarCase):
     def test_duplicate_prints_the_new_id_and_suffix_and_writes_the_state(self):
         self.main("set", "limiter", "8000")
         code, out, err = self.main("duplicate")
-        self.assertEqual((code, out, err), (0, "car: ks_x, new id: ax01\nname suffix: _MY2\n", ""))
-        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"limiter": 8000, "name_suffix": "_MY2"})
+        self.assertEqual((code, out, err), (0, "car: ks_x, new id: ax01\nname suffix: MY 2\n", ""))
+        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"limiter": 8000, "name_suffix": "MY 2"})
         self.assertEqual(tune.load_state(self.work, "ks_x"), {"limiter": 8000})
 
     def test_duplicate_takes_a_source_tune_the_draft_an_id_and_a_suffix(self):
         self.main("set", "limiter", "8000")
         self.main("set", "name_suffix", "_A")
         self.assertEqual(self.modded_car("--suffix", "_B"), "car: ks_x, new id: ax01\nname suffix: _B\n")
-        self.assertEqual(self.modded_car("--tune", "ax01", "--new-id", "ax05"), "car: ks_x, new id: ax05\nname suffix: _B2\n")
+        self.assertEqual(self.modded_car("--tune", "ax01", "--new-id", "ax05"), "car: ks_x, new id: ax05\nname suffix: _B 2\n")
         tune.save_state(self.work, "ks_x", {"limiter": 6000}, tune.DRAFT)
-        self.assertEqual(self.modded_car("--draft"), "car: ks_x, new id: ax02\nname suffix: _MY\n")
-        self.assertEqual(tune.load_state(self.work, "ks_x", "ax02"), {"limiter": 6000, "name_suffix": "_MY"})
+        self.assertEqual(self.modded_car("--draft"), "car: ks_x, new id: ax02\nname suffix: MY\n")
+        self.assertEqual(tune.load_state(self.work, "ks_x", "ax02"), {"limiter": 6000, "name_suffix": "MY"})
         self.assertEqual(tune.load_state(self.work, "ks_x", "ax05")["limiter"], 8000)
 
     def test_duplicate_mods_folder_packages_take_ids(self):
@@ -2804,7 +2931,7 @@ class TestCommands(CarCase):
         lines = out.splitlines()
         self.assertEqual([c.strip() for c in lines[0].split("|")], ["id", "stock", "label", "suffix", "installed", "built"])
         self.assertEqual([[c.strip() for c in line.split("|")] for line in lines[2:]],
-                         [["ax_x", "ks_x", "Car X_A", "_A", "no", "yes"], ["ax01", "ks_x", "Car X_B", "_B", "yes", "no"]])
+                         [["ax_x", "ks_x", "Car X _A", "_A", "no", "yes"], ["ax01", "ks_x", "Car X _B", "_B", "yes", "no"]])
 
     def test_cars_modded_without_modded_cars_prints_only_the_header(self):
         code, out, err = self.run_main("cars", "--modded", "--work", self.work, "--mods", str(self.d / "mods"), "--game", os.path.join(self.work, "none.kspkg"))
@@ -2816,16 +2943,16 @@ class TestCommands(CarCase):
         self.modded_car()
         self.assertEqual(self.main("set", "limiter", "9000", "--tune", "ax01")[1], "limiter = 9000\n")
         self.assertEqual(tune.load_state(self.work, "ks_x"), {"limiter": 8000})
-        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"limiter": 9000, "name_suffix": "_MY2"})
+        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"limiter": 9000, "name_suffix": "MY 2"})
         shown = {tune_id: {line.split("|")[1].strip(): [c.strip() for c in line.split("|")] for line in self.main("show", *extra)[1].splitlines()[2:]}
                  for tune_id, extra in (("default", ()), ("ax01", ("--tune", "ax01")), ("ax_x", ("--tune", "ax_x")))}
         self.assertEqual(shown["default"]["limiter"], ["*", "limiter", "8000", "7000", ""])
         self.assertEqual(shown["ax01"]["limiter"], ["*", "limiter", "9000", "7000", ""])
-        self.assertEqual(shown["ax01"]["name_suffix"][2], "_MY2")
+        self.assertEqual(shown["ax01"]["name_suffix"][2], "MY 2")
         self.assertEqual(shown["ax_x"], shown["default"])
         self.assertEqual(self.main("unset", "limiter", "--tune", "ax01")[1], "limiter removed from the state\n")
         self.assertEqual(tune.load_state(self.work, "ks_x"), {"limiter": 8000})
-        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"name_suffix": "_MY2"})
+        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01"), {"name_suffix": "MY 2"})
 
     def test_show_with_a_tune_warns_about_its_unknown_ids_only(self):
         self.modded_car()

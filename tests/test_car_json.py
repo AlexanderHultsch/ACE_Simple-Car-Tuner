@@ -237,7 +237,7 @@ class Scalars(SchemaCase):
                 self.assertEqual(self.text_round_trip(wire), wire)
                 self.assertIn('"%s": "%s"' % (name, text), cj.dumps(self.decode(wire)))
 
-    # R2-003 (characterisation, not a wanted property): a NaN other than the canonical quiet NaN does not round trip and the whole file is reported
+    # characterisation, not a wanted property: a NaN other than the canonical quiet NaN does not round trip and the whole file is reported
     def test_non_canonical_nan_decodes_to_nan_but_roundtrip_reports_a_mismatch(self):
         for wire in (fixed32(2, 0xFFC00000), fixed32(2, 0x7FA00000), fixed32(2, 0x7FC00001),
                      fixed64(1, 0xFFF8000000000000), fixed64(1, 0x7FF0000000000001)):

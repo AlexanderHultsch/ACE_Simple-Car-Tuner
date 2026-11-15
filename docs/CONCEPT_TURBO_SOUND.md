@@ -1,6 +1,6 @@
 # Concept: turbo sound for a car that gets a turbo kit
 
-Status: concept of 2026-11-14, nothing implemented. **Phase 0 was done on the PC on 2026-11-14: result in docs/review/PC-REVIEW.md ("Turbo sound, Phase 0"): H2 is confirmed (separate `TurboEvent` entry in the `.actor`, shared global `turbo.bank`, no extra bank needed); the kill criterion does not apply; Option A is simpler than planned (change one event string, no bank copy). The in-game behaviour is untested.** **Built on 2026-11-14 as the Sound picker (TUNER_SPEC section 4i): any installed car's turbo and backfire sound can be chosen per modded car; the turbo kit donor sets the turbo sound.** Written in the cloud from the official Kunos documentation (physics and audio pages, https://docs.assetto.cn/en/evo/car/physics/ and https://docs.assetto.cn/en/evo/car/audio/) and from facts already in this repository. The game files could not be inspected here, so every point marked "open" must be settled on the PC (Phase 0).
+Status: concept of 2026-11-14, nothing implemented. **Phase 0 was done on the PC on 2026-11-14: result in section 9 of this document: H2 is confirmed (separate `TurboEvent` entry in the `.actor`, shared global `turbo.bank`, no extra bank needed); the kill criterion does not apply; Option A is simpler than planned (change one event string, no bank copy). The in-game behaviour is untested.** **Built on 2026-11-14 as the Sound picker (TUNER_SPEC section 4i): any installed car's turbo and backfire sound can be chosen per modded car; the turbo kit donor sets the turbo sound.** Written in the cloud from the official Kunos documentation (physics and audio pages, https://docs.assetto.cn/en/evo/car/physics/ and https://docs.assetto.cn/en/evo/car/audio/) and from facts already in this repository. The game files could not be inspected here, so every point marked "open" must be settled on the PC (Phase 0).
 
 ## 1. Problem
 
@@ -13,7 +13,7 @@ The turbo kit (TUNER_SPEC section 4h) gives a car without a turbo the turbo phys
 - The audio page names no turbo, boost, blow-off or wastegate event, no list of event types, and no physics value that is passed to FMOD.
 - The physics page says that "Max Turbo Boost" and "Bov Threshold" have no physical impact but are used as references for gameplay and audio. So the game reads boost-related values for sound.
 - The physics page lists 31 controller input variables; none of them is boost or blow-off. (They are inputs of controllers, not necessarily the parameters FMOD gets.)
-- Real engine files (docs/settings/coverage.md, generated from the five installed cars) contain the engine fields `bovThreshold`, `audio_throttle_limiter_tau_ms`, `turboControllers[*].stages[*]` and a block `damage` with `bovThreshold`, `turboBoostDamageK`, `turboBoostDamageThreshold`. So the engine file already carries audio-related and turbo-damage values.
+- Real engine files (decoded from the five installed cars) contain the engine fields `bovThreshold`, `audio_throttle_limiter_tau_ms`, `turboControllers[*].stages[*]` and a block `damage` with `bovThreshold`, `turboBoostDamageK`, `turboBoostDamageThreshold`. So the engine file already carries audio-related and turbo-damage values.
 - The codec already knows the file type `.carfinalstate` (CarFinalStateData, tools/car_json.py): the file where the audio events of a car are assigned can be decoded on the PC with the real schema. `.actor` is not mapped.
 - Exhaust backfire sound is part of the backfire script of the car (car page), not of the turbo.
 
@@ -46,7 +46,7 @@ Phase 0, read-only investigation on the PC (about 1 to 2 hours, no game start ne
 2. Read the event paths from `master_bank.strings.bank` of both cars (they are stored as plain text). A small stdlib tool `tools/bank_strings.py` that prints every printable string of at least 4 characters of a file is enough; look for `turbo`, `bov`, `boost`, `whistle`, `spool`, `flutter`, `blow`. Compare the two cars.
 3. Decode the `.carfinalstate` of both cars with `python tools\car_json.py decode` (real schema): list the audio event slots (types, bank reference, event names) and diff the two cars. This answers Q1 and Q2. Also search all decoded files and the engine file for `turbo` strings near audio fields.
 4. Look in the game content for global banks (any `.bank` outside the car folders) and list their event strings (Q5).
-5. Write the result into docs/review/PC-REVIEW.md (new section) and choose H1, H2 or H3.
+5. Write the result into section 9 of this document and choose H1, H2 or H3 (done 2026-11-14: H2).
 
 Phase 1, in-game experiments (backups first, scratch mods folder, Alex's OK), only if Phase 0 says H2:
 - E1: BMW with turbo kit, no audio change: baseline (silent boost or not).
@@ -66,3 +66,23 @@ The kit copies the top-level engine fields whose name contains "turbo", "boost" 
 - Run Phase 0 on the PC first (recommended, read-only), then decide on A or B.
 - Whether samples or banks derived from Kunos' cars may only be used locally (recommended: local only, never in git).
 - Kill criterion (decided by Alex, 2026-11-14): if Phase 0 finds no separate, easily extractable turbo event or slot (see the short task list in HANDOVER.md section 0a), the turbo sound idea is dropped and no further turbo work is planned; the turbo kit stays as it is, marked experimental.
+
+## 9. Phase 0 on the PC (2026-11-14): result
+
+Question: is there a separate, easily copyable turbo sound event, and does the game accept an extra bank? Method: read-only; `tools/bank_strings.py`, `kspkg.py extract` of the game's `content\sfx`, the codec on the `.actor` files of all 71 extracted cars. Nothing was changed in the game, the mods folder or the car packages.
+
+| # | Finding | Evidence |
+|---|---|---|
+| 1 | The car banks are NOT inside the cars: the game package holds 95 banks in `content\sfx\` (one `<car id>.bank` per car plus shared banks `turbo`, `backfire`, `brakes`, `gearbox`, `transmission`, `wheel`, `wheel_hub`, `bodywork`, `environment`, `horn`, `indicators`, `damage`, `gui`, `master_bank`, `master_bank.strings`). No car folder has an `sfx` folder. | `kspkg.py list` of `content.kspkg` |
+| 2 | The car links its sounds in its `.actor` (root message `ActorData` field 103 = `CarActorData`, field 9 `audio_events` = list of `AudioEventData {event, type, debug, transform, bank, optionalParam}`): 10 to 14 entries (engine int/ext, wheel int/ext, wind, bodywork, turbo, backfire, brakes, wheel hub, gearbox, transmission, horn, indicators). | codec on 71 `.actor` files, all round-trip byte for byte as `ActorData` |
+| 3 | The turbo sound is a SEPARATE entry of type `TurboEvent` with event `event:/parts/turbos/<name>` and bank `content\sfx\turbo.bank` (a shared bank, listed by 67 of 71 cars, also by NA cars). NA cars use `turbo_none` (31 cars); 36 cars use one of 29 real events (`turbo_generic`, `turbo_rx7`, `turbo_bmw_v6`, `continental`, ...). The BMW (NA) and the RX-7 (turbo) differ in this entry and in the backfire entry (`backfire_e46` versus `backfire_classic_turbo`, optionalParam 8). Four cars have no turbo entry (Huracan STO and Evo2, 992 GT3 Cup, 992 GT3 R Rennsport). | decoded entries of all cars |
+| 4 | No extra bank is needed: `turbo.bank` is already loaded for every car and holds the events the other cars use. | `.actor` bank fields |
+| 5 | The entry order differs between cars (turbo at index 4, 6 or 9): select the slot by `type == TurboEvent`, not by position. | decoded entries |
+| 6 | The blow-off sound is part of the turbo bank, not a separate slot: `turbo.bank` holds samples named `*_blowoff`, `rb26_turbo_bov`, `td04_blowoff`, `*_turbo_blow_*` and flutter samples, and its events take the inputs `boost` and `rpms`; the game has only the entry types TurboEvent and Backfire (backfire = exhaust pops, `backfire.bank`, inputs throttle position and rpm). Not heard in the game; which sample belongs to which event cannot be read from the names. | strings of `turbo.bank`, `AudioEventDataType` |
+| 7 | The sound is not tested in the game: the laptop cannot drive; whether the game plays the sound of a turbo event on a car that gets a turbo kit needs the gaming PC. | - |
+
+Gate result: the kill criterion did not apply; the turbo sound was built as the Sound picker (TUNER_SPEC section 4i).
+
+### The engine sound of every modded car (found and fixed on 2026-11-14)
+
+The clone renamed the stock id in all files, including the engine sound entries of the `.actor`: the installed `ax_bmw_m3_e46_csl.kspkg` contained `event:/evo_cars/ax_bmw_m3_e46_csl/engine_int`, `.../engine_ext` and the bank `content\sfx\ax_bmw_m3_e46_csl.bank`. Neither the bank nor the events exist (the game's bank is `content\sfx\ks_bmw_m3_e46_csl.bank`; a modded package carries no `sfx` folder), so modded cars probably had no engine sound (never driven). Fixed in `tools/clone_car.py`: the stock id stays after `event:/evo_cars/` and `content\sfx\`, a self-check (c) fails on a reference to the new id there, checked on the real files of the five tested cars. Packages installed before the fix must be rebuilt with Apply (HANDOVER checklist row 45). Separate oddity, not fixed: the stock `.actor` of the VW Golf R MK8 points into the GTI MK8 folder with the R's id in a file name, which the clone renames.

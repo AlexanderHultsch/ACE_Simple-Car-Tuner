@@ -4,8 +4,6 @@
 
 Pick a car, change what matters to the way it drives, and take your own version out on track next to the original. No file hunting, no guesswork, no hex editor.
 
-![The tuner page with the engine settings of a car](images/screenshot.jpg)
-
 ## Why you will like it
 
 - **Every car of the game.** Select any of the game's cars, install it with one click and start tuning.

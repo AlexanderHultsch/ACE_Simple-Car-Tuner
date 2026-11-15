@@ -1,6 +1,6 @@
 # Drift tuner: state of the project
 
-Updated 2026-11-13. The tuner works for five cars and is pushed to GitHub. What it does and how to use it: [README.md](README.md) (overview) and [USER_GUIDE.md](USER_GUIDE.md) (details). Every setting per car: [settings/](settings/). Notes for continuing in a new session: [HANDOVER.md](HANDOVER.md).
+Updated 2026-11-13. The tuner works for five cars and is pushed to GitHub. What it does and how to use it: [README.md](README.md) (overview) and [USER_GUIDE.md](USER_GUIDE.md) (details). Notes for continuing in a new session: [HANDOVER.md](HANDOVER.md).
 
 ## 1. Summary
 
@@ -13,7 +13,7 @@ Updated 2026-11-13. The tuner works for five cars and is pushed to GitHub. What 
 | Own tyres | **Built, cloud-tested only:** a tyre library (Tyre Creator tab) and a garage tyre selection per modded car (Apply writes it into the package), section 4d. Tested with synthetic files only; not run on the real game files, not tried in the game. |
 | Turbo kit | **Built, cloud-tested only:** a modded car whose stock car has no turbo can take the turbo setup of a donor car (any installed car with a turbo); panel "Turbo kit" in the Car Tuner tab, section 4h. Tested with synthetic files only; not run on the real game files, not tried in the game. |
 | Verified against the real game files | **All five cars:** extracted from the game, defaults resolved, unchanged build equals stock apart from the id rename, edits change exactly the expected values in every copy, codec check has no failures, no stock id remains in the packages. |
-| Tests | 2305 tests in `tests/` (stdlib `unittest`, `python -m unittest discover -s tests`), run in the cloud without game data; they cover the tools, the settings engine, the catalogue, the server and the page on synthetic car trees. The review of 2026-11-12 is fixed except the items listed in [review/FIXES.md](review/FIXES.md). |
+| Tests | 2210 tests in `tests/` (stdlib `unittest`, `python -m unittest discover -s tests`), run in the cloud without game data; they cover the tools, the settings engine, the catalogue, the server and the page on synthetic car trees. |
 | Verified in the game | BMW only so far (laptop): the car appears and loads, physics log identical to stock, the +20 hp display value shows in the selector. Effects of edits on driving are **not tested yet**; the other four cars have not been loaded in the game. |
 
 ## 2. What exists
@@ -24,12 +24,11 @@ Updated 2026-11-13. The tuner works for five cars and is pushed to GitHub. What 
 | Schema extractor | `tools/extract_protos.py` | protobuf field names out of the SDK Editor exe into `schemas/` (kept local) |
 | Codec | `tools/car_json.py` | lossless decode/encode of car files to JSON with real names; 31 file types (incl. `.tyre`) |
 | Clone tool | `tools/clone_car.py` | copy a stock car under a same-length id, register it as a mod, names, pack, install with backup |
-| Raw dump | `tools/pb_raw.py`, `tools/dump_car.py` | schema-less protobuf text dump (used before the schemas existed) |
 | Reference check | `tools/refgraph.py` | lists which file of an extracted car references which `content\` path (ok / MISSING / external) |
 | Settings engine | `tools/tune.py`, `tuner/catalogue.json`, `tuner/cars.json` | car list, setting groups and settings list, defaults from the game files, state, apply, reference generator, tyre library, garage selection and turbo kit |
 | Web page | `tools/tuner_server.py`, `tuner/web/index.html`, `start_tuner.bat` (repository root) | Car Tuner tab: table with variable name, value, description, default, car selector, install buttons, garage tyres, turbo kit; Tyre Creator tab |
-| Tests | `tests/` | unit and integration tests on synthetic data, no game files needed; review reports and fix list in `docs/review/` |
-| Reference | `docs/settings/<car id>.md` (generated) | all settings per car |
+| Tests | `tests/` | unit and integration tests on synthetic data, no game files needed |
+| Debug tools | `tools/refgraph.py`, `tools/bank_strings.py` | `refgraph` checks a build for broken file references; `bank_strings` prints the strings of binary files (sound banks, `.actor`) |
 
 ## 3. Design decisions (made with the user)
 
@@ -88,11 +87,11 @@ A modded car is a stock car plus its own tuned-car id, its own saved values and 
 
 ## 4f. Website icon and home screen
 
-The page has an icon (a rev counter in the page's dark colours, drawn by `tools/make_icons.py` from the page's CSS colours; run `python tools\make_icons.py` to redraw) in `tuner/web/`: `apple-touch-icon.png` (180 px, for the iPhone home screen), `icon-192.png`, `icon-512.png`, `favicon.png` (32 px), `favicon.ico` and `manifest.webmanifest` (name, colours, start URL `/ACESCT/`, standalone). The server serves exactly these six files under `/ACESCT/<name>` from a fixed whitelist; the page head links them and carries the iOS web-app tags (`apple-mobile-web-app-capable`, title "ACE Tuner", black status bar). A test keeps the committed PNGs equal (as decoded pixels) to the generator output. Not tried on a real iPhone yet.
+The page has an icon (a rev counter in the page's dark colours, drawn once from the page's CSS colours; the drawing script was removed on 2026-11-15, the files stay) in `tuner/web/`: `apple-touch-icon.png` (180 px, for the iPhone home screen), `icon-192.png`, `icon-512.png`, `favicon.png` (32 px), `favicon.ico` and `manifest.webmanifest` (name, colours, start URL `/ACESCT/`, standalone). The server serves exactly these six files under `/ACESCT/<name>` from a fixed whitelist; the page head links them and carries the iOS web-app tags (`apple-mobile-web-app-capable`, title "ACE Tuner", black status bar). A test checks that the committed files are valid PNG/ICO files of the right sizes. Not tried on a real iPhone yet.
 
 ## 4i. Sound picker (turbo and backfire sound of other cars), 2026-11-14
 
-A modded car can take the turbo sound and the backfire sound of any installed game car (Alex's decision: no turbo editor, reuse the sounds of other cars; every modded car, own collapsed panel, the kit donor sets the turbo sound). Background and the analysis: [CONCEPT_TURBO_SOUND.md](CONCEPT_TURBO_SOUND.md) and "Turbo sound, Phase 0" in [review/PC-REVIEW.md](review/PC-REVIEW.md).
+A modded car can take the turbo sound and the backfire sound of any installed game car (Alex's decision: no turbo editor, reuse the sounds of other cars; every modded car, own collapsed panel, the kit donor sets the turbo sound). Background and the analysis (Phase 0 results in section 9): [CONCEPT_TURBO_SOUND.md](CONCEPT_TURBO_SOUND.md).
 
 - **Data:** the sounds are entries of the car's `.actor` (`ActorData.car.audio_events`, now mapped in `car_json` as `.actor` -> `ActorData`, 71/71 round-trip): slot `turbo` = entry type `TurboEvent`, slot `backfire` = type `Backfire`; an option is the event text plus `#<optionalParam>` when set (the same event with another `optionalParam` is another option); the events live in the game's shared banks (`turbo.bank`, `backfire.bank`), so no bank is copied. The options come from the `.actor` of every installed car (`tune.sound_options`), the none events first. `tools/sounds.py` holds the pure functions; the entry is found by type, never by position; a car without a turbo entry (4 of 71, among them the 992 GT3 R Rennsport) gets an entry added from the option's source car.
 - **State:** `"_sounds": {"turbo": <option key>, "backfire": <option key>}` in the state file (draft or tune), not a setting; a choice equal to the car's own sound is not stored; duplicate/Create copy it, Reset all drops it. CLI: `sounds`, `sound-set <slot> <key>`, `sound-reset [<slot>]` (each with `[--tune <id> | --draft] [--car <id>]`).
@@ -189,7 +188,7 @@ Known limits: see [HANDOVER.md](HANDOVER.md) section 0a ("Known limits and open 
 - **Real game files, all five cars:** extraction, `defaults` (exit 0; applicable/hidden with the 143-setting catalogue: BMW 137/6, GR86 138/5, RX-7 136/7, Giulia 142/1, Porsche 137/6), unchanged builds equal stock apart from the rename (all files identical, two added files: registration and localization), real edits (limiter, power curve scale, fuel) change exactly the expected values in all copies, `car_json.py check` no failures, no entry of any package contains the stock id, both copies written (for example the Giulia's turbo boost in the engine file, the `.turbo` file and the `.car`).
 - **Web page** (before the dark theme, tabs and tyre work of November 2026): car selector, per-car rows, hidden-settings line, "copies differ" badge, install button for cars not yet pulled, edit/reset, apply and numbered copies (scratch folders, browser pane). The newer page parts were tested in the cloud only.
 - **BMW in the game (laptop):** loads, physics identical to stock, display values show. The laptop renderer crashes for every car (Intel UHD 128 MB).
-- **Cloud test suite:** `python -m unittest discover -s tests` (2305 tests) checks the tools, the settings engine and catalogue, the server routes and the page, and that the three documents agree with the catalogue (setting counts). It cannot cover the game files (extraction from `content.kspkg`, defaults and builds of the real cars), Windows behaviour (long paths, game detection, the start file, console handling) or timings; those, and everything about the game itself, need the PC (see [HANDOVER.md](HANDOVER.md) section 7 and [review/FIXES.md](review/FIXES.md)).
+- **Cloud test suite:** `python -m unittest discover -s tests` (2210 tests) checks the tools, the settings engine and catalogue, the server routes and the page, and that the three documents agree with the catalogue (setting counts). It cannot cover the game files (extraction from `content.kspkg`, defaults and builds of the real cars), Windows behaviour (long paths, game detection, the start file, console handling) or timings; those, and everything about the game itself, need the PC (see [HANDOVER.md](HANDOVER.md) section 7).
 
 ## 6. Open and unverified
 
@@ -248,8 +247,8 @@ File overview as Kunos lists it (names as on that page; the codec in `tools/car_
 
 ## 7. Next steps
 
-0. PC verification of the page, the tyre library and the garage selection: [HANDOVER.md](HANDOVER.md) section 0a and section 0, rows 20-35; then the turbo kit, rows 36-44 (section 4h). The description of the group Turbo in `tuner/catalogue.json` still says that only cars whose engine has a turbo show these settings: update it for the kit and regenerate `docs/settings` with `tune.py doc --all` on the PC.
+0. PC verification of the page, the tyre library and the garage selection: [HANDOVER.md](HANDOVER.md) section 7, rows 16-35; then the turbo kit, rows 36-44 (section 4h), and the sound rows 45-46. The description of the group Turbo in `tuner/catalogue.json` still says that only cars whose engine has a turbo show these settings: update it for the kit.
 1. Test in the game on the gaming PC: load each of the five cars, drive, confirm that edits take effect, test Spool, the limits, numbered copies.
-2. The gaps found by the analysis ([settings/coverage.md](settings/coverage.md)) are closed for tyres, steering rod ratio, driver aids, hardware differential, ride height and bump stops, physical coilover / anti-roll values, caster, brake bias and clutch torque. Open: which layer wins (setup values or physical values; Kunos' statement is in section 6c), and the not-covered list in section 6. Then aero, more turbo settings (lag, wastegate, controllers; they apply to cars with a turbo kit as well once added), remaining tyre fields. Settings the Kunos page lists that the catalogue lacks are collected in [HANDOVER.md](HANDOVER.md) section 0a.
+2. The gaps found by an early analysis of the game data are closed for tyres, steering rod ratio, driver aids, hardware differential, ride height and bump stops, physical coilover / anti-roll values, caster, brake bias and clutch torque. Open: which layer wins (setup values or physical values; Kunos' statement is in section 6c), and the not-covered list in section 6. Then aero, more turbo settings (lag, wastegate, controllers; they apply to cars with a turbo kit as well once added), remaining tyre fields. Settings the Kunos page lists that the catalogue lacks are collected in [HANDOVER.md](HANDOVER.md) section 9.
 3. Polish: live build log in the page, job state per car, a guard against very long custom work paths; hide combustion settings for electric cars.
 4. More tested cars: add an id to `tuner/cars.json`; run the per-car checks (defaults, unchanged build, edit test) before trusting it.

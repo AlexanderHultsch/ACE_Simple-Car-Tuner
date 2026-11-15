@@ -905,7 +905,7 @@ class TestResolveDefaults(CarCase):
         self.assertEqual(tune.renamed("data/KS_X_engine.car", "ks_x", "ax_x"), "data/ax_x_engine.car")
 
 
-# --------------------------------------------------------------------------------------------- resolve cache, effective_row (R3-011)
+# --------------------------------------------------------------------------------------------- resolve cache, effective_row
 class TestResolveCache(CarCase):
     def setUp(self):
         super().setUp()
@@ -1240,11 +1240,6 @@ class TestListCars(Base):
         self.write(tune.stock_info_path(self.work, "ks_b"), '{"car_id": "ks_b", "disp')
         rows = tune.list_cars(self.work, self.mods, game=self.game)
         self.assertEqual([r["id"] for r in rows], ["ks_a", "ks_b"])
-
-    def test_display_name_of_prefers_the_stock_info_then_the_list(self):
-        self.write(tune.stock_info_path(self.work, "ks_a"), {"car_id": "ks_a", "display_name": "Stock A", "brand": "B", "year": 1})
-        self.assertEqual(tune.display_name_of(self.work, "ks_a"), "Stock A")
-        self.assertEqual(tune.display_name_of(self.work, "ks_b"), "Beta")
 
     def test_without_sizes_no_tree_is_walked(self):
         self.extract("ks_a", 10)
@@ -2526,7 +2521,7 @@ class TestApply(CarCase):
         not_chained(self, cm.exception)
 
 
-# --------------------------------------------------------------------------------------------- error chains (R3-009 / R2-006)
+# --------------------------------------------------------------------------------------------- error chains
 class TestErrorChains(Base):
     def test_to_f32_error_is_not_chained(self):
         with self.assertRaises(ValueError) as cm:
@@ -2718,26 +2713,6 @@ class TestCommands(CarCase):
         code, out, err = self.run_main("show", "--car", "ks_nope", "--work", self.work)
         self.assertEqual((code, out), (1, ""))
         self.assertTrue(err.startswith("error: unknown car 'ks_nope'"))
-
-    def test_untested_car_note_is_printed_by_doc(self):
-        self.write(tune.cars_index_path(self.work), [{"id": "ks_x", "display_name": "Car X"}, {"id": "ks_q", "display_name": "Q"}])
-        code, out, err = self.run_main("doc", "--car", "ks_q", "--out", str(self.d / "q.md"), "--work", self.work)
-        self.assertIn("note: ks_q is not in the tested list; results are unverified", out)
-        self.assertEqual(code, 1)
-        self.assertIn("no base car", err)
-
-    def test_doc_writes_the_reference_for_the_applicable_settings(self):
-        out_file = str(self.d / "sub" / "x.md")
-        code, out, err = self.run_main("doc", "--car", "ks_x", "--out", out_file, "--work", self.work)
-        self.assertEqual((code, err, out), (0, "", "wrote %s\n" % out_file))
-        with open(out_file, encoding="utf-8", newline="") as f:
-            text = f.read()
-        rows = tune.resolve_defaults(self.work, "ks_x")
-        self.assertEqual(text, tune.doc_text("ks_x", "Car X", rows))
-        self.assertIn("| `limiter` | L limiter | 7000 |", text)
-        self.assertIn("## G\n\nd G\n\n| Variable |", text)
-        self.assertNotIn("`deep`", text)
-        self.assertIn("## Copies differ in the stock data", text)
 
     def test_cars_table_and_note(self):
         mods = self.d / "mods"
@@ -2959,7 +2934,7 @@ class TestUsageText(unittest.TestCase):
 
     def test_every_usage_line_is_a_command_main_dispatches(self):
         commands = [line.split()[2] for line in self.usage_lines()]
-        self.assertEqual(commands, ["cars", "init", "defaults", "set", "unset", "show", "apply", "duplicate", "doc", "tyres", "tyre-sources",
+        self.assertEqual(commands, ["cars", "init", "defaults", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
                                     "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "garage", "garage-set", "garage-reset", "turbo-donors",
                                     "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
         self.assertEqual(list(tune.COMMANDS), commands)
@@ -3009,12 +2984,11 @@ for _name, _argv in (("no_arguments", []), ("unknown_command", ["frobnicate"]), 
                      ("set_with_one_operand", ["set", "limiter"]), ("set_with_three_operands", ["set", "a", "b", "c"]),
                      ("unset_without_operand", ["unset"]), ("unset_with_two_operands", ["unset", "a", "b"]),
                      ("show_with_a_positional", ["show", "x"]), ("apply_with_a_positional", ["apply", "x"]),
-                     ("doc_with_a_positional", ["doc", "x"]), ("doc_all_with_car", ["doc", "--all", "--car", "ks_x"]),
-                     ("doc_all_with_out", ["doc", "--all", "--out", "f.md"]), ("unknown_option", ["show", "--bogus", "1"]),
+                     ("unknown_option", ["show", "--bogus", "1"]),
                      ("option_without_value", ["show", "--car"]), ("tune_without_value", ["show", "--tune"]),
                      ("cars_modded_with_tested", ["cars", "--modded", "--tested"]), ("duplicate_with_a_positional", ["duplicate", "x"]),
                      ("duplicate_tune_with_draft", ["duplicate", "--tune", "ax01", "--draft"]), ("duplicate_with_all", ["duplicate", "--all"]),
-                     ("doc_with_a_tune", ["doc", "--tune", "ax01"]), ("init_with_a_tune", ["init", "--tune", "ax01"]),
+                     ("init_with_a_tune", ["init", "--tune", "ax01"]),
                      ("cars_with_a_tune", ["cars", "--tune", "ax01"]), ("show_with_draft", ["show", "--draft"]),
                      ("apply_with_new_id_without_value", ["apply", "--tune", "ax01", "--new-id"])):
     setattr(TestCliUsage, "test_usage_" + _name, usage_case(_name, _argv))

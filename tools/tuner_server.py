@@ -10,7 +10,7 @@ fixed base path /ACESCT: GET /ACESCT redirects (301) to /ACESCT/, GET / redirect
 outside /ACESCT/ is a 404. Next to the page, GET /ACESCT/<name> serves six static files of tuner/web from a fixed table
 (no other file, no directory access): apple-touch-icon.png, icon-192.png, icon-512.png, favicon.png (image/png),
 favicon.ico (image/x-icon) and manifest.webmanifest (application/manifest+json); they are the website icon of the page
-(browser tab, Add to Home Screen) and are made by tools/make_icons.py. The routes below are written without that prefix;
+(browser tab, Add to Home Screen). The routes below are written without that prefix;
 the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). A small JSON API:
   GET  /api/state       work folder, base car, game running, installed package, background job; every car of the game
                         (id, label, display_name, extracted, tested, new_id, installed) and the number of applicable and

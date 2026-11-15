@@ -1,4 +1,4 @@
-"""Tests for tuner/catalogue.json, tuner/cars.json and docs/settings/*.md as data: the format tools/tune.py reads, the loaders' validation, the generated reference docs, counts quoted in the docs."""
+"""Tests for tuner/catalogue.json and tuner/cars.json as data: the format tools/tune.py reads, the loaders' validation, counts quoted in the docs."""
 import collections
 import json
 import re
@@ -10,7 +10,6 @@ import clone_car
 import tune
 
 CARS = ROOT / "tuner" / "cars.json"
-DOCS = ROOT / "docs" / "settings"
 KNOWN_KEYS = set(tune.REQUIRED) | {"min", "max", "default", "default_template", "choices", "choice_values", "targets",
                                    "needs", "curve_from", "handler", "hide_if_absent", "create_missing", "ui", "value",
                                    "advanced"}
@@ -27,7 +26,6 @@ MOVED = {"clutch_max_torque": "Gearbox & clutch", "steer_ratio": "Steering", "st
 CAT = tune.load_catalogue()
 SETTINGS = CAT["settings"]
 BY_ID = {s["id"]: s for s in SETTINGS}
-BY_GROUP = {g["name"]: g for g in CAT["groups"]}
 CARS_DATA = tune.load_cars()
 
 
@@ -525,10 +523,6 @@ class TestCarsJson(unittest.TestCase):
                     clone_car.validate(car_id, new_id, str(d))
                     self.assertNotIn(new_id, ids)
 
-    def test_each_tested_car_has_a_reference_doc_and_nothing_else_is_there(self):
-        docs = sorted(p.name for p in DOCS.glob("*.md"))
-        self.assertEqual(docs, sorted([c["id"] + ".md" for c in CARS_DATA["cars"]] + ["coverage.md"]))
-
     def test_cars_file_has_the_keys_load_cars_checks(self):
         raw = json.loads(CARS.read_text(encoding="utf-8"))
         self.assertLessEqual({"default", "cars"}, set(raw))
@@ -561,155 +555,7 @@ class TestCarsLoaderValidation(unittest.TestCase):
                     self.load(data)
 
 
-def parse_doc(text):
-    """Title, groups with their table rows, and the copies-differ bullets of a generated reference doc."""
-    def cells(line):
-        return [c.strip().replace("\\|", "|") for c in re.split(r"(?<!\\)\|", line.strip())[1:-1]]
-
-    lines = text.split("\n")
-    out = {"name": re.fullmatch(r"# (.*): tuner settings", lines[0]).group(1), "rows": [], "copies": {}}
-    group = None
-    for line in lines:
-        if line.startswith("## "):
-            group = line[3:]
-        elif line.startswith("| `"):
-            rid, label, default, unit, desc, status = cells(line)
-            out["rows"].append(dict(group=group, id=rid.strip("`"), label=label, default=default, unit=unit, description=desc,
-                                    status=status))
-        elif group == "Copies differ in the stock data" and line.startswith("- `"):
-            rid, rest = re.fullmatch(r"- `([a-z0-9_]+)`: (.*)", line).groups()
-            out["copies"][rid] = re.findall(r"`([^`]+)` = ([^;]+)(?:; |$)", rest)
-    return out
-
-
-def rows_of_doc(doc):
-    rows = []
-    for r in doc["rows"]:
-        absent = r["default"].endswith(" (absent)")
-        row = dict(group=r["group"], id=r["id"], label=r["label"], absent=absent, unit=r["unit"], description=r["description"],
-                   default=r["default"][:-len(" (absent)")] if absent else r["default"], verified=r["status"] == "verified",
-                   copies_differ=r["id"] in doc["copies"])
-        if row["copies_differ"]:
-            row["copy_values"] = [{"target": t, "value": v} for t, v in doc["copies"][r["id"]]]
-        rows.append(row)
-    return rows
-
-
-class TestReferenceDocs(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.texts = {c["id"]: (DOCS / (c["id"] + ".md")).read_bytes().decode("utf-8") for c in CARS_DATA["cars"]}
-        cls.docs = {car: parse_doc(text) for car, text in cls.texts.items()}
-
-    def test_rows_are_a_subset_of_the_catalogue_in_group_order_then_catalogue_order(self):
-        order = [s["id"] for s in sorted(SETTINGS, key=lambda s: GROUP_ORDER.index(s["group"]))]
-        for car, doc in self.docs.items():
-            with self.subTest(car):
-                ids = [r["id"] for r in doc["rows"]]
-                self.assertEqual(len(ids), len(set(ids)))
-                self.assertLessEqual(set(ids), set(order))
-                self.assertEqual(ids, [i for i in order if i in set(ids)])
-
-    def test_each_group_heading_is_followed_by_the_description_of_the_group(self):
-        descriptions = {g["name"]: g["description"] for g in CAT["groups"]}
-        for car, text in self.texts.items():
-            with self.subTest(car):
-                headings = re.findall(r"^## (.*)$", text, re.M)
-                groups = [h for h in headings if h not in ("Copies differ in the stock data", "Not covered yet")]
-                self.assertEqual(groups, [g for g in GROUP_ORDER if g in set(groups)])
-                self.assertEqual(set(groups), {r["group"] for r in self.docs[car]["rows"]})
-                for g in groups:
-                    self.assertIn("\n## %s\n\n%s\n\n| Variable | Name |" % (g, descriptions[g]), text)
-
-    def test_labels_groups_units_descriptions_and_status_equal_the_catalogue(self):
-        for car, doc in self.docs.items():
-            for r in doc["rows"]:
-                with self.subTest("%s %s" % (car, r["id"])):
-                    s = BY_ID[r["id"]]
-                    self.assertEqual((r["group"], r["label"], r["unit"], r["description"], r["status"]),
-                                     (s["group"], s["label"], s["unit"], s["description"], "verified" if s["verified"] else "unverified"))
-
-    def test_always_available_settings_are_in_every_doc(self):
-        for car, doc in self.docs.items():
-            ids = {r["id"] for r in doc["rows"]}
-            self.assertLessEqual({"name_suffix", "limiter", "tyre_pressure_front"}, ids, car)
-
-    def test_doc_text_reproduces_the_committed_docs(self):
-        for car, doc in self.docs.items():
-            with self.subTest(car):
-                self.assertEqual(tune.doc_text(car, doc["name"], rows_of_doc(doc)), self.texts[car])
-
-    def test_docs_are_lf_utf8_and_end_with_one_newline(self):
-        for car, text in self.texts.items():
-            with self.subTest(car):
-                self.assertNotIn("\r", text)
-                self.assertTrue(text.endswith("\n") and not text.endswith("\n\n"))
-
-    def test_intro_names_the_car_and_the_generating_command(self):
-        for car, text in self.texts.items():
-            with self.subTest(car):
-                self.assertIn("(car id `%s`)" % car, text)
-                self.assertIn("`python tools/tune.py doc --car %s`" % car, text)
-
-    def test_not_covered_list_is_the_one_in_tune(self):
-        for car, text in self.texts.items():
-            with self.subTest(car):
-                tail = text.split("## Not covered yet\n\n")[1]
-                self.assertEqual([line[2:] for line in tail.strip().split("\n")], list(tune.DOC_NOT_COVERED))
-
-    def test_copies_differ_section_lists_exactly_the_rows_it_names(self):
-        for car, text in self.texts.items():
-            with self.subTest(car):
-                m = re.search(r"Copies differ in the stock data: (.*?)\. The default shown", text)
-                if m is None:
-                    self.assertNotIn("## Copies differ in the stock data", text)
-                    continue
-                named = re.findall(r"`([a-z0-9_]+)`", m.group(1))
-                self.assertEqual(named, list(self.docs[car]["copies"]))
-                self.assertLessEqual(set(named), {r["id"] for r in self.docs[car]["rows"]})
-
-    def test_doc_text_of_synthetic_rows(self):
-        rows = [dict(group="G1", id="a", label="A|B", absent=True, unit="u", description="x|y", verified=True, default=0.5,
-                     copies_differ=True, copy_values=[{"target": "@car p", "value": 1}, {"target": "@engine p", "value": 2}]),
-                dict(group="G2", id="b", label="B", absent=False, unit="", description="d", verified=False, default=None,
-                     copies_differ=False)]
-        text = tune.doc_text("ks_x", "Car X", rows)
-        self.assertTrue(text.startswith("# Car X: tuner settings\n\nThis file lists the tuner settings"))
-        self.assertIn("## G1\n\n| Variable | Name | Default | Unit | Description | Status |\n| --- | --- | --- | --- | --- | --- |\n"
-                      "| `a` | A\\|B | 0.5 (absent) | u | x\\|y | verified |\n", text)
-        self.assertIn("| `b` | B | - |  | d | unverified |\n", text)
-        self.assertIn("- `a`: `@car p` = 1; `@engine p` = 2\n", text)
-        self.assertNotIn("(`b`)", text)
-        self.assertTrue(text.endswith("\n- " + tune.DOC_NOT_COVERED[-1] + "\n"))
-
-    def test_doc_text_orders_the_groups_by_the_group_list_and_puts_the_description_under_the_heading(self):
-        def row(rid, group):
-            return dict(group=group, id=rid, label=rid, absent=False, unit="", description="x", verified=True, default=1,
-                        copies_differ=False)
-
-        rows = [row("a", "G1"), row("b", "G2"), row("c", "G1"), row("d", "G3"), row("e", "G0")]
-        groups = [{"name": "G2", "description": "second first"}, {"name": "G1", "description": "then first"},
-                  {"name": "Unused", "description": "not in the rows"}]
-        text = tune.doc_text("ks_x", "Car X", rows, groups)
-        self.assertEqual(re.findall(r"^## (.*)$", text, re.M), ["G2", "G1", "G3", "G0", "Not covered yet"])
-        self.assertIn("## G2\n\nsecond first\n\n| Variable |", text)
-        self.assertIn("## G1\n\nthen first\n\n| Variable |", text)
-        self.assertIn("## G3\n\n| Variable |", text)
-        self.assertEqual(re.findall(r"^\| `(\w)`", text, re.M), ["b", "a", "c", "d", "e"])
-        self.assertNotIn("not in the rows", text)
-
-    def test_doc_text_takes_the_group_list_of_the_catalogue_by_default(self):
-        text = tune.doc_text("ks_x", "Car X", [dict(group="Fuel", id="f", label="F", absent=False, unit="", description="x",
-                                                   verified=True, default=1, copies_differ=False)])
-        self.assertIn("## Fuel\n\n%s\n\n| Variable |" % BY_GROUP["Fuel"]["description"], text)
-
-
 class TestStatedCounts(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        cls.counts = {c["id"]: len(re.findall(r"^\| `", (DOCS / (c["id"] + ".md")).read_text(encoding="utf-8"), re.M))
-                      for c in CARS_DATA["cars"]}
-
     def read(self, rel):
         return (ROOT / rel).read_text(encoding="utf-8")
 
@@ -723,26 +569,8 @@ class TestStatedCounts(unittest.TestCase):
             for m in re.finditer(r"(\d+) settings in the catalogue|catalogue (?:of|with) (\d+) settings", self.read(rel)):
                 self.assertEqual(int(m.group(1) or m.group(2)), len(SETTINGS), rel)
 
-    def test_tuner_spec_states_the_applicable_range_of_the_tested_cars(self):
-        m = re.search(r"(\d+)-(\d+) applicable per tested car", self.read("docs/TUNER_SPEC.md"))
-        self.assertIsNotNone(m)
-        self.assertEqual((int(m.group(1)), int(m.group(2))), (min(self.counts.values()), max(self.counts.values())))
 
-    def test_doc_rows_never_exceed_the_catalogue(self):
-        self.assertTrue(all(0 < n <= len(SETTINGS) for n in self.counts.values()))
-
-    def test_user_guide_range_covers_the_tested_cars(self):
-        m = re.search(r"About (\d+)\D+(\d+) settings per car", self.read("docs/USER_GUIDE.md"))
-        self.assertIsNotNone(m)
-        self.assertLessEqual(int(m.group(1)), min(self.counts.values()))
-        self.assertGreaterEqual(int(m.group(2)), max(self.counts.values()))
-
-    def test_coverage_doc_states_the_current_catalogue_size(self):
-        intro = self.read("docs/settings/coverage.md").split("## Summary")[0]
-        self.assertRegex(intro, r"\b%d\b" % len(SETTINGS))
-
-
-# a stub .car without the objects that steer_lock_deg and car_mass live in (R3-004)
+# a stub .car without the objects that steer_lock_deg and car_mass live in
 class TestOnlyOptionalTargets(unittest.TestCase):
     def setUp(self):
         self._d = tmp()

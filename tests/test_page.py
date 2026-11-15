@@ -157,7 +157,7 @@ class TestDomIds(unittest.TestCase):
                          "dialog-cancel"}
                         <= referenced_ids(), sorted(referenced_ids()))
 
-    # R4-026: no id may be left without a reader
+    # no id may be left without a reader
     def test_ids_nobody_references_are_only_the_known_ones(self):
         self.assertLessEqual(set(dom_ids()) - referenced_ids(), set())
 
@@ -391,13 +391,6 @@ class TestTexts(unittest.TestCase):
     def test_the_readme_is_short_and_links_to_the_user_guide(self):
         self.assertLessEqual(len(README.splitlines()), 60)
         self.assertIn("](USER_GUIDE.md)", README)
-
-    def test_the_readme_screenshot_is_a_jpeg_in_the_docs_folder(self):
-        m = re.search(r"!\[[^\]]*\]\((images/screenshot\.jpg)\)", README)
-        self.assertIsNotNone(m)
-        shot = ROOT / "docs" / m.group(1)
-        self.assertTrue(shot.is_file(), shot)
-        self.assertEqual(shot.read_bytes()[:3], b"\xff\xd8\xff")
 
     def test_the_readme_has_dropped_the_tested_cars_and_the_modded_car_passages(self):
         self.assertNotIn("Tested cars:", README)
@@ -799,7 +792,6 @@ class TestBaseRangeColumn(unittest.TestCase):
 
 
 class TestPolling(unittest.TestCase):
-    # R4-023
     def test_a_hidden_tab_polls_slowly_and_refreshes_at_once_when_shown(self):
         poll_hidden, poll_idle = (int(re.search(r"^const %s = (\d+);" % k, CODE, re.M).group(1)) for k in ("POLL_HIDDEN_MS", "POLL_IDLE_MS"))
         self.assertGreater(poll_hidden, poll_idle)
@@ -809,7 +801,7 @@ class TestPolling(unittest.TestCase):
 
 
 class TestJobRunning(unittest.TestCase):
-    # R4-001 (page part): no edits while a job runs, the server answers them with 409 anyway
+    # page part: no edits while a job runs, the server answers them with 409 anyway
     def test_the_value_fields_and_reset_buttons_are_disabled_while_a_job_runs(self):
         body = function_body("renderButtons")
         self.assertIn('const running = !!info && info.job.state === "running";', body)
@@ -824,7 +816,6 @@ class TestJobRunning(unittest.TestCase):
         self.assertIn("setMsg(r, e.message, \"err\")", function_body("sendSet"))
         self.assertIn("setMsg(r, e.message, \"err\")", function_body("sendUnset"))
 
-    # R4-002 (page part)
     def test_the_progress_panel_warns_not_to_close_the_console_while_a_job_runs(self):
         body = function_body("renderProgress")
         note = body.index("Do not close the console window while this runs.")
@@ -2289,12 +2280,12 @@ class TestStartBat(unittest.TestCase):
         self.assertIn("exit /b 1", BAT)
         self.assertIn("pause", BAT)
 
-    # R4-006: the browser is opened after a fixed delay (ping -n 3 is about 2 s), not when the server listens
+    # the browser is opened after a fixed delay (ping -n 3 is about 2 s), not when the server listens
     def test_the_browser_is_opened_after_a_fixed_two_second_delay(self):
         self.assertRegex(BAT, r'start "" /min cmd /c "ping -n 3 127\.0\.0\.1 >nul & start http://127\.0\.0\.1:(?:\d+|%PORT%)/ACESCT/"')
         self.assertIn("http://127.0.0.1:%PORT%" + ts.BASE_PATH + "/", BAT)
 
-    # R4-007: the game package is passed on only when the user set GAME in the file
+    # the game package is passed on only when the user set GAME in the file
     def test_the_game_package_is_optional_and_passed_on_only_when_set(self):
         self.assertIn('set "GAME="', BAT)
         self.assertIn("if defined GAME (", BAT)

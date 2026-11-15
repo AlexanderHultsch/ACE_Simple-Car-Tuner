@@ -11,6 +11,7 @@ import ntpath
 import os
 import re
 import shutil
+import struct
 import sys
 import threading
 import time
@@ -491,7 +492,7 @@ class TestStaticFiles(ServerCase):
                      "/ACESCT//icon-192.png", "/ACESCT/%69con-192.png", "/ACESCT/icon-192.png%00", "/ACESCT/..%2ficon-192.png",
                      "/ACESCT/../tuner/web/icon-192.png", "/ACESCT/icons/icon-192.png", "/ACESCT/manifest.json", "/ACESCT/favicon.svg",
                      "/ACESCT/icon-180.png", "/ACESCT/web/icon-192.png", "/ACESCT/icon-192.png.bak", "/ACESCT/index.html",
-                     "/ACESCT/make_icons.py", "/icon-192.png", "/favicon.ico", "/manifest.webmanifest", "/apple-touch-icon.png"):
+                     "/ACESCT/tune.py", "/icon-192.png", "/favicon.ico", "/manifest.webmanifest", "/apple-touch-icon.png"):
             with self.subTest(path):
                 r = self.get(path, prefix=False)
                 self.assertEqual((r.status, r.json), (404, {"error": "not found"}))
@@ -523,6 +524,42 @@ class TestStaticFiles(ServerCase):
     def test_the_page_is_still_html_and_json_is_still_json(self):
         self.assertEqual(self.get("/").headers.get("Content-Type"), "text/html; charset=utf-8")
         self.assertEqual(self.get("/api/nothing").headers.get("Content-Type"), "application/json; charset=utf-8")
+
+
+ICON_SIZES = {"apple-touch-icon.png": 180, "icon-192.png": 192, "icon-512.png": 512, "favicon.png": 32}
+
+
+def png_header(data):
+    """(width, height, bit depth, colour type) of a PNG whose first chunk after the signature is IHDR."""
+    assert data[:8] == b"\x89PNG\r\n\x1a\n", "signature"
+    length, kind = struct.unpack(">I4s", data[8:16])
+    assert (length, kind) == (13, b"IHDR"), (length, kind)
+    width, height, depth, colour = struct.unpack(">IIBB", data[16:26])
+    return width, height, depth, colour
+
+
+class TestIconFiles(unittest.TestCase):
+    WEB = ROOT / "tuner" / "web"
+
+    def test_each_png_has_the_signature_and_an_ihdr_of_its_size_in_8_bit_rgb(self):
+        for name, size in ICON_SIZES.items():
+            with self.subTest(name):
+                self.assertEqual(png_header((self.WEB / name).read_bytes()), (size, size, 8, 2))
+
+    def test_the_ico_has_the_header_of_one_image_that_is_a_32_pixel_png(self):
+        ico = (self.WEB / "favicon.ico").read_bytes()
+        self.assertEqual(ico[:6], b"\x00\x00\x01\x00\x01\x00")
+        width, height = ico[6], ico[7]
+        size, offset = struct.unpack("<II", ico[14:22])
+        self.assertEqual((width, height), (32, 32))
+        self.assertEqual(offset + size, len(ico))
+        self.assertEqual(png_header(ico[offset:offset + size]), (32, 32, 8, 2))
+
+    def test_the_manifest_is_json_and_names_the_two_app_icons(self):
+        manifest = json.loads((self.WEB / "manifest.webmanifest").read_text(encoding="utf-8"))
+        sources = [icon["src"] for icon in manifest["icons"]]
+        self.assertIn("icon-192.png", sources)
+        self.assertIn("icon-512.png", sources)
 
 
 class ForeignHandler(ts.Handler):

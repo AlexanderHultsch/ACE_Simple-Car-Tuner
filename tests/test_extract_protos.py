@@ -521,7 +521,7 @@ class Main(unittest.TestCase):
             self.assertLessEqual({p.name for p in work.iterdir()}, {"out", "x.exe"})
             self.assertFalse((d / "esc_out.proto").exists())
 
-    # R1-013: every descriptor used to be parsed 5 times per run (scan, dedupe, sort_deps, render, self-check)
+    # every descriptor used to be parsed 5 times per run (scan, dedupe, sort_deps, render, self-check)
     def test_each_descriptor_blob_is_parsed_once_per_run(self):
         blobs = [simple_file(f"f{i}.proto", deps=[f"f{i - 1}.proto"] if i else []) for i in range(8)]
         with tmp() as d:

@@ -2659,7 +2659,8 @@ class TestApply(CarCase):
         with open(self.snapshot_file(), encoding="utf-8") as f:
             record = json.load(f)
         self.assertRegex(record.pop("time"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
-        self.assertEqual(record, {"version": 1, "settings": {"limiter": 8000, "f": 1.5}, "kit": None, "garage": None, "sounds": {}, "name": "Car X MY"})
+        self.assertEqual(record, {"version": 1, "settings": {"limiter": 8000, "f": 1.5}, "kit": None, "garage": None, "sounds": {}, "name": "Car X MY",
+                                  "changes": res["changes"]})
         self.assertEqual(sorted(os.listdir(os.path.dirname(self.snapshot_file()))), ["ax_x.json"])
 
     def test_the_changes_are_json_text_without_nan_and_the_applied_list_stays_the_full_list(self):
@@ -2812,6 +2813,41 @@ class TestApply(CarCase):
         self.apply(self.settings(), {"name_suffix": "_Z"})
         with open(self.snapshot_file(), encoding="utf-8") as f:
             self.assertEqual(json.load(f)["name"], "Car X _Z")
+
+    def test_the_snapshot_holds_the_changes_of_its_build_as_json(self):
+        s = self.settings(limiter())
+        for state in ({"limiter": 8000}, {"limiter": 9000}, {}):
+            res = self.apply(s, state)
+            with open(self.snapshot_file(), encoding="utf-8") as f:
+                saved = json.load(f)
+            self.assertEqual(saved["changes"], res["changes"])
+            self.assertEqual(json.loads(json.dumps(saved["changes"], allow_nan=False)), res["changes"])
+            self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["changes"], res["changes"])
+        self.assertEqual(res["changes"]["settings"], [{"id": "limiter", "from": 9000, "to": 7000}])
+
+    def test_a_snapshot_without_changes_is_a_valid_previous_build(self):
+        s = self.settings(limiter())
+        self.apply(s, {"limiter": 8000})
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            older = json.load(f)
+        del older["changes"]
+        self.write(self.snapshot_file(), older)
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x"), older)
+        res = self.apply(s, {"limiter": 9000})
+        self.assertEqual(res["changes"], {"since": "last build", "total": 1, "extras": [], "settings": [{"id": "limiter", "from": 8000, "to": 9000}]})
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["changes"], res["changes"])
+
+    def test_the_changes_stored_in_the_previous_snapshot_do_not_touch_the_delta(self):
+        s = self.settings(limiter())
+        first = self.apply(s, {"limiter": 8000})
+        with open(self.snapshot_file(), encoding="utf-8") as f:
+            stored = json.load(f)
+        want = {"since": "last build", "total": 1, "extras": [], "settings": [{"id": "limiter", "from": 8000, "to": 9000}]}
+        for junk in (None, "text", [], {"since": "x", "settings": 5, "total": "many"}, first["changes"]):
+            with self.subTest(junk=junk):
+                self.write(self.snapshot_file(), dict(stored, changes=junk))
+                self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["changes"], junk)
+                self.assertEqual(self.apply(s, {"limiter": 9000})["changes"], want)
 
 
 RECORD_CAT = mini_catalogue(suffix(), mini_setting("limiter", type="int", targets=[("@engine", "limiter")]),
@@ -3026,6 +3062,15 @@ class TestSnapshotFile(Base):
                 self.assertIsNone(tune.load_snapshot(self.work, "ks_x", "ax01"))
         self.write(path, json.dumps(good), binary=False)
         self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), good)
+
+    def test_the_changes_key_is_optional_and_its_content_is_not_checked(self):
+        changes_of_a_build = {"since": None, "settings": [{"id": "f", "from": 0.5, "to": 1.5}], "extras": [], "total": 1}
+        for extra in ({}, {"changes": changes_of_a_build}, {"changes": None}, {"changes": "text"}, {"changes": [1, 2]}):
+            with self.subTest(extra=extra):
+                data = dict(record({"f": 1.5}), **extra)
+                self.assertTrue(tune.valid_snapshot(data))
+                tune.save_snapshot(self.work, "ks_x", "ax01", data)
+                self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax01"), data)
 
     def test_a_snapshot_with_a_utf8_bom_is_read(self):
         self.write(tune.snapshot_path(self.work, "ks_x", "ax01"), b"\xef\xbb\xbf" + json.dumps(record({"f": 1.5})).encode(), binary=True)

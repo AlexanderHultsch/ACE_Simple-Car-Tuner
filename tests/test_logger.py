@@ -17,7 +17,9 @@ from unittest import mock
 from support import ROOT, run_tool
 
 import ace_shm
+import clone_car
 import logconf
+import logfacts
 import logger
 import tune
 
@@ -794,10 +796,11 @@ def run_main(*args):
 
 
 class FakeLogger:
-    made, error = [], None
+    made, facts, error = [], [], None
 
-    def __init__(self, work, logs):
+    def __init__(self, work, logs, facts=None):
         FakeLogger.made.append((work, logs))
+        FakeLogger.facts.append(facts)
 
     def run(self):
         if FakeLogger.error:
@@ -806,7 +809,7 @@ class FakeLogger:
 
 class TestMain(unittest.TestCase):
     def setUp(self):
-        FakeLogger.made, FakeLogger.error = [], None
+        FakeLogger.made, FakeLogger.facts, FakeLogger.error = [], [], None
         patch = mock.patch.object(logger, "Logger", FakeLogger)
         patch.start()
         self.addCleanup(patch.stop)
@@ -819,13 +822,13 @@ class TestMain(unittest.TestCase):
         self.assertEqual(FakeLogger.made, [])
 
     def test_the_usage_block_is_the_paragraph_after_the_title(self):
-        self.assertTrue(USAGE.startswith("usage: python tools/logger.py [--work DIR] [--logs DIR]"), USAGE)
+        self.assertTrue(USAGE.startswith("usage: python tools/logger.py [--work DIR] [--mods DIR] [--logs DIR]"), USAGE)
         self.assertNotIn("\n\n", USAGE)
         self.assertNotIn("Waits until", USAGE)
 
     def test_help_and_wrong_arguments_print_the_usage_block_on_stdout_and_exit_2(self):
-        for args in (("-h",), ("--help",), ("--bogus",), ("--bogus", "x"), ("extra",), ("--work",), ("--logs",), ("--work", "a", "extra"),
-                     ("--port", "8080")):
+        for args in (("-h",), ("--help",), ("--bogus",), ("--bogus", "x"), ("extra",), ("--work",), ("--mods",), ("--logs",), ("--work", "a", "extra"),
+                     ("--mods", "a", "extra"), ("--port", "8080")):
             with self.subTest(args=args):
                 self.assert_usage(*args)
 
@@ -878,11 +881,73 @@ class TestMain(unittest.TestCase):
         self.assertEqual(code, "error: disk full")
         self.assertEqual(err, "")
 
-    def test_the_real_logger_is_built_with_the_two_folders_and_run(self):
-        with mock.patch.object(logger, "Logger") as cls:
-            code, out, err = run_main("--work", "w", "--logs", "l")
-        cls.assert_called_once_with(os.path.abspath("w"), os.path.abspath("l"))
+    def test_the_real_logger_is_built_with_the_two_folders_and_the_tuner_facts_and_run(self):
+        with mock.patch.object(logger, "Logger") as cls, mock.patch.object(logfacts, "make_facts") as make:
+            code, out, err = run_main("--work", "w", "--mods", "m", "--logs", "l")
+        make.assert_called_once_with(os.path.abspath("w"), os.path.abspath("m"))
+        cls.assert_called_once_with(os.path.abspath("w"), os.path.abspath("l"), facts=make.return_value)
         cls.return_value.run.assert_called_once_with()
+
+    def test_the_mods_option_is_expanded_made_absolute_and_goes_to_the_facts(self):
+        with mock.patch.dict(os.environ, {"ACET_LOG_VAR": os.path.abspath("scratch")}), mock.patch.object(os.path, "expandvars", ntpath.expandvars):
+            with mock.patch.object(logfacts, "make_facts") as make:
+                run_main("--mods", "%ACET_LOG_VAR%\\m")
+                run_main("--mods", os.path.join("rel", "m"))
+            want = os.path.abspath(ntpath.expandvars("%ACET_LOG_VAR%\\m"))
+        self.assertEqual([c.args[1] for c in make.call_args_list], [want, os.path.abspath(os.path.join("rel", "m"))])
+        self.assertNotIn("%", want)
+        self.assertEqual(FakeLogger.facts, [make.return_value] * 2)
+
+    def test_the_default_mods_folder_is_the_one_of_the_tuner(self):
+        with mock.patch.dict(os.environ, {"USERPROFILE": os.path.abspath("profile")}), mock.patch.object(os.path, "expandvars", ntpath.expandvars):
+            with mock.patch.object(logfacts, "make_facts") as make:
+                code, out, err = run_main()
+            expected = clone_car.expand(clone_car.DEFAULT_MODS)
+        self.assertEqual(code, 0)
+        self.assertEqual(make.call_args.args[1], expected)
+        self.assertEqual(os.path.basename(expected), "mods")
+        self.assertNotIn("%", expected)
+
+    def test_the_facts_of_the_logger_are_the_function_of_logfacts(self):
+        code, out, err = run_main("--work", "w", "--mods", "m")
+        [facts] = FakeLogger.facts
+        with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call, \
+                mock.patch.object(logfacts, "process_id", return_value=None):
+            self.assertEqual(facts("Some Car", {}), {"matched": False})
+        self.assertEqual(call.call_args.args, (os.path.abspath("w"), os.path.abspath("m"), "Some Car", None))
+
+    def test_an_unexpandable_mods_folder_is_an_error_line_before_anything_starts(self):
+        code, out, err = run_main("--mods", "%ACET_NO_SUCH_VAR%/m")
+        self.assertTrue(code.startswith("error: cannot expand the mods directory"), code)
+        self.assertEqual((out, FakeLogger.made), ("", []))
+        r = run_tool("logger.py", "--mods", "%ACET_NO_SUCH_VAR%/m")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertTrue(r.stderr.startswith("error: cannot expand the mods directory"), r.stderr)
+
+
+class TestConsole(unittest.TestCase):
+    def test_the_console_line_is_printed_with_a_flush(self):
+        with mock.patch("builtins.print") as printed:
+            logger.console("session started: x")
+        printed.assert_called_once_with("session started: x", flush=True)
+
+    def test_it_is_the_default_out_of_the_logger(self):
+        with tempfile.TemporaryDirectory() as d:
+            lg = logger.Logger(os.path.join(d, "w"), os.path.join(d, "l"))
+        self.assertIs(lg.out, logger.console)
+
+    def test_the_lines_reach_a_redirected_stdout_at_once(self):
+        class Pipe(io.StringIO):
+            flushed = 0
+
+            def flush(self):
+                Pipe.flushed += 1
+                super().flush()
+
+        pipe = Pipe()
+        with contextlib.redirect_stdout(pipe), tempfile.TemporaryDirectory() as d:
+            logger.Logger(os.path.join(d, "w"), os.path.join(d, "l")).out("waiting for the game ...")
+        self.assertEqual((pipe.getvalue(), Pipe.flushed), ("waiting for the game ...\n", 1))
 
 
 class TestStartBat(unittest.TestCase):
@@ -901,6 +966,7 @@ class TestStartBat(unittest.TestCase):
         self.assertRegex(BAT, r'"%PY%" -I tools\\logger\.py\r?\n')
         self.assertIn("--work", logger.__doc__)
         self.assertIn("--logs", logger.__doc__)
+        self.assertIn("--mods", logger.__doc__)
 
     def test_it_has_the_window_title(self):
         self.assertIn("title ACE Session Logger\n", BAT)

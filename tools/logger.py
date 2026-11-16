@@ -1,6 +1,6 @@
 r"""Session logger: reads the shared memory of Assetto Corsa EVO next to the game and writes one JSON Lines file per session.
 
-usage: python tools/logger.py [--work DIR] [--logs DIR]
+usage: python tools/logger.py [--work DIR] [--mods DIR] [--logs DIR]
   e.g. python tools/logger.py --logs D:\ace_logs
 
 Waits until the game is running, then writes one file logs/<date>_<time>_<car>.jsonl per session: a header (car, track, PC, software,
@@ -8,8 +8,12 @@ tuner facts), a static line (the once-only values of the ticked rows, read 2 s a
 not stand), sample lines at the rate of the choice (30 or 60 Hz, only the ticked channels, none while the game is paused) and an end
 line. A new file starts when the car, the track or the session changes, or when the game closes; Ctrl+C ends the open session.
 --work is the work folder (default %USERPROFILE%\ace_modded_cars_work; the choice of the Logging tab, log_config.json, is read from
-it when a session starts), --logs the folder of the session files (default: the folder logs of the repository). While it runs the
-logger writes <logs>/logger_status.json once a second and removes it when it stops. The game's memory is only read, never written.
+it when a session starts), --mods the mods folder of the game (default %USERPROFILE%\Saved Games\ACE\mods; only the file time of
+<id>.kspkg is read), --logs the folder of the session files (default: the folder logs of the repository). The "tuner" entry of the
+header (tools/logfacts.py) says which modded car of the tuner the game's car name is and holds its effective settings with their
+stock defaults, garage tyres, turbo kit, sounds, the data of its last build (snapshot, package file time, changes) and the start time
+of the game process; a car that is not found in the work folder has "matched": false and a reason. While it runs the logger writes
+<logs>/logger_status.json once a second and removes it when it stops. The game's memory is only read, never written.
 Wrong arguments print this usage block and exit 2; a runtime error prints "error: ..." on stderr and exits 1.
 
 Stdlib only.
@@ -29,6 +33,7 @@ import ace_shm  # noqa: E402
 import clone_car  # noqa: E402
 import kspkg  # noqa: E402
 import logconf  # noqa: E402
+import logfacts  # noqa: E402
 import tune  # noqa: E402
 
 LOGGER_VERSION = "1.0"
@@ -67,6 +72,10 @@ def no_facts(car, info):
     return {"matched": False}
 
 
+def console(text):
+    print(text, flush=True)
+
+
 class Session:
     def __init__(self, key, name, file, start, epoch, period, selection):
         self.key, self.name, self.file = key, name, file
@@ -85,7 +94,7 @@ class Logger:
     the tuner facts of the header; clock() is a monotonic time in seconds, wall() an aware local datetime, out(text) prints a line."""
 
     def __init__(self, work, logs, open_source=ace_shm.open_source, facts=None, clock=time.monotonic, wall=None,
-                 sleep=time.sleep, out=print, pid=None):
+                 sleep=time.sleep, out=console, pid=None):
         self.work, self.logs = work, logs
         self.open_source = open_source
         self.facts = facts or no_facts
@@ -290,6 +299,13 @@ def logs_dir(arg=None):
         raise ValueError("cannot expand the logs directory %r" % (arg or logconf.default_logs_dir())) from None
 
 
+def mods_dir(arg=None):
+    try:
+        return clone_car.expand(arg or clone_car.DEFAULT_MODS)
+    except ValueError:
+        raise ValueError("cannot expand the mods directory %r" % (arg or clone_car.DEFAULT_MODS)) from None
+
+
 def usage():
     print(__doc__.split("\n\n")[1])
     sys.exit(2)
@@ -298,16 +314,17 @@ def usage():
 def main(argv=None):
     args = sys.argv[1:] if argv is None else list(argv)
     try:
-        pos, opts = kspkg.parse_args(args, ("work", "logs"))
+        pos, opts = kspkg.parse_args(args, ("work", "mods", "logs"))
     except ValueError:
         usage()
     if pos:
         usage()
     try:
         work = tune.work_dir(opts.get("work"))
+        mods = mods_dir(opts.get("mods"))
         logs = logs_dir(opts.get("logs"))
         print("ACE session logger: waiting for the game (Ctrl+C stops); sessions go to %s" % logs, flush=True)
-        Logger(work, logs).run()
+        Logger(work, logs, facts=logfacts.make_facts(work, mods)).run()
     except (ValueError, OSError) as e:
         sys.exit("error: %s" % e)
 

@@ -95,8 +95,9 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           apply compares the build with <work>/<car>/snapshots/<new_id>.json, the record of the previous build = {"version": 1,
           "settings": {setting id: value} of the changed settings, "kit": null or {"donor", "label", "kind", "boost"}, "garage": null
           or {"keys": ticked tyres in order, "start"}, "sounds": {slot: option key} of the changed slots, "name", "time"}, then writes
-          the record of this build (--no-install builds too). A missing, unreadable, damaged or other-version record counts as no
-          previous build. The result key "changes" = {"since": "last build" or None (first build), "settings": [{id, from, to}] in
+          the record of this build (--no-install builds too) with the "changes" of this build added (the result key below; records of
+          older builds lack it and are valid without it, a reader ignores its content when comparing). A missing, unreadable, damaged
+          or other-version record counts as no previous build. The result key "changes" = {"since": "last build" or None (first build), "settings": [{id, from, to}] in
           catalogue order (a value set back to the default goes to the stock value), "extras": [{kind turbo_kit / garage / sound, slot
           (sound only), from, to, text}] for the turbo kit, the garage tyres and the sound slots, "total": the number of settings
           that differ from the stock car}; a first build lists everything compared to the stock car, every later one only the
@@ -1755,6 +1756,7 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     pkg = pack_build(work, new_id, part, out_dir)
     snapshot = make_snapshot(work, car_id, plan, applied, plan_name(car_id, plan, meta["name_suffix"]))
     changes = build_changes(load_snapshot(work, car_id, new_id), snapshot, cat, plan["rows"])
+    snapshot["changes"] = changes
     save_snapshot(work, car_id, new_id, snapshot)
     result = {"new_id": new_id, "tune": new_id, "name_suffix": meta["name_suffix"], "build_dir": out_dir, "package": pkg, "size": os.path.getsize(pkg),
               "applied": applied, "notes": notes, "sounds": changed_sounds, "changes": changes, "installed": None, "backup": None}

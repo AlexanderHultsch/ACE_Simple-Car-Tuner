@@ -6,7 +6,7 @@ This file lives in `docs/` (Alex's decision, 2026-11-13), so Claude Code does no
 
 - Read `docs/HANDOVER.md` first (state, rules, open questions), then `docs/TUNER_SPEC.md`. User guide: `docs/USER_GUIDE.md` (`docs/README.md` is the short GitHub overview).
 - Follow `docs/working-contract.md` for every coding session: a planner who writes no code delegates verified steps to executors; ask Alex when a decision is his.
-- Tools are stdlib-only Python 3.9+ in `tools/`: kspkg, extract_protos, car_json, clone_car, sounds, tune, tuner_server, refgraph (checks a build), bank_strings (prints strings of binary files). Tests: `python -m unittest discover -s tests` (runs in the cloud, needs no game data).
+- Tools are stdlib-only Python 3.9+ in `tools/`: kspkg, extract_protos, car_json, clone_car, sounds, tune, tuner_server, refgraph (checks a build), bank_strings (prints strings of binary files), ace_shm / logconf / logger / logfacts (the session logger, `start_logger.bat`; Windows only at run time, tests use synthetic memory). Tests: `python -m unittest discover -s tests` (runs in the cloud, needs no game data).
 - Edit car data only through `tools/car_json.py` (lossless); a setting changes every copy of a value.
 - Usage convention for all tools: usage block on stdout, exit code 2 (as `kspkg.py`); runtime errors as `error: ...` on stderr, exit 1.
 - Vendor data stays out of git: `schemas/`, the work folder, `*.kspkg`, game and SDK files. Test with scratch folders (`--work`, `--mods`); never touch the real work folder, mods folder or game folder.

@@ -13,6 +13,7 @@ Pick a car, change what matters to the way it drives, and take your own version 
 - **Your own tyres.** Create tyre compounds and choose which ones a car offers in the garage.
 - **A turbo for cars without one.** Give a car the turbo setup of another car and tune its boost (experimental, not tested in the game yet).
 - **Borrow sounds.** Give your car the turbo and backfire sound of any other car of the game (not heard in the game yet).
+- **See what the game really does.** A session logger records the values the game reports while you drive (camber, ride height, boost, brake bias and more) as a file an AI can compare with your settings (not tried with the game yet).
 - **Safe by design.** Every install keeps a backup of the previous version, so you can always go back.
 - **On your phone, too.** Open the tuner from your phone or tablet on the same Wi-Fi and add it to your iPhone home screen like an app.
 - **One double-click to start.** Run `start_tuner.bat` and the tuner opens in your browser.

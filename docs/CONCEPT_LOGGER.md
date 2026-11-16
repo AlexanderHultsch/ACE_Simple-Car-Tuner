@@ -1,6 +1,6 @@
-# Concept: Session Logger (draft for approval, 2026-11-16)
+# Concept: Session Logger (2026-11-16)
 
-Status: **draft, not built.** Decisions of the interview with Alex on 2026-11-16 are marked (A). Open points are in section 9.
+Status: **built on 2026-11-16 (packages 1 to 5), tested on synthetic memory only, never run against the real game.** The result is described in [TUNER_SPEC.md](TUNER_SPEC.md) section 4j; PC checks are HANDOVER rows 49 to 54. This document keeps the concept and the interview decisions marked (A). Differences between the concept and the build: the packages ran in the order 1, 2, 4, 3, 5; the `step()` of the logger waits 1 ms instead of 0 when a sample is due but no new physics packet came (no busy loop); in the game menu the status file says `waiting` with the file `null`; the static line is not gated on live status; a session whose game closed ends after the 5 s without new data. Open points are in section 9.
 
 ## 1. Purpose and scope
 

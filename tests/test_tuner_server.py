@@ -2068,7 +2068,7 @@ class TestLogConfigRoute(LogCase):
                          (200, "application/json; charset=utf-8", "no-store"))
         self.assertEqual(set(r.json), {"rate_hz", "rates", "groups"})
         self.assertEqual((r.json["rate_hz"], r.json["rates"]), (30, [30, 60]))
-        self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm"])
+        self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"])
         self.assertFalse(os.path.exists(self.config_file))
 
     def test_the_groups_are_the_tree_of_the_channel_table(self):
@@ -2094,7 +2094,7 @@ class TestLogConfigRoute(LogCase):
                 self.write(self.config_file, data)
                 r = self.get("/api/log_config")
                 self.assertEqual((r.status, r.json["rate_hz"]), (200, 30))
-                self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm"])
+                self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"])
 
     def test_set_saves_the_choice_and_answers_like_get(self):
         r = self.post("/api/log_config_set", self.valid())

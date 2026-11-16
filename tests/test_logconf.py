@@ -67,7 +67,7 @@ HINTS = {"Engine": ENGINE_HINT, "Gearbox & clutch": "gear, rpm, speed_kmh, wheel
          "Differential (hardware)": "wheel_speed, slip_ratio", "Steering": "steer, steer_deg, angular_vel",
          "Springs & anti-roll": SPRING_HINT, "Ride height & bump stops": "susp_travel, wheel_load", "Dampers": DAMPER_HINT,
          "Tyres": "slip_angle_deg, slip_ratio, wheel_load, acc_g, tyre_temp_core"}
-DEFAULT_ROWS = ["speed", "rpm"]
+DEFAULT_ROWS = ["speed", "rpm", "gas", "brake"]
 BEHAVIOUR = {"speed": ["speed_kmh"], "rpm": ["rpm"], "gear": ["gear"], "gas": ["gas"], "brake": ["brake"],
              "steering": ["steer", "steer_deg"], "g_forces": ["acc_g", "g_forces"],
              "rotation": ["angular_vel", "pitch_deg", "roll_deg", "heading_deg"], "wheel_load": ["wheel_load"],
@@ -199,7 +199,7 @@ class TestChannelTable(unittest.TestCase):
             for r in g["rows"]:
                 self.assertTrue(r["label"].strip() and r["description"].strip(), r["id"])
 
-    def test_the_default_is_set_per_row_and_only_speed_and_rpm_are_ticked_by_default(self):
+    def test_the_default_is_set_per_row_and_only_speed_rpm_gas_and_brake_are_ticked_by_default(self):
         for g in RAW["extra_groups"]:
             self.assertNotIn("default", g, g["id"])
             for r in g["rows"]:
@@ -402,14 +402,14 @@ class TestTickableIds(unittest.TestCase):
 class TestDefaultConfig(unittest.TestCase):
     def test_it_is_30_hz_with_the_rows_whose_default_is_true(self):
         config = logconf.default_config(CHAN)
-        self.assertEqual(config, {"version": 1, "rate_hz": 30, "ticked": ["behaviour.speed", "behaviour.rpm"]})
+        self.assertEqual(config, {"version": 1, "rate_hz": 30, "ticked": ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"]})
         self.assertFalse(any(i.startswith("car_state.") for i in config["ticked"]))
         logconf.validate_config(config, CHAN)
 
     def test_a_row_that_defaults_to_false_adds_nothing_and_the_ticked_rows_follow_the_table_order(self):
         chan = changed(lambda c: (row_of(c, "behaviour", "speed").update(default=False), row_of(c, "car_state", "turbo").update(default=True),
                                   row_of(c, "car_state", "brake_wear").update(default=True), row_of(c, "behaviour", "gas").update(default=True)))
-        self.assertEqual(logconf.default_config(chan)["ticked"], ["behaviour.rpm", "behaviour.gas", "car_state.turbo", "car_state.brake_wear"])
+        self.assertEqual(logconf.default_config(chan)["ticked"], ["behaviour.rpm", "behaviour.gas", "behaviour.brake", "car_state.turbo", "car_state.brake_wear"])
         self.assertEqual(logconf.default_config(chan)["ticked"], [i for i in logconf.tickable_ids(chan) if i in logconf.default_config(chan)["ticked"]])
 
     def test_a_table_without_a_default_row_ticks_nothing(self):
@@ -652,14 +652,17 @@ class TestTree(unittest.TestCase):
 
     def test_the_default_of_an_extra_row_is_the_default_of_the_table_and_not_the_ticked_state(self):
         groups = logconf.tree(CHAN, CAT, {"version": 1, "rate_hz": 30, "ticked": ["car_state.turbo"]})
-        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")], ["behaviour.speed", "behaviour.rpm"])
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")],
+                         ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"])
         chan = changed(lambda c: row_of(c, "car_state", "turbo").update(default=True))
         groups = logconf.tree(chan, CAT, self.config)
-        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")], ["behaviour.speed", "behaviour.rpm", "car_state.turbo"])
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")],
+                         ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake", "car_state.turbo"])
 
-    def test_the_default_config_ticks_speed_and_rpm_only(self):
+    def test_the_default_config_ticks_speed_rpm_gas_and_brake_only(self):
         groups = logconf.tree(CHAN, CAT, logconf.default_config(CHAN))
-        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r["ticked"]], ["behaviour.speed", "behaviour.rpm"])
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r["ticked"]],
+                         ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"])
 
     def test_the_display_order_does_not_change_the_order_of_the_tickable_ids_or_of_a_saved_choice(self):
         shown = [r["id"] for g in self.groups for r in g["rows"] if r["tickable"]]

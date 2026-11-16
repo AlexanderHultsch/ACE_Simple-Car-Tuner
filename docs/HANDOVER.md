@@ -49,6 +49,7 @@ docs/CLAUDE.md               project instructions for every coding session (not 
 docs/TUNER_SPEC.md           state of the project
 docs/HANDOVER.md             this file
 docs/CONCEPT_TURBO_SOUND.md  turbo sound study and its results
+docs/CONCEPT_LOGGER.md      session logger concept (draft, not built): shared memory -> JSONL for AI evaluation
 docs/working-contract.md     the working contract (planner, executors, executor contract)
 tools/                       kspkg, extract_protos, car_json, clone_car, sounds, tune, tuner_server, refgraph, bank_strings
 tests/                       unit tests (stdlib unittest, no game data needed): python -m unittest discover -s tests

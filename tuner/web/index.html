@@ -212,6 +212,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 .garage fieldset { min-width: 0; margin: 0 0 8px; padding: 0; border: 0; }
 .garage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 3px 0; }
 .garage-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.garage-row.off label { color: var(--color-text-muted); cursor: default; }
 .garage select {
   font: inherit; max-width: 100%; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
   background: var(--color-bg); color: var(--color-text);
@@ -242,6 +243,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   <div role="tablist" aria-label="Pages">
     <button id="tab-car" role="tab" type="button" aria-selected="true" aria-controls="panel-car" tabindex="0">Car Tuner</button>
     <button id="tab-tyres" role="tab" type="button" aria-selected="false" aria-controls="panel-tyres" tabindex="-1">Tyre Creator</button>
+    <button id="tab-logging" role="tab" type="button" aria-selected="false" aria-controls="panel-logging" tabindex="-1">Logging</button>
   </div>
 
   <div id="panel-car" role="tabpanel" aria-labelledby="tab-car">
@@ -440,6 +442,47 @@ button.reset { padding: 2px 8px; font-size: 12px; }
       </div>
     </section>
   </div>
+
+  <div id="panel-logging" role="tabpanel" aria-labelledby="tab-logging" hidden>
+    <section class="panel">
+      <h2>Session logging</h2>
+      <p>Choose what the logger records. Start start_logger.bat, then the game: a session file is written to the logs folder while the game runs. Your choices are saved at once and apply from the next session.</p>
+      <p id="log-status"></p>
+    </section>
+
+    <div class="toolbar">
+      <label class="carpick">Sample rate
+        <select id="log-rate" aria-label="Sample rate" disabled></select>
+      </label>
+      <button id="btn-log-all" type="button" disabled>Tick all</button>
+      <button id="btn-log-none" type="button" disabled>Clear all</button>
+    </div>
+
+    <p id="log-error" class="msg err" role="alert" hidden></p>
+    <div id="log-groups"></div>
+
+    <section class="panel">
+      <h2>Recent sessions</h2>
+      <div class="tablewrap">
+        <table>
+          <caption class="sr-only">Recent session files</caption>
+          <thead>
+            <tr>
+              <th scope="col">File</th>
+              <th scope="col">Car</th>
+              <th scope="col">Track</th>
+              <th scope="col">Duration</th>
+              <th scope="col">Samples</th>
+              <th scope="col">Size</th>
+              <th scope="col">Modified</th>
+            </tr>
+          </thead>
+          <tbody id="log-sessions"></tbody>
+        </table>
+        <div id="log-sessions-empty" class="empty" hidden>No session files yet.</div>
+      </div>
+    </section>
+  </div>
 </div>
 
 <script>
@@ -449,6 +492,7 @@ const DEBOUNCE_MS = 700;
 const POLL_BUSY_MS = 1500;
 const POLL_IDLE_MS = 5000;
 const POLL_HIDDEN_MS = 30000;
+const LOG_POLL_MS = 2000;
 const SELECTION_KEY = "tuner.selection";
 const DRAFT = "draft";
 
@@ -491,8 +535,8 @@ let dialog = null;
 let awaitCreated = null;
 // the tabs and their panels in the same order; the shown tab is the index activeTab. Panels are hidden, never removed,
 // so the Car Tuner keeps its state and its polling while the other tab is shown
-const tabs = [$("tab-car"), $("tab-tyres")];
-const panels = [$("panel-car"), $("panel-tyres")];
+const tabs = [$("tab-car"), $("tab-tyres"), $("tab-logging")];
+const panels = [$("panel-car"), $("panel-tyres"), $("panel-logging")];
 let activeTab = 0;
 // the Tyre Creator: the library and the game tyres it can start from as the server listed them last, the id of the
 // selected tyre (kept while another tab is shown) and the rows of its editor
@@ -539,6 +583,24 @@ let soundsOpen = false;
 let soundsError = "";
 let soundsSeq = 0;
 let soundsJobRunning = false;
+// the session logger: logData is the choice as the server answered last ({rate_hz, rates, groups}), null until it is loaded; the
+// ticks are changed in it at once and saved in the background (logPending counts the saves not answered yet, logQueue sends them
+// one at a time); logSeq counts the loads and the answers of writes, so that a slow load never replaces a newer answer;
+// logOpen holds the ids of the groups the user opened (every group starts collapsed); logBoxes are the checkboxes of the shown
+// groups; the status of the logger is polled every LOG_POLL_MS while the Logging tab is shown, logFile is the file it named
+// last and logStatusSeq counts the polls, so that a slow answer never replaces a newer one
+let logData = null;
+let logError = "";
+let logSeq = 0;
+let logPending = 0;
+let logQueue = Promise.resolve();
+const logOpen = new Set();
+let logBoxes = [];
+let logSessions = [];
+let logSessionsError = "";
+let logPollTimer = null;
+let logFile = null;
+let logStatusSeq = 0;
 
 function storedSelection() {
   const none = { car: null, tune: DRAFT };
@@ -2240,6 +2302,240 @@ function toggleSounds() {
   renderSoundsToggle();
 }
 
+/* ---------- logging ---------- */
+
+// seconds as m:ss
+function fmtDuration(seconds) {
+  if (typeof seconds !== "number") return "-";
+  const t = Math.floor(seconds);
+  return Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0");
+}
+
+function logStatusText(s) {
+  if (!s.running) return "Logger: not running";
+  if (s.state === "waiting") return "Logger: waiting for the game";
+  return "Logger: logging " + s.file + ", " + s.samples + " samples, " + fmtDuration(s.seconds);
+}
+
+// a failing poll says so in the status line and never shows an error; a new file name (a session started or ended) reads the
+// session list again
+async function pollLogStatus() {
+  const seq = ++logStatusSeq;
+  let s;
+  try {
+    s = await api("/api/log_status", undefined, selection);
+  } catch (e) {
+    if (seq === logStatusSeq) $("log-status").textContent = "Logger: status unavailable";
+    return;
+  }
+  if (seq !== logStatusSeq) return;
+  $("log-status").textContent = logStatusText(s);
+  if (s.file !== logFile) {
+    logFile = s.file;
+    loadLogSessions();
+  }
+}
+
+function stopLogPoll() {
+  if (logPollTimer !== null) clearInterval(logPollTimer);
+  logPollTimer = null;
+}
+
+function startLogPoll() {
+  stopLogPoll();
+  pollLogStatus();
+  logPollTimer = setInterval(pollLogStatus, LOG_POLL_MS);
+}
+
+function renderLogLines() {
+  const text = logError || logSessionsError;
+  $("log-error").textContent = text;
+  $("log-error").hidden = text === "";
+}
+
+function renderLogSessions() {
+  const body = $("log-sessions");
+  body.replaceChildren();
+  for (const s of logSessions) {
+    const tr = el("tr");
+    const cells = [s.file, s.car || "-", s.track || "-", fmtDuration(s.duration_s), s.samples === null ? "-" : String(s.samples),
+      fmtBytes(s.size), new Date(s.modified * 1000).toLocaleString()];
+    for (const text of cells) tr.appendChild(el("td", "", text));
+    body.appendChild(tr);
+  }
+  $("log-sessions-empty").hidden = logSessions.length > 0;
+  renderLogLines();
+}
+
+async function loadLogSessions() {
+  try {
+    const res = await api("/api/log_sessions", undefined, selection);
+    logSessions = res.sessions;
+    logSessionsError = "";
+  } catch (e) {
+    logSessionsError = e.message;
+  }
+  renderLogSessions();
+}
+
+// "once: a, b | live: c, d": what the logger reads at the start of a session and in every sample
+function logChannelText(r) {
+  const parts = [];
+  if (r.once.length) parts.push("once: " + r.once.join(", "));
+  if (r.live.length) parts.push("live: " + r.live.join(", "));
+  return parts.join(" | ");
+}
+
+// a row of a setting or of an extra group; a greyed row has no box in logBoxes
+function buildLogRow(r) {
+  const row = el("div", "garage-row");
+  if (!r.tickable) row.classList.add("off");
+  const label = el("label");
+  const input = el("input");
+  input.type = "checkbox";
+  input.checked = r.ticked;
+  input.disabled = !r.tickable;
+  label.append(input, el("span", "", r.label));
+  row.appendChild(label);
+  if (r.unit) row.appendChild(el("span", "unit", r.unit));
+  if (r.tickable) {
+    logBoxes.push({ key: r.id, input: input, rows: [r] });
+    const text = logChannelText(r);
+    if (text) row.appendChild(el("span", "unit", text));
+  } else {
+    row.appendChild(el("span", "badge", r.status === "indirect" ? "effect only" : "not published"));
+    if (r.note) row.appendChild(el("span", "unit", r.note));
+  }
+  return row;
+}
+
+// the box in the summary is checked when every tickable row is ticked, indeterminate when some are
+function buildLogGroup(g) {
+  const details = el("details", "panel");
+  details.open = logOpen.has(g.id);
+  details.addEventListener("toggle", () => {
+    if (details.open) logOpen.add(g.id);
+    else logOpen.delete(g.id);
+  });
+  const tickable = g.rows.filter((r) => r.tickable);
+  const ticked = tickable.filter((r) => r.ticked).length;
+  const input = el("input");
+  input.type = "checkbox";
+  input.checked = tickable.length > 0 && ticked === tickable.length;
+  input.indeterminate = ticked > 0 && ticked < tickable.length;
+  input.disabled = tickable.length === 0;
+  input.setAttribute("aria-label", "Tick all of " + g.name);
+  logBoxes.push({ key: "group:" + g.id, input: input, rows: tickable });
+  const summary = el("summary");
+  summary.append(input, " ", el("span", "gname", g.name), " ", el("span", "gcount unit", "(" + ticked + " of " + tickable.length + " ticked)"));
+  details.appendChild(summary);
+  if (g.description) details.appendChild(el("p", "garage-help", g.description));
+  for (const r of g.rows) details.appendChild(buildLogRow(r));
+  return details;
+}
+
+function renderLogControls() {
+  const select = $("log-rate");
+  select.replaceChildren();
+  for (const rate of logData ? logData.rates : []) {
+    const o = el("option", "", rate + " Hz");
+    o.value = String(rate);
+    select.appendChild(o);
+  }
+  if (logData) select.value = String(logData.rate_hz);
+  select.disabled = !logData;
+  $("btn-log-all").disabled = !logData;
+  $("btn-log-none").disabled = !logData;
+}
+
+// the groups are drawn from logData; the focus stays on the box the user changed
+function renderLog() {
+  const focused = logBoxes.find((b) => b.input === document.activeElement);
+  const box = $("log-groups");
+  box.replaceChildren();
+  logBoxes = [];
+  for (const g of logData ? logData.groups : []) box.appendChild(buildLogGroup(g));
+  renderLogControls();
+  renderLogLines();
+  const back = focused && logBoxes.find((b) => b.key === focused.key);
+  if (back) back.input.focus();
+}
+
+async function loadLog() {
+  const seq = ++logSeq;
+  try {
+    const res = await api("/api/log_config", undefined, selection);
+    if (seq !== logSeq || logPending > 0) return;
+    logData = res;
+    logError = "";
+  } catch (e) {
+    if (seq !== logSeq || logPending > 0) return;
+    logData = null;
+    logError = e.message;
+  }
+  renderLog();
+}
+
+// the answer of a write carries the choice of the server, which wins over what the page showed
+function showLog(answer) {
+  logSeq += 1;
+  logData = answer;
+  logError = "";
+  renderLog();
+}
+
+// a failed write: the choice is read again and the message of the write stays above the groups
+async function logFailed(e) {
+  await loadLog();
+  logError = e.message;
+  renderLogLines();
+}
+
+async function sendLogSet(ticked, rate) {
+  try {
+    const res = await api("/api/log_config_set", { ticked: ticked, rate_hz: rate }, selection);
+    logPending -= 1;
+    if (logPending === 0) showLog(res);
+  } catch (e) {
+    logPending -= 1;
+    await logFailed(e);
+  }
+}
+
+// the ticks were changed in logData already: they are saved in the order of the groups, one save after the other
+function saveLog() {
+  logError = "";
+  renderLog();
+  const ticked = logData.groups.flatMap((g) => g.rows).filter((r) => r.tickable && r.ticked).map((r) => r.id);
+  const rate = logData.rate_hz;
+  logSeq += 1;
+  logPending += 1;
+  logQueue = logQueue.then(() => sendLogSet(ticked, rate));
+}
+
+function logChanged(ev) {
+  const box = logBoxes.find((b) => b.input === ev.target);
+  if (!box) return;
+  for (const r of box.rows) r.ticked = box.input.checked;
+  saveLog();
+}
+
+function setAllLog(on) {
+  if (!logData) return;
+  for (const g of logData.groups) {
+    for (const r of g.rows) {
+      if (r.tickable) r.ticked = on;
+    }
+  }
+  saveLog();
+}
+
+function logRateChanged() {
+  if (!logData) return;
+  logData.rate_hz = Number($("log-rate").value);
+  saveLog();
+}
+
 /* ---------- tabs ---------- */
 
 function selectTab(i) {
@@ -2253,6 +2549,13 @@ function selectTab(i) {
   if (tabs[i] === $("tab-car")) loadGarage();
   if (tabs[i] === $("tab-car")) loadTurbo();
   if (tabs[i] === $("tab-car")) loadSounds();
+  if (tabs[i] === $("tab-logging")) {
+    loadLog();
+    loadLogSessions();
+    startLogPoll();
+  } else {
+    stopLogPoll();
+  }
 }
 
 function tabKey(ev) {
@@ -2302,6 +2605,10 @@ $("btn-garage-reset").addEventListener("click", resetGarage);
 $("sounds-toggle").addEventListener("click", toggleSounds);
 $("sounds").addEventListener("change", soundChanged);
 $("btn-sound-reset").addEventListener("click", resetSounds);
+$("log-rate").addEventListener("change", logRateChanged);
+$("btn-log-all").addEventListener("click", () => setAllLog(true));
+$("btn-log-none").addEventListener("click", () => setAllLog(false));
+$("log-groups").addEventListener("change", logChanged);
 $("search").addEventListener("input", applyFilter);
 $("changed-only").addEventListener("change", applyFilter);
 $("show-advanced").addEventListener("change", () => {

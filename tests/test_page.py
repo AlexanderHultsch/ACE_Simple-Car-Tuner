@@ -256,7 +256,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 27, calls)
+        self.assertEqual(len(calls), 31, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -417,7 +417,8 @@ class TestTexts(unittest.TestCase):
     def test_the_tables_have_the_documented_columns_in_order(self):
         heads = [h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', MARKUP)]
         self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description",
-                                 "Variable name", "Value", "Default (source tyre)", "Description"])
+                                 "Variable name", "Value", "Default (source tyre)", "Description",
+                                 "File", "Car", "Track", "Duration", "Samples", "Size", "Modified"])
 
     def test_both_default_headers_break_the_line_directly_before_the_opening_bracket(self):
         heads = re.findall(r'<th scope="col">(Default.*?)</th>', MARKUP)
@@ -1208,29 +1209,29 @@ class TestModdedCars(unittest.TestCase):
 
 class TestTabs(unittest.TestCase):
     CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
-    TYRES_PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):]
+    TYRES_PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]
     TAB_RULE = re.search(r'button\[role="tab"\] \{(.*?)\}', STYLE, re.S).group(1)
 
     @staticmethod
     def tag(ident):
         return re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % ident, MARKUP).group(0)
 
-    def test_the_tabs_are_a_tablist_of_two_buttons_with_the_two_labels(self):
+    def test_the_tabs_are_a_tablist_of_three_buttons_with_the_three_labels(self):
         self.assertEqual(re.findall(r'<div role="tablist" aria-label="Pages">', MARKUP), ['<div role="tablist" aria-label="Pages">'])
         strip = re.search(r'<div role="tablist".*?</div>', MARKUP, re.S).group(0)
         tabs = re.findall(r'<button\b[^>]*>.*?</button>', strip, re.S)
-        self.assertEqual(len(tabs), 2)
-        for tab, ident, label in zip(tabs, ("tab-car", "tab-tyres"), ("Car Tuner", "Tyre Creator")):
+        self.assertEqual(len(tabs), 3)
+        for tab, ident, label in zip(tabs, ("tab-car", "tab-tyres", "tab-logging"), ("Car Tuner", "Tyre Creator", "Logging")):
             with self.subTest(ident):
                 self.assertIn('id="%s"' % ident, tab)
                 self.assertIn('role="tab"', tab)
                 self.assertIn('type="button"', tab)
                 self.assertTrue(tab.endswith(">%s</button>" % label), tab)
-        self.assertEqual(MARKUP.count('role="tab"'), 2)
+        self.assertEqual(MARKUP.count('role="tab"'), 3)
 
-    def test_the_two_panels_are_tabpanels_labelled_by_their_tabs(self):
-        self.assertEqual(MARKUP.count('role="tabpanel"'), 2)
-        for tab, panel in (("tab-car", "panel-car"), ("tab-tyres", "panel-tyres")):
+    def test_the_three_panels_are_tabpanels_labelled_by_their_tabs(self):
+        self.assertEqual(MARKUP.count('role="tabpanel"'), 3)
+        for tab, panel in (("tab-car", "panel-car"), ("tab-tyres", "panel-tyres"), ("tab-logging", "panel-logging")):
             with self.subTest(tab):
                 self.assertIn('aria-controls="%s"' % panel, self.tag(tab))
                 self.assertIn('role="tabpanel"', self.tag(panel))
@@ -1238,7 +1239,7 @@ class TestTabs(unittest.TestCase):
 
     def test_every_aria_controls_and_labelledby_of_the_tabs_names_an_existing_id(self):
         ids = set(dom_ids())
-        for ident in ("tab-car", "tab-tyres", "panel-car", "panel-tyres"):
+        for ident in ("tab-car", "tab-tyres", "tab-logging", "panel-car", "panel-tyres", "panel-logging"):
             with self.subTest(ident):
                 tag = self.tag(ident)
                 for target in re.findall(r'aria-(?:controls|labelledby)="([^"]+)"', tag):
@@ -1249,11 +1250,14 @@ class TestTabs(unittest.TestCase):
         self.assertIn('tabindex="0"', self.tag("tab-car"))
         self.assertIn('aria-selected="false"', self.tag("tab-tyres"))
         self.assertIn('tabindex="-1"', self.tag("tab-tyres"))
+        self.assertIn('aria-selected="false"', self.tag("tab-logging"))
+        self.assertIn('tabindex="-1"', self.tag("tab-logging"))
         self.assertEqual(MARKUP.count('aria-selected="true"'), 1)
 
-    def test_the_inactive_panel_is_hidden_and_the_active_one_is_not(self):
+    def test_the_inactive_panels_are_hidden_and_the_active_one_is_not(self):
         self.assertNotRegex(self.tag("panel-car"), r"\bhidden\b")
         self.assertRegex(self.tag("panel-tyres"), r"\bhidden>$")
+        self.assertRegex(self.tag("panel-logging"), r"\bhidden>$")
 
     def test_the_car_tuner_elements_are_inside_the_car_panel(self):
         for ident in ("car-select", "btn-apply", "btn-duplicate", "dialog", "name-host", "untested", "status",
@@ -1274,6 +1278,7 @@ class TestTabs(unittest.TestCase):
         self.assertLess(MARKUP.index("</header>"), MARKUP.index('role="tablist"'))
         self.assertLess(MARKUP.index('role="tablist"'), MARKUP.index('id="panel-car"'))
         self.assertLess(MARKUP.index('id="panel-car"'), MARKUP.index('id="panel-tyres"'))
+        self.assertLess(MARKUP.index('id="panel-tyres"'), MARKUP.index('id="panel-logging"'))
 
     def test_the_script_selects_a_tab_by_flipping_aria_selected_tabindex_and_hidden_without_removing_anything(self):
         body = function_body("selectTab")
@@ -1283,8 +1288,8 @@ class TestTabs(unittest.TestCase):
         self.assertIn("activeTab = i;", body)
         for sink in ("remove", "replaceChildren", "localStorage", "aria-live", "role"):
             self.assertNotIn(sink, body)
-        self.assertRegex(CODE, r'(?m)^const tabs = \[\$\("tab-car"\), \$\("tab-tyres"\)\];')
-        self.assertRegex(CODE, r'(?m)^const panels = \[\$\("panel-car"\), \$\("panel-tyres"\)\];')
+        self.assertRegex(CODE, r'(?m)^const tabs = \[\$\("tab-car"\), \$\("tab-tyres"\), \$\("tab-logging"\)\];')
+        self.assertRegex(CODE, r'(?m)^const panels = \[\$\("panel-car"\), \$\("panel-tyres"\), \$\("panel-logging"\)\];')
         self.assertRegex(CODE, r"(?m)^let activeTab = 0;")
 
     def test_the_script_handles_click_and_the_four_keys_with_wrap_around_and_moves_the_focus(self):
@@ -1332,7 +1337,7 @@ class TestTabs(unittest.TestCase):
 
 
 class TestTyreCreator(unittest.TestCase):
-    PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):]
+    PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]
 
     @staticmethod
     def tag(ident):
@@ -1425,7 +1430,7 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn('if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);', body)
         self.assertIn("renderTyreControls();", function_body("renderButtons"))
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Tt]yre", CODE), [])
-        self.assertEqual(len(re.findall(r"setInterval\(", CODE)), 0)
+        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
 
     def test_the_rows_are_loaded_when_a_tyre_is_selected_and_after_a_source_change_or_a_reset(self):
         self.assertIn('$("tyre-select").addEventListener("change", selectTyre);', CODE)
@@ -1683,7 +1688,7 @@ class TestGarage(unittest.TestCase):
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
-        self.assertEqual(len(re.findall(r"setInterval\(", CODE)), 0)
+        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Gg]arage", CODE), [])
 
     def test_a_change_posts_the_ticked_keys_in_the_order_of_the_choices_through_the_shared_queue(self):
@@ -1935,7 +1940,7 @@ class TestTurboKit(unittest.TestCase):
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
-        self.assertEqual(len(re.findall(r"setInterval\(", CODE)), 0)
+        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Tt]urbo", CODE), [])
 
     def test_a_change_posts_the_donor_or_the_reset_through_the_shared_queue(self):
@@ -2178,7 +2183,7 @@ class TestSounds(unittest.TestCase):
         # Reset all reads the settings again, and that reads the garage, the kit and the sounds again
         self.assertIn("await loadSettings();", function_body("resetAll"))
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Ss]ound", CODE), [])
-        self.assertEqual(len(re.findall(r"setInterval\(", CODE)), 0)
+        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
 
     def test_a_change_posts_the_slot_and_the_key_or_null_for_the_first_entry_through_the_shared_queue(self):
         self.assertIn('$("sounds").addEventListener("change", soundChanged);', CODE)
@@ -2311,6 +2316,309 @@ class TestSounds(unittest.TestCase):
         self.assertIn('el("option", ""', function_body("renderSounds"))
         self.PANEL.encode("ascii")
         "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
+
+
+class TestLogging(unittest.TestCase):
+    PANEL = MARKUP[MARKUP.index('id="panel-logging"'):]
+    FUNCTIONS = ("fmtDuration", "logStatusText", "pollLogStatus", "stopLogPoll", "startLogPoll", "renderLogLines", "renderLogSessions",
+                 "loadLogSessions", "logChannelText", "buildLogRow", "buildLogGroup", "renderLogControls", "renderLog", "loadLog",
+                 "showLog", "logFailed", "sendLogSet", "saveLog", "logChanged", "setAllLog", "logRateChanged")
+
+    @staticmethod
+    def tag(ident):
+        return re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % ident, MARKUP).group(0)
+
+    def test_the_tab_is_the_third_button_and_the_panel_a_hidden_tabpanel_labelled_by_it_after_the_tyre_panel(self):
+        tab = self.tag("tab-logging")
+        for part in ('role="tab"', 'type="button"', 'aria-selected="false"', 'aria-controls="panel-logging"', 'tabindex="-1"'):
+            self.assertIn(part, tab)
+        self.assertLess(MARKUP.index('id="tab-tyres"'), MARKUP.index('id="tab-logging"'))
+        self.assertLess(MARKUP.index('id="tab-logging"'), MARKUP.index('id="panel-car"'))
+        panel = self.tag("panel-logging")
+        self.assertIn('role="tabpanel"', panel)
+        self.assertIn('aria-labelledby="tab-logging"', panel)
+        self.assertRegex(panel, r"\bhidden>$")
+        self.assertLess(MARKUP.index('id="panel-tyres"'), MARKUP.index('id="panel-logging"'))
+
+    def test_the_tab_keys_walk_over_all_tabs_whatever_their_number(self):
+        body = function_body("tabKey")
+        self.assertIn("% tabs.length", body)
+        self.assertNotRegex(body, r"% \d")
+        self.assertIn('ev.key === "End") next = tabs.length - 1;', body)
+
+    def test_selecting_the_tab_loads_the_choice_and_the_sessions_and_starts_the_poll_and_every_other_tab_stops_it(self):
+        body = function_body("selectTab")
+        self.assertRegex(body, r'if \(tabs\[i\] === \$\("tab-logging"\)\) \{\s*loadLog\(\);\s*loadLogSessions\(\);\s*startLogPoll\(\);\s*\} else \{\s*stopLogPoll\(\);\s*\}')
+
+    def test_the_status_is_polled_by_one_interval_in_a_variable_that_is_cleared_before_a_new_one_and_when_the_tab_is_left(self):
+        self.assertRegex(CODE, r"(?m)^const LOG_POLL_MS = 2000;")
+        self.assertRegex(CODE, r"(?m)^let logPollTimer = null;")
+        start = function_body("startLogPoll")
+        self.assertIn("logPollTimer = setInterval(pollLogStatus, LOG_POLL_MS);", start)
+        self.assertLess(start.index("stopLogPoll();"), start.index("setInterval("))
+        self.assertLess(start.index("pollLogStatus();"), start.index("setInterval("))
+        stop = function_body("stopLogPoll")
+        self.assertIn("if (logPollTimer !== null) clearInterval(logPollTimer);", stop)
+        self.assertIn("logPollTimer = null;", stop)
+        self.assertEqual(re.findall(r"setInterval\(", CODE), ["setInterval("])
+        self.assertEqual(len(re.findall(r"clearInterval\(", CODE)), 1)
+
+    def test_the_four_routes_are_called_with_the_selection_and_the_two_reads_have_no_body(self):
+        self.assertIn("/api/log_config", ts.GET_ROUTES)
+        self.assertIn("/api/log_sessions", ts.GET_ROUTES)
+        self.assertIn("/api/log_status", ts.GET_ROUTES)
+        self.assertIn("/api/log_config_set", ts.POST_ROUTES)
+        for route in ("/api/log_config", "/api/log_sessions", "/api/log_status"):
+            with self.subTest(route):
+                self.assertEqual(len(re.findall(r'await api\("%s", undefined, selection\);' % route, CODE)), 1)
+        self.assertEqual(len(re.findall(r'await api\("/api/log_config_set", \{ ticked: ticked, rate_hz: rate \}, selection\);', CODE)), 1)
+        self.assertIn('await api("/api/log_config", undefined, selection);', function_body("loadLog"))
+        self.assertIn('await api("/api/log_sessions", undefined, selection);', function_body("loadLogSessions"))
+        self.assertIn('await api("/api/log_status", undefined, selection);', function_body("pollLogStatus"))
+
+    def test_the_saved_payload_has_the_two_keys_of_the_server_and_the_ticked_ids_in_the_order_of_the_groups(self):
+        fields = set(re.findall(r"\b(\w+):", re.search(r'api\("/api/log_config_set", (\{[^}]*\})', CODE).group(1)))
+        self.assertEqual(fields, {"ticked", "rate_hz"})
+        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_log_config_set))))
+        body = function_body("saveLog")
+        self.assertIn("logData.groups.flatMap((g) => g.rows).filter((r) => r.tickable && r.ticked).map((r) => r.id)", body)
+        self.assertIn("const rate = logData.rate_hz;", body)
+        self.assertIn("logQueue = logQueue.then(() => sendLogSet(ticked, rate));", body)
+
+    def test_a_save_is_answered_by_the_server_state_when_it_was_the_last_one_and_a_failed_save_reads_it_again(self):
+        send = function_body("sendLogSet")
+        self.assertRegex(send, r"logPending -= 1;\s*if \(logPending === 0\) showLog\(res\);")
+        self.assertIn("await logFailed(e);", send)
+        show = function_body("showLog")
+        self.assertIn("logSeq += 1;", show)
+        self.assertIn("logData = answer;", show)
+        self.assertIn("renderLog();", show)
+        failed = function_body("logFailed")
+        self.assertLess(failed.index("await loadLog();"), failed.index("logError = e.message;"))
+        self.assertIn("renderLogLines();", failed)
+        load = function_body("loadLog")
+        self.assertEqual(load.count("if (seq !== logSeq || logPending > 0) return;"), 2)
+        self.assertIn("logData = res;", load)
+
+    def test_a_change_never_saves_in_a_loop(self):
+        self.assertIn('$("log-groups").addEventListener("change", logChanged);', CODE)
+        self.assertIn('$("log-rate").addEventListener("change", logRateChanged);', CODE)
+        self.assertEqual(len(re.findall(r"\bsaveLog\(\)", CODE)), 4)
+        for name in ("renderLog", "renderLogControls", "buildLogGroup", "buildLogRow", "showLog", "loadLog", "sendLogSet", "logFailed"):
+            with self.subTest(name):
+                self.assertNotIn("saveLog(", function_body(name))
+                self.assertNotIn("dispatchEvent", function_body(name))
+        self.assertEqual(len(re.findall(r"\bapi\(\"/api/log_config_set\"", CODE)), 1)
+
+    def test_the_heading_the_paragraph_and_the_status_line_are_in_the_panel(self):
+        self.assertIn("<h2>Session logging</h2>", self.PANEL)
+        self.assertIn("<p>Choose what the logger records. Start start_logger.bat, then the game: a session file is written to the logs "
+                      "folder while the game runs. Your choices are saved at once and apply from the next session.</p>", self.PANEL)
+        self.assertIn('<p id="log-status"></p>', self.PANEL)
+        self.assertLess(self.PANEL.index("<h2>Session logging</h2>"), self.PANEL.index('id="log-status"'))
+        self.assertLess(self.PANEL.index('id="log-status"'), self.PANEL.index('id="log-rate"'))
+        self.assertLess(self.PANEL.index('id="log-rate"'), self.PANEL.index('id="log-groups"'))
+        self.assertLess(self.PANEL.index('id="log-groups"'), self.PANEL.index("<h2>Recent sessions</h2>"))
+        self.assertNotIn("aria-live", self.PANEL)
+
+    def test_the_status_line_says_not_running_waiting_or_logging_with_the_file_the_samples_and_the_time(self):
+        body = function_body("logStatusText")
+        self.assertIn('if (!s.running) return "Logger: not running";', body)
+        self.assertIn('if (s.state === "waiting") return "Logger: waiting for the game";', body)
+        self.assertIn('"Logger: logging " + s.file + ", " + s.samples + " samples, " + fmtDuration(s.seconds)', body)
+        self.assertIn('$("log-status").textContent = logStatusText(s);', function_body("pollLogStatus"))
+
+    def test_a_failing_poll_says_status_unavailable_in_the_line_and_shows_no_error(self):
+        body = function_body("pollLogStatus")
+        self.assertIn('$("log-status").textContent = "Logger: status unavailable";', body)
+        self.assertNotIn("logError", body)
+        self.assertNotIn("logSessionsError", body)
+        self.assertNotIn("renderLogLines", body)
+        self.assertNotIn("e.message", body)
+        self.assertIn("if (seq !== logStatusSeq) return;", body)
+
+    def test_a_new_file_name_in_the_status_reads_the_session_list_again(self):
+        body = function_body("pollLogStatus")
+        self.assertRegex(body, r"if \(s\.file !== logFile\) \{\s*logFile = s\.file;\s*loadLogSessions\(\);\s*\}")
+        self.assertRegex(CODE, r"(?m)^let logFile = null;")
+
+    def test_the_time_is_shown_as_minutes_and_two_digit_seconds_and_a_missing_one_as_a_dash(self):
+        body = function_body("fmtDuration")
+        self.assertIn('if (typeof seconds !== "number") return "-";', body)
+        self.assertIn('Math.floor(t / 60) + ":" + String(t % 60).padStart(2, "0")', body)
+
+    def test_the_toolbar_has_the_rate_select_and_the_two_buttons_for_all_rows(self):
+        bar = re.search(r'<div class="toolbar">.*?</div>', self.PANEL, re.S).group(0)
+        self.assertRegex(bar, r'<label class="carpick">Sample rate\s*<select id="log-rate" aria-label="Sample rate" disabled></select>')
+        self.assertIn('<button id="btn-log-all" type="button" disabled>Tick all</button>', bar)
+        self.assertIn('<button id="btn-log-none" type="button" disabled>Clear all</button>', bar)
+        self.assertIn('$("btn-log-all").addEventListener("click", () => setAllLog(true));', CODE)
+        self.assertIn('$("btn-log-none").addEventListener("click", () => setAllLog(false));', CODE)
+        body = function_body("setAllLog")
+        self.assertIn("if (r.tickable) r.ticked = on;", body)
+        self.assertEqual(body.count("saveLog();"), 1)
+
+    def test_the_rate_options_come_from_the_rates_of_the_server_and_are_shown_as_hz(self):
+        body = function_body("renderLogControls")
+        self.assertIn("for (const rate of logData ? logData.rates : []) {", body)
+        self.assertIn('el("option", "", rate + " Hz")', body)
+        self.assertIn("o.value = String(rate);", body)
+        self.assertIn("if (logData) select.value = String(logData.rate_hz);", body)
+        self.assertIn("select.disabled = !logData;", body)
+        self.assertNotRegex(body, r"\b(?:30|60)\b")
+        self.assertIn("logData.rate_hz = Number($(\"log-rate\").value);", function_body("logRateChanged"))
+        self.assertEqual(ts.logconf.RATES, (30, 60))
+
+    def test_a_group_is_a_collapsed_details_with_a_summary_of_the_box_the_name_and_the_count(self):
+        body = function_body("buildLogGroup")
+        self.assertIn('const details = el("details", "panel");', body)
+        self.assertIn("details.open = logOpen.has(g.id);", body)
+        self.assertNotIn("open = true", body)
+        self.assertNotRegex(self.PANEL, r"\bopen\b")
+        self.assertNotIn("<details", MARKUP)
+        self.assertIn('summary.append(input, " ", el("span", "gname", g.name), " ", '
+                      'el("span", "gcount unit", "(" + ticked + " of " + tickable.length + " ticked)"));', body)
+        self.assertIn("details.appendChild(summary);", body)
+        self.assertLess(body.index("details.appendChild(summary);"), body.index("for (const r of g.rows) details.appendChild(buildLogRow(r));"))
+        self.assertIn('if (g.description) details.appendChild(el("p", "garage-help", g.description));', body)
+        self.assertRegex(CODE, r"(?m)^const logOpen = new Set\(\);")
+
+    def test_the_open_groups_are_remembered_by_id_across_the_redraw(self):
+        body = function_body("buildLogGroup")
+        self.assertIn('details.addEventListener("toggle", () => {', body)
+        self.assertRegex(body, r"if \(details\.open\) logOpen\.add\(g\.id\);\s*else logOpen\.delete\(g\.id\);")
+        self.assertNotIn("logOpen.clear", CODE)
+        self.assertNotIn("expanded", body)
+        self.assertEqual(len(re.findall(r"expanded\.clear\(\)", CODE)), 2)
+
+    def test_the_group_box_is_checked_when_all_rows_are_ticked_indeterminate_when_some_are_and_off_without_a_tickable_row(self):
+        body = function_body("buildLogGroup")
+        self.assertIn('const tickable = g.rows.filter((r) => r.tickable);', body)
+        self.assertIn("const ticked = tickable.filter((r) => r.ticked).length;", body)
+        self.assertIn('input.type = "checkbox";', body)
+        self.assertIn("input.checked = tickable.length > 0 && ticked === tickable.length;", body)
+        self.assertIn("input.indeterminate = ticked > 0 && ticked < tickable.length;", body)
+        self.assertIn("input.disabled = tickable.length === 0;", body)
+        self.assertIn('input.setAttribute("aria-label", "Tick all of " + g.name);', body)
+        self.assertIn('logBoxes.push({ key: "group:" + g.id, input: input, rows: tickable });', body)
+
+    def test_a_change_of_a_box_sets_all_its_rows_in_the_data_and_saves_once(self):
+        body = function_body("logChanged")
+        self.assertIn("const box = logBoxes.find((b) => b.input === ev.target);", body)
+        self.assertIn("if (!box) return;", body)
+        self.assertIn("for (const r of box.rows) r.ticked = box.input.checked;", body)
+        self.assertEqual(body.count("saveLog();"), 1)
+        save = function_body("saveLog")
+        self.assertLess(save.index("renderLog();"), save.index("logPending += 1;"))
+
+    def test_a_row_is_a_checkbox_in_a_label_ticked_from_the_server_and_greyed_and_disabled_when_it_is_not_tickable(self):
+        body = function_body("buildLogRow")
+        self.assertIn('const row = el("div", "garage-row");', body)
+        self.assertIn('if (!r.tickable) row.classList.add("off");', body)
+        self.assertIn('input.type = "checkbox";', body)
+        self.assertIn("input.checked = r.ticked;", body)
+        self.assertIn("input.disabled = !r.tickable;", body)
+        self.assertIn('label.append(input, el("span", "", r.label));', body)
+        self.assertIn('if (r.unit) row.appendChild(el("span", "unit", r.unit));', body)
+        self.assertRegex(STYLE, r"\.garage-row\.off label \{[^}]*color: var\(--color-text-muted\);")
+
+    def test_a_tickable_row_shows_once_and_live_channels_and_a_greyed_row_its_badge_and_note(self):
+        body = function_body("buildLogRow")
+        self.assertIn('logBoxes.push({ key: r.id, input: input, rows: [r] });', body)
+        self.assertLess(body.index("if (r.tickable) {"), body.index("} else {"))
+        tickable, greyed = body.split("} else {")
+        self.assertIn("logChannelText(r)", tickable)
+        self.assertNotIn("logBoxes", greyed)
+        self.assertIn('el("span", "badge", r.status === "indirect" ? "effect only" : "not published")', greyed)
+        self.assertIn('if (r.note) row.appendChild(el("span", "unit", r.note));', greyed)
+        text = function_body("logChannelText")
+        self.assertIn('if (r.once.length) parts.push("once: " + r.once.join(", "));', text)
+        self.assertIn('if (r.live.length) parts.push("live: " + r.live.join(", "));', text)
+        self.assertIn('return parts.join(" | ");', text)
+
+    def test_the_status_words_of_the_page_are_the_ones_the_server_sends(self):
+        self.assertEqual(ts.logconf.STATUSES, ("direct", "indirect", "none"))
+        self.assertEqual(set(ts.logconf.not_running()), {"running", "state", "file", "samples", "started", "seconds"})
+        self.assertEqual(ts.logconf.not_running()["state"], "not running")
+        self.assertIn('"waiting"', inspect.getsource(ts.logconf.logger_status))
+
+    def test_the_page_reads_only_fields_the_server_sends(self):
+        group_sent = quoted_words(ts.logconf.tree, ts.log_config_json)
+        status_sent = quoted_words(ts.logconf.not_running, ts.logconf.logger_status)
+        session_sent = quoted_words(ts.logconf.session_info)
+        self.assertEqual(sorted(set(re.findall(r"\blogData\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS))) - group_sent), [])
+        for name, pattern, sent in (("buildLogGroup", r"\bg\.(\w+)", group_sent), ("buildLogRow", r"\br\.(\w+)", group_sent),
+                                    ("logStatusText", r"\bs\.(\w+)", status_sent), ("pollLogStatus", r"\bs\.(\w+)", status_sent),
+                                    ("renderLogSessions", r"\bs\.(\w+)", session_sent)):
+            with self.subTest(name):
+                read = set(re.findall(pattern, function_body(name)))
+                self.assertTrue(read)
+                self.assertEqual(sorted(read - sent), [])
+        self.assertTrue({"file", "car", "track", "duration_s", "samples", "size", "modified"} <= set(re.findall(r"\bs\.(\w+)", function_body("renderLogSessions"))))
+        self.assertTrue({"rate_hz", "rates", "groups"} <= set(re.findall(r"\blogData\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS))))
+
+    def test_the_sessions_table_has_the_seven_columns_and_the_empty_text(self):
+        table = re.search(r"<table>.*?</table>", self.PANEL, re.S).group(0)
+        self.assertEqual(re.findall(r'<th scope="col">(.*?)</th>', table), ["File", "Car", "Track", "Duration", "Samples", "Size", "Modified"])
+        self.assertIn('<tbody id="log-sessions"></tbody>', table)
+        self.assertIn('<caption class="sr-only">Recent session files</caption>', table)
+        self.assertRegex(self.tag("log-sessions-empty"), r'class="empty" hidden>$')
+        self.assertIn('<div id="log-sessions-empty" class="empty" hidden>No session files yet.</div>', self.PANEL)
+        body = function_body("renderLogSessions")
+        self.assertIn('s.car || "-", s.track || "-", fmtDuration(s.duration_s)', body)
+        self.assertIn('s.samples === null ? "-" : String(s.samples)', body)
+        self.assertIn("fmtBytes(s.size)", body)
+        self.assertIn("new Date(s.modified * 1000).toLocaleString()", body)
+        self.assertIn('$("log-sessions-empty").hidden = logSessions.length > 0;', body)
+        self.assertIn("body.replaceChildren();", body)
+
+    def test_a_failed_load_of_the_sessions_or_the_choice_shows_in_the_error_line_of_the_panel(self):
+        self.assertIn('<p id="log-error" class="msg err" role="alert" hidden></p>', self.PANEL)
+        self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
+        body = function_body("renderLogLines")
+        self.assertIn('const text = logError || logSessionsError;', body)
+        self.assertIn('$("log-error").textContent = text;', body)
+        self.assertIn('$("log-error").hidden = text === "";', body)
+        self.assertIn("logSessionsError = e.message;", function_body("loadLogSessions"))
+        self.assertIn("logError = e.message;", function_body("loadLog"))
+        self.assertIn('logError = "";', function_body("saveLog"))
+
+    def test_the_logging_tab_ignores_the_jobs_and_the_car_tuner(self):
+        for name in self.FUNCTIONS:
+            with self.subTest(name):
+                body = function_body(name)
+                self.assertNotRegex(body, r"\binfo\b|\bjob\b|tableLoaded|queue = queue|activeTab")
+        for name in ("switchCar", "renderButtons", "refresh"):
+            with self.subTest(name):
+                self.assertNotRegex(function_body(name), r"\blog[A-Z]")
+
+    def test_the_choice_is_kept_in_the_page_only_and_the_boxes_get_their_focus_back_after_the_redraw(self):
+        self.assertEqual(CODE.count("localStorage"), 2)
+        body = function_body("renderLog")
+        self.assertIn("const focused = logBoxes.find((b) => b.input === document.activeElement);", body)
+        self.assertIn("const back = focused && logBoxes.find((b) => b.key === focused.key);", body)
+        self.assertIn("if (back) back.input.focus();", body)
+        self.assertIn("box.replaceChildren();", body)
+        self.assertIn("logBoxes = [];", body)
+
+    def test_the_text_of_the_panel_enters_the_page_as_text_and_the_markup_and_code_are_ascii(self):
+        for name in self.FUNCTIONS:
+            with self.subTest(name):
+                self.assertNotRegex(function_body(name), r"\.html\b|innerHTML")
+        for name in ("renderLogLines", "renderLogControls"):
+            with self.subTest(name):
+                self.assertTrue("textContent" in function_body(name) or 'el("option"' in function_body(name))
+        self.PANEL.encode("ascii")
+        "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
+
+    def test_the_panel_reuses_the_existing_styles_and_adds_the_one_for_greyed_rows(self):
+        for cls in ("panel", "toolbar", "carpick", "msg", "err", "empty", "tablewrap", "sr-only", "garage-row", "garage-help", "gname",
+                    "gcount", "unit", "badge", "off"):
+            with self.subTest(cls):
+                self.assertIn(cls, css_classes())
+                self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
+        self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)), {"panel", "toolbar", "carpick", "msg err", "tablewrap", "sr-only", "empty"})
+        self.assertIn(".panel summary { cursor: pointer; }", STYLE)
 
 
 class TestStartBat(unittest.TestCase):

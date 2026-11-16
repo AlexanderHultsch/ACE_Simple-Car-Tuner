@@ -1,7 +1,7 @@
 """Local web server of the tuner: serves the settings table and runs Apply through tools/tune.py.
 
 usage:
-  python tools/tuner_server.py [--port N] [--bind <address>] [--work <dir>] [--mods <dir>] [--game <content.kspkg>]
+  python tools/tuner_server.py [--port N] [--bind <address>] [--work <dir>] [--mods <dir>] [--logs <dir>] [--game <content.kspkg>]
 
 Serves tuner/web/index.html at http://127.0.0.1:<port>/ACESCT/ (default port 8080, allowed 1024 to 65535) and, from other
 devices of the home network, at http://<address of the PC>:<port>/ACESCT/; --bind <address> (default 0.0.0.0, all IPv4
@@ -89,7 +89,20 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         own sound removes the choice); answers the new sounds like GET /api/sounds
   POST /api/sound_reset {"slot": optional}                removes the choice of that slot, without "slot" of every slot; answers
                         the new sounds like GET /api/sounds
-The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so does /api/groups.
+  GET  /api/log_config  the choice of the session logger (tools/logconf.py): "rate_hz" (30 or 60), "rates" ([30, 60]) and "groups":
+                        the setting groups of the catalogue in display order (id "catalogue.<group name>", name, description, rows:
+                        id, label, unit, status direct / indirect / none, note, tickable, ticked, once, live), then the extra groups
+                        (id, name, description, default, rows: id "<group id>.<row id>", label, description, tickable, ticked,
+                        status "extra", note, once, live); only the direct settings and the extra rows are tickable; the choice is
+                        <work>/log_config.json, the default choice when it is missing or invalid
+  POST /api/log_config_set  {"ticked": [ids], "rate_hz": 30 | 60}   saves the choice (400, nothing written, for an unknown, greyed
+                        or doubled id or another rate); answers like GET /api/log_config
+  GET  /api/log_sessions  "sessions": the newest 20 session files of the logs folder (file, size, modified, car, track, duration_s,
+                        samples; the last four are null for a file without header or end line), newest first
+  GET  /api/log_status  whether the logger runs: running, state ("not running", "waiting" or "logging"), file, samples, started,
+                        seconds; read from <logs>/logger_status.json, "not running" when it is missing, damaged or older than 5 s
+The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the four
+log routes (the choice lives in the work folder, the sessions and the status in the logs folder).
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
 and without the game package only the tested cars of tuner/cars.json): the query parameter ?car=<id> on GET, the field
 "car" in the JSON body on POST (any other id is a 400 error). Without it the default car of tuner/cars.json is used.
@@ -109,8 +122,8 @@ needs the header X-Tuner: 1 and Content-Type application/json. One background jo
 next job starts. Apply refuses to run while AssettoCorsaEVO.exe is running.
 At start the server prints http://127.0.0.1:<port>/ACESCT/ and, unless --bind is 127.0.0.1, one line per private IPv4
 address of the PC: the address to open on the phone.
-<work> defaults to %USERPROFILE%\\ace_modded_cars_work, <mods> to %USERPROFILE%\\Saved Games\\ACE\\mods, <game> to the
-Steam default content.kspkg (see tune.py). Wrong arguments print the usage block and exit 2.
+<work> defaults to %USERPROFILE%\\ace_modded_cars_work, <mods> to %USERPROFILE%\\Saved Games\\ACE\\mods, <logs> to the folder
+logs of the repository (the session files of the logger), <game> to the Steam default content.kspkg (see tune.py). Wrong arguments print the usage block and exit 2.
 Ctrl+C while a job runs waits for it; a second Ctrl+C aborts it.
 
 Stdlib only.
@@ -131,6 +144,7 @@ import urllib.parse
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import clone_car  # noqa: E402
 import kspkg  # noqa: E402
+import logconf  # noqa: E402
 import tune  # noqa: E402
 
 INDEX = tune.REPO / "tuner" / "web" / "index.html"
@@ -151,7 +165,7 @@ ACCEPTED = ("/api/init", "/api/apply")
 # GET routes that take the raw query string as a third argument
 QUERY_ROUTES = ("/api/tyre",)
 
-CONFIG = {"port": DEFAULT_PORT, "work": None, "mods": None, "game": tune.DEFAULT_GAME}
+CONFIG = {"port": DEFAULT_PORT, "work": None, "mods": None, "logs": None, "game": tune.DEFAULT_GAME}
 JOB = {"kind": None, "state": "idle", "log": [], "result": None, "error": None, "thread": None}
 JOB_LOCK = threading.Lock()
 # STATE_LOCK serializes tune_state.json edits and row builds; JOB_LOCK guards the JOB dict (the job thread takes STATE_LOCK only to clear the draft)
@@ -181,6 +195,13 @@ def require_mods():
 def base_present(work, car):
     car_root = kspkg.long_path(tune.car_root_of(tune.base_dir(work, car), car))
     return os.path.isdir(car_root) and bool(os.listdir(car_root))
+
+
+def logs_dir():
+    try:
+        return clone_car.expand(CONFIG["logs"] or logconf.default_logs_dir())
+    except ValueError:
+        raise ValueError("cannot expand the logs directory %r" % (CONFIG["logs"] or logconf.default_logs_dir())) from None
 
 
 def require_base(work, car):
@@ -738,6 +759,35 @@ def api_sound_reset(car, body):
             raise ApiError(400, str(e)) from None
 
 
+def log_config_json(chan, config):
+    return {"rate_hz": config["rate_hz"], "rates": list(logconf.RATES), "groups": logconf.tree(chan, tune.load_catalogue(), config)}
+
+
+def api_log_config(car, tune_id):
+    chan = logconf.load_channels()
+    return log_config_json(chan, logconf.load_config(CONFIG["work"], chan))
+
+
+def api_log_config_set(car, body):
+    work, ticked, rate = CONFIG["work"], body.get("ticked"), body.get("rate_hz")
+    if not isinstance(ticked, list) or not all(isinstance(i, str) for i in ticked) or type(rate) is not int:
+        raise ApiError(400, "need ticked (a list of text) and rate_hz (a number)")
+    chan = logconf.load_channels()
+    try:
+        config = logconf.save_config(work, {"version": logconf.VERSION, "rate_hz": rate, "ticked": ticked}, chan)
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+    return log_config_json(chan, config)
+
+
+def api_log_sessions(car, tune_id):
+    return {"sessions": logconf.list_sessions(logs_dir())}
+
+
+def api_log_status(car, tune_id):
+    return logconf.logger_status(logs_dir())
+
+
 def request_car(value, query):
     if value is None:
         value = (urllib.parse.parse_qs(query).get("car") or [None])[0]
@@ -761,14 +811,15 @@ def request_tune(value, query, car):
 
 GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyres": api_tyres,
               "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
-              "/api/sounds": api_sounds}
+              "/api/sounds": api_sounds, "/api/log_config": api_log_config, "/api/log_sessions": api_log_sessions,
+              "/api/log_status": api_log_status}
 POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": api_reset_all,
                "/api/init": api_init, "/api/duplicate": api_duplicate,
                "/api/apply": api_apply, "/api/tyre_new": api_tyre_new, "/api/tyre_rename": api_tyre_rename,
                "/api/tyre_source": api_tyre_source, "/api/tyre_set": api_tyre_set, "/api/tyre_unset": api_tyre_unset,
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
                "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset,
-               "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset}
+               "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset, "/api/log_config_set": api_log_config_set}
 
 
 def private_ip(text):
@@ -983,7 +1034,7 @@ def wait_for_job():
 
 def main():
     try:
-        pos, opts = kspkg.parse_args(sys.argv[1:], ("port", "bind", "work", "mods", "game"))
+        pos, opts = kspkg.parse_args(sys.argv[1:], ("port", "bind", "work", "mods", "logs", "game"))
     except ValueError:
         usage()
     if pos:
@@ -991,8 +1042,9 @@ def main():
     try:
         tune.load_catalogue()
         port = parse_port(opts.get("port", str(DEFAULT_PORT)))
-        CONFIG.update(port=port, work=tune.work_dir(opts.get("work")), mods=opts.get("mods"),
+        CONFIG.update(port=port, work=tune.work_dir(opts.get("work")), mods=opts.get("mods"), logs=opts.get("logs"),
                       game=os.path.expandvars(opts.get("game", tune.DEFAULT_GAME)))
+        logs_dir()
         default_car = tune.load_cars()["default"]
         moved = tune.migrate_old_layout(CONFIG["work"], default_car)
         if moved:

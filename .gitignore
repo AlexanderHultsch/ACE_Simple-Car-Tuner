@@ -9,3 +9,4 @@ cars_index.json
 backups/
 *.kspkg.gz
 *.exe
+logs/

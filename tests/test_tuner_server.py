@@ -21,11 +21,13 @@ from unittest import mock
 from support import ROOT, FakeCar, mini_catalogue, mini_setting, run_tool, tmp
 
 import clone_car
+import logconf
 import tune
 import tuner_server as ts
 
 USAGE = ts.__doc__.split("\n\n")[1]
 REAL_GAME_RUNNING = ts.game_running
+REAL_CATALOGUE = tune.load_catalogue()
 GAME_ARGV = ["tasklist", "/FI", "IMAGENAME eq AssettoCorsaEVO.exe", "/NH", "/FO", "CSV"]
 STATE_KEYS = {"work", "car", "tune", "default_car", "cars", "base_present", "game_running", "installed", "stock_id_length",
               "default_new_id", "settings_applicable", "settings_hidden", "job", "modded", "default_tune_taken",
@@ -114,11 +116,11 @@ class Env(unittest.TestCase):
         cm = tmp()
         self.d = cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
-        self.work, self.mods = str(self.d / "work"), str(self.d / "mods")
+        self.work, self.mods, self.logs = str(self.d / "work"), str(self.d / "mods"), str(self.d / "logs")
         self.out, self.err = io.StringIO(), io.StringIO()
         self.patch(sys, "stdout", self.out)
         self.patch(sys, "stderr", self.err)
-        self.patch_dict(ts.CONFIG, {"port": 0, "work": self.work, "mods": self.mods})
+        self.patch_dict(ts.CONFIG, {"port": 0, "work": self.work, "mods": self.mods, "logs": self.logs})
         self.patch_dict(ts.JOB, {"kind": None, "state": "idle", "log": [], "result": None, "error": None})
         self.addCleanup(self.drain)
         self.game_up, self.gate, self.calls, self.errors = False, None, [], {}
@@ -270,10 +272,10 @@ class TestRoutes(ServerCase):
         self.make_car()
 
     def test_route_tables(self):
-        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/settings", "/api/sounds", "/api/state", "/api/turbo",
-                                                 "/api/tyre", "/api/tyres"])
+        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/log_config", "/api/log_sessions", "/api/log_status",
+                                                 "/api/settings", "/api/sounds", "/api/state", "/api/turbo", "/api/tyre", "/api/tyres"])
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
-                                                  "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
+                                                  "/api/log_config_set", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
                                                   "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
@@ -2025,6 +2027,318 @@ class TestGroupsRoute(TuneCase):
             r = self.get("/api/groups?id=soft&tune=draft")
         self.assertEqual((r.status, r.json, seen), (200, {"groups": []}, [("ks_x", "draft")]))
         self.assertNotIn("/api/groups", ts.QUERY_ROUTES)
+
+
+# -------------------------------------------------------------------------------------------------- session logger
+class LogCase(ServerCase):
+    """ServerCase with the real catalogue (the channel table is checked against it); the logs folder is a scratch folder (ts.CONFIG["logs"])."""
+
+    def setUp(self):
+        super().setUp()
+        self.patch(tune, "load_catalogue", lambda path=None: REAL_CATALOGUE)
+        self.config_file = logconf.config_path(self.work)
+        self.status_file = os.path.join(self.logs, "logger_status.json")
+
+    def groups(self, reply):
+        return {g["id"]: g for g in reply.json["groups"]}
+
+    def ticked(self, reply):
+        return [r["id"] for g in reply.json["groups"] for r in g["rows"] if r["ticked"]]
+
+    def session(self, name, mtime, car="ks_x"):
+        path = self.write(os.path.join(self.logs, name), json.dumps({"type": "header", "car": car, "track": "Imola"}) + "\n"
+                          + json.dumps({"type": "end", "duration_s": 5.5, "samples": 9}) + "\n")
+        os.utime(path, (mtime, mtime))
+
+
+class TestLogConfigRoute(LogCase):
+    """GET /api/log_config and POST /api/log_config_set: the choice of the logger, saved in <work>/log_config.json."""
+
+    def valid(self, **more):
+        return dict({"ticked": ["limiter", "behaviour.speed"], "rate_hz": 60}, **more)
+
+    def test_the_default_choice_when_there_is_no_file(self):
+        r = self.get("/api/log_config")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.headers.get("Cache-Control")),
+                         (200, "application/json; charset=utf-8", "no-store"))
+        self.assertEqual(set(r.json), {"rate_hz", "rates", "groups"})
+        self.assertEqual((r.json["rate_hz"], r.json["rates"]), (30, [30, 60]))
+        self.assertEqual(self.ticked(r), ["behaviour." + i for i in ("speed", "rpm", "gear", "gas", "brake", "steering", "g_forces", "rotation",
+                                                                       "wheel_load", "slip", "susp_travel", "tyre_temps", "brake_temp")])
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_the_groups_are_the_tree_of_the_channel_table(self):
+        r = self.get("/api/log_config")
+        chan = logconf.load_channels()
+        self.assertEqual(r.json["groups"], logconf.tree(chan, REAL_CATALOGUE, logconf.default_config(chan)))
+        ids = [g["id"] for g in r.json["groups"]]
+        self.assertEqual(ids[:-2], ["catalogue." + g["name"] for g in REAL_CATALOGUE["groups"]])
+        self.assertEqual(ids[-2:], ["behaviour", "car_state"])
+
+    def test_the_saved_choice_is_answered(self):
+        self.write(self.config_file, {"version": 1, "rate_hz": 60, "ticked": ["limiter", "car_state.turbo"]})
+        r = self.get("/api/log_config")
+        self.assertEqual((r.status, r.json["rate_hz"]), (200, 60))
+        self.assertEqual(self.ticked(r), ["limiter", "car_state.turbo"])
+
+    def test_a_damaged_or_invalid_file_answers_the_default_choice(self):
+        for data in ("{not json", json.dumps({"version": 1, "rate_hz": 45, "ticked": []}),
+                     json.dumps({"version": 1, "rate_hz": 60, "ticked": ["gear_1"]})):
+            with self.subTest(data):
+                self.write(self.config_file, data)
+                r = self.get("/api/log_config")
+                self.assertEqual((r.status, r.json["rate_hz"]), (200, 30))
+                self.assertEqual(len(self.ticked(r)), 13)
+
+    def test_set_saves_the_choice_and_answers_like_get(self):
+        r = self.post("/api/log_config_set", self.valid())
+        self.assertEqual((r.status, r.headers.get("Content-Type")), (200, "application/json; charset=utf-8"))
+        self.assertEqual(r.json["rate_hz"], 60)
+        self.assertEqual(self.ticked(r), ["limiter", "behaviour.speed"])
+        self.assertEqual(self.get("/api/log_config").json, r.json)
+        with open(self.config_file, encoding="utf-8") as f:
+            self.assertEqual(json.load(f), {"version": 1, "rate_hz": 60, "ticked": ["limiter", "behaviour.speed"]})
+
+    def test_set_with_nothing_ticked_is_a_valid_choice(self):
+        r = self.post("/api/log_config_set", {"ticked": [], "rate_hz": 30})
+        self.assertEqual((r.status, self.ticked(r)), (200, []))
+        self.assertEqual(self.ticked(self.get("/api/log_config")), [])
+
+    def test_set_normalises_the_order_and_a_later_set_replaces_the_choice(self):
+        self.post("/api/log_config_set", {"ticked": ["car_state.turbo", "behaviour.rpm", "fuel_start"], "rate_hz": 60})
+        self.assertEqual(self.ticked(self.get("/api/log_config")), ["fuel_start", "behaviour.rpm", "car_state.turbo"])
+        self.post("/api/log_config_set", {"ticked": ["limiter"], "rate_hz": 30})
+        r = self.get("/api/log_config")
+        self.assertEqual((r.json["rate_hz"], self.ticked(r)), (30, ["limiter"]))
+
+    def test_only_direct_settings_and_extra_rows_are_tickable_in_the_answer(self):
+        r = self.get("/api/log_config")
+        direct = [row["id"] for g in r.json["groups"][:-2] for row in g["rows"] if row["tickable"]]
+        self.assertEqual(len(direct), 29)
+        self.assertIn("limiter", direct)
+        self.assertNotIn("gear_1", direct)
+
+    def test_a_bad_body_is_a_400_and_writes_nothing(self):
+        bodies = [{}, {"ticked": []}, {"rate_hz": 30}, {"ticked": "limiter", "rate_hz": 30}, {"ticked": None, "rate_hz": 30},
+                  {"ticked": ["limiter", 5], "rate_hz": 30}, {"ticked": ["limiter"], "rate_hz": "30"}, {"ticked": ["limiter"], "rate_hz": True},
+                  {"ticked": ["limiter"], "rate_hz": 30.0}, {"ticked": ["limiter"], "rate_hz": 45}, {"ticked": ["limiter"], "rate_hz": 0},
+                  {"ticked": ["no_such_id"], "rate_hz": 30}, {"ticked": ["behaviour.nope"], "rate_hz": 30},
+                  {"ticked": ["gear_1"], "rate_hz": 30}, {"ticked": ["toe_front"], "rate_hz": 30}, {"ticked": ["limiter", "limiter"], "rate_hz": 30}]
+        for body in bodies:
+            with self.subTest(body):
+                r = self.post("/api/log_config_set", body)
+                self.assertEqual(r.status, 400)
+                self.assertEqual(set(r.json), {"error"})
+                self.assertIsInstance(r.json["error"], str)
+                self.assertFalse(os.path.exists(self.config_file))
+                self.assertFalse(os.path.exists(self.config_file + ".tmp"))
+
+    def test_the_error_names_an_unknown_greyed_or_doubled_id_and_a_bad_rate(self):
+        for ticked, rate, text in ((["no_such_id"], 30, "unknown id no_such_id"), (["gear_1"], 30, "gear_1 is greyed"),
+                                   (["limiter", "limiter"], 30, "limiter is ticked twice"), (["limiter"], 45, "rate_hz must be 30 or 60")):
+            with self.subTest(text):
+                r = self.post("/api/log_config_set", {"ticked": ticked, "rate_hz": rate})
+                self.assertEqual(r.status, 400)
+                self.assertIn(text, r.json["error"])
+
+    def test_a_bad_body_leaves_the_saved_choice_alone(self):
+        self.post("/api/log_config_set", self.valid())
+        with open(self.config_file, "rb") as f:
+            before = f.read()
+        self.assertEqual(self.post("/api/log_config_set", {"ticked": ["gear_1"], "rate_hz": 30}).status, 400)
+        with open(self.config_file, "rb") as f:
+            self.assertEqual(f.read(), before)
+
+    def test_malformed_bodies_are_the_usual_400_413_and_415(self):
+        self.assertEqual(self.post("/api/log_config_set", b"{not json").status, 400)
+        self.assertEqual(self.post("/api/log_config_set", b"[1]").status, 400)
+        self.assertEqual(self.request("POST", "/api/log_config_set", None, headers={"Content-Length": str(ts.MAX_BODY + 1)}).status, 413)
+        r = self.post("/api/log_config_set", self.valid(), headers={"Content-Type": "text/plain"})
+        self.assertEqual((r.status, r.json), (415, {"error": "Content-Type must be application/json"}))
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_the_header_rule_of_every_post_route(self):
+        r = self.post("/api/log_config_set", self.valid(), headers={"X-Tuner": None})
+        self.assertEqual((r.status, r.json), (403, {"error": "missing header X-Tuner: 1"}))
+        r = self.post("/api/log_config_set", self.valid(), headers={"X-Tuner": "0"})
+        self.assertEqual(r.status, 403)
+        r = self.post("/api/log_config_set", self.valid(), post_headers=False)
+        self.assertEqual(r.status, 403)
+        r = self.post("/api/log_config_set", self.valid(), host="evil.example")
+        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_methods_and_paths(self):
+        self.assertEqual(self.post("/api/log_config").status, 404)
+        self.assertEqual(self.get("/api/log_config_set").status, 404)
+        for method in ("PUT", "DELETE", "PATCH"):
+            for path in ("/api/log_config", "/api/log_config_set"):
+                with self.subTest((method, path)):
+                    r = self.request(method, path)
+                    self.assertEqual((r.status, r.json, r.headers.get("Allow")), (405, {"error": "method not allowed"}, "GET, POST"))
+        self.assertEqual(self.get("/api/log_config", host="evil.example").status, 403)
+
+    def test_it_needs_no_base_car_and_the_dispatcher_still_resolves_the_car_and_the_tune(self):
+        self.assertFalse(ts.base_present(self.work, "ks_y"))
+        self.assertEqual(self.get("/api/log_config?car=ks_y").status, 200)
+        self.assertEqual(self.post("/api/log_config_set", self.valid(car="ks_y")).status, 200)
+        r = self.get("/api/log_config?car=nope")
+        self.assertEqual(r.status, 400)
+        self.assertTrue(r.json["error"].startswith("unknown car"), r.json)
+        os.remove(self.config_file)
+        r = self.post("/api/log_config_set", self.valid(car="nope"))
+        self.assertEqual(r.status, 400)
+        self.assertFalse(os.path.exists(self.config_file))
+        r = self.get("/api/log_config?tune=nope")
+        self.assertEqual((r.status, r.json), (400, {"error": "unknown modded car nope of ks_x"}))
+
+    def test_the_choice_is_the_same_for_every_car_and_tune(self):
+        self.post("/api/log_config_set", self.valid())
+        for query in ("", "?car=ks_y", "?tune=draft", "?car=ks_x&tune=draft"):
+            with self.subTest(query):
+                self.assertEqual(self.ticked(self.get("/api/log_config" + query)), ["limiter", "behaviour.speed"])
+
+    def test_it_needs_neither_the_state_lock_nor_an_idle_job(self):
+        with ts.STATE_LOCK:
+            self.assertEqual(self.get("/api/log_config").status, 200)
+            self.assertEqual(self.post("/api/log_config_set", self.valid()).status, 200)
+        ts.JOB["state"] = "running"
+        self.assertEqual(self.get("/api/log_config").status, 200)
+        self.assertEqual(self.post("/api/log_config_set", self.valid(rate_hz=30)).status, 200)
+
+    def test_the_handlers_get_the_resolved_car_and_tune(self):
+        seen = []
+        with mock.patch.dict(ts.GET_ROUTES, {"/api/log_config": lambda car, tune_id: seen.append((car, tune_id)) or {"rate_hz": 30}}):
+            r = self.get("/api/log_config?tune=draft")
+        self.assertEqual((r.status, r.json, seen), (200, {"rate_hz": 30}, [("ks_x", "draft")]))
+        self.assertNotIn("/api/log_config", ts.QUERY_ROUTES)
+        self.assertNotIn("/api/log_config_set", ts.ACCEPTED)
+
+    def test_a_damaged_channel_table_is_a_500_with_the_text(self):
+        with mock.patch.object(logconf, "load_channels", side_effect=ValueError("log channels: broken")):
+            r = self.get("/api/log_config")
+            self.assertEqual((r.status, r.json), (500, {"error": "log channels: broken"}))
+            r = self.post("/api/log_config_set", self.valid())
+            self.assertEqual((r.status, r.json), (500, {"error": "log channels: broken"}))
+        self.assertFalse(os.path.exists(self.config_file))
+
+
+class TestLogSessionsRoute(LogCase):
+    """GET /api/log_sessions: the newest session files of the logs folder (--logs)."""
+
+    def test_a_missing_logs_folder_gives_an_empty_list(self):
+        r = self.get("/api/log_sessions")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"sessions": []}))
+
+    def test_the_sessions_come_newest_first_with_their_header_and_end_values(self):
+        self.session("a.jsonl", 1000, car="ks_a")
+        self.session("b.jsonl", 3000, car="ks_b")
+        self.session("c.jsonl", 2000, car="ks_c")
+        r = self.get("/api/log_sessions")
+        self.assertEqual([s["file"] for s in r.json["sessions"]], ["b.jsonl", "c.jsonl", "a.jsonl"])
+        self.assertEqual(set(r.json["sessions"][0]), {"file", "size", "modified", "car", "track", "duration_s", "samples"})
+        self.assertEqual(r.json["sessions"][0], dict(logconf.list_sessions(self.logs)[0]))
+        self.assertEqual((r.json["sessions"][0]["car"], r.json["sessions"][0]["track"], r.json["sessions"][0]["duration_s"],
+                          r.json["sessions"][0]["samples"], r.json["sessions"][0]["modified"]), ("ks_b", "Imola", 5.5, 9, 3000))
+
+    def test_only_the_newest_20_are_listed(self):
+        for i in range(23):
+            self.session("s%02d.jsonl" % i, 1000 + i)
+        sessions = self.get("/api/log_sessions").json["sessions"]
+        self.assertEqual((len(sessions), sessions[0]["file"], sessions[-1]["file"]), (20, "s22.jsonl", "s03.jsonl"))
+
+    def test_a_damaged_file_is_listed_with_empty_values(self):
+        self.write(os.path.join(self.logs, "bad.jsonl"), "{broken")
+        s, = self.get("/api/log_sessions").json["sessions"]
+        self.assertEqual((s["file"], s["car"], s["track"], s["duration_s"], s["samples"]), ("bad.jsonl", None, None, None, None))
+
+    def test_the_folder_is_the_logs_option_of_the_server(self):
+        other = str(self.d / "other_logs")
+        self.session("here.jsonl", 1000)
+        self.write(os.path.join(other, "there.jsonl"), "{}")
+        ts.CONFIG["logs"] = other
+        self.assertEqual([s["file"] for s in self.get("/api/log_sessions").json["sessions"]], ["there.jsonl"])
+
+    def test_it_needs_no_base_car_and_no_idle_job_and_writes_nothing(self):
+        ts.JOB["state"] = "running"
+        with ts.STATE_LOCK:
+            self.assertEqual(self.get("/api/log_sessions?car=ks_y").status, 200)
+        self.assertFalse(os.path.exists(self.logs))
+        self.assertEqual(self.get("/api/log_sessions?car=nope").status, 400)
+
+    def test_methods_and_paths(self):
+        self.assertEqual(self.post("/api/log_sessions").status, 404)
+        self.assertEqual(self.request("PUT", "/api/log_sessions").status, 405)
+        self.assertEqual(self.get("/api/log_sessions", host="evil.example").status, 403)
+
+
+class TestLogStatusRoute(LogCase):
+    """GET /api/log_status: whether the logger runs, from <logs>/logger_status.json."""
+    NOT_RUNNING = {"running": False, "state": "not running", "file": None, "samples": None, "started": None, "seconds": None}
+
+    def put(self, **more):
+        now = time.time()
+        data = dict({"state": "logging", "file": "x.jsonl", "samples": 40, "started": now - 20, "updated": now, "pid": 7}, **more)
+        self.write(self.status_file, data)
+
+    def test_no_file_is_not_running(self):
+        r = self.get("/api/log_status")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", self.NOT_RUNNING))
+
+    def test_a_fresh_logging_file_is_running(self):
+        self.put()
+        r = self.get("/api/log_status")
+        self.assertEqual(set(r.json), set(self.NOT_RUNNING))
+        self.assertEqual((r.json["running"], r.json["state"], r.json["file"], r.json["samples"]), (True, "logging", "x.jsonl", 40))
+        self.assertAlmostEqual(r.json["seconds"], 20, delta=5)
+
+    def test_a_fresh_waiting_file_is_running_without_seconds(self):
+        self.put(state="waiting", file=None, samples=0)
+        r = self.get("/api/log_status")
+        self.assertEqual((r.json["running"], r.json["state"], r.json["file"], r.json["seconds"]), (True, "waiting", None, None))
+
+    def test_a_file_older_than_5_seconds_is_not_running(self):
+        self.put(updated=time.time() - 30)
+        self.assertEqual(self.get("/api/log_status").json, self.NOT_RUNNING)
+
+    def test_a_damaged_file_is_not_running(self):
+        self.write(self.status_file, "{not json")
+        self.assertEqual(self.get("/api/log_status").json, self.NOT_RUNNING)
+
+    def test_the_file_is_read_from_the_logs_option_of_the_server(self):
+        other = str(self.d / "other_logs")
+        self.put()
+        ts.CONFIG["logs"] = other
+        self.assertEqual(self.get("/api/log_status").json, self.NOT_RUNNING)
+
+    def test_it_needs_no_base_car_and_writes_nothing(self):
+        self.assertEqual(self.get("/api/log_status?car=ks_y").status, 200)
+        self.assertFalse(os.path.exists(self.logs))
+        self.assertEqual(self.get("/api/log_status?tune=nope").status, 400)
+
+    def test_methods_and_paths(self):
+        self.assertEqual(self.post("/api/log_status").status, 404)
+        self.assertEqual(self.request("DELETE", "/api/log_status").status, 405)
+        self.assertEqual(self.get("/api/log_status", host="evil.example").status, 403)
+
+
+class TestLogsDir(Env):
+    def test_the_option_value_is_expanded_and_made_absolute(self):
+        ts.CONFIG["logs"] = os.path.join("rel", "logs")
+        self.assertEqual(ts.logs_dir(), os.path.abspath(os.path.join("rel", "logs")))
+        ts.CONFIG["logs"] = "%ACE_TEST_LOGS_VAR%/l"
+        with mock.patch.dict(os.environ, {"ACE_TEST_LOGS_VAR": "C:\\scratch" if os.name == "nt" else "/scratch"}):
+            self.assertEqual(ts.logs_dir(), os.path.abspath(os.path.expandvars("%ACE_TEST_LOGS_VAR%/l")))
+
+    def test_without_the_option_it_is_the_logs_folder_of_the_repository(self):
+        ts.CONFIG["logs"] = None
+        self.assertEqual(ts.logs_dir(), os.path.abspath(logconf.default_logs_dir()))
+        self.assertEqual(os.path.basename(ts.logs_dir()), "logs")
+
+    def test_an_unexpandable_folder_is_an_error(self):
+        ts.CONFIG["logs"] = "%ACE_TEST_NO_SUCH_VAR%/l"
+        with self.assertRaisesRegex(ValueError, "cannot expand the logs directory"):
+            ts.logs_dir()
 
 
 # -------------------------------------------------------------------------------------------------- tyre library and garage
@@ -4103,10 +4417,29 @@ class TestMain(Env):
         self.assertIn("base, tune_state.json", self.out.getvalue())
 
     def test_every_option_of_the_usage_block_is_accepted(self):
-        values = {"port": "8765", "bind": "127.0.0.1", "work": self.work, "mods": self.mods, "game": "game.kspkg"}
+        values = {"port": "8765", "bind": "127.0.0.1", "work": self.work, "mods": self.mods, "logs": self.logs, "game": "game.kspkg"}
         flags = re.findall(r"\[--(\w+) ", USAGE)
-        self.assertTrue({"port", "bind", "work", "mods"} <= set(flags), flags)
+        self.assertTrue({"port", "bind", "work", "mods", "logs"} <= set(flags), flags)
         self.assertIsNone(self.run_main(*[w for flag in flags for w in ("--" + flag, values[flag])]))
+
+    def test_the_logs_option_is_accepted_and_kept_in_the_config(self):
+        self.assertIsNone(self.run_main(*self.argv, "--logs", self.logs))
+        self.assertEqual(ts.CONFIG["logs"], self.logs)
+        self.assertEqual(ts.logs_dir(), os.path.abspath(self.logs))
+
+    def test_the_logs_folder_defaults_to_the_logs_folder_of_the_repository(self):
+        self.run_main(*self.argv)
+        self.assertIsNone(ts.CONFIG["logs"])
+        self.assertEqual(ts.logs_dir(), os.path.abspath(logconf.default_logs_dir()))
+
+    def test_the_logs_option_creates_nothing(self):
+        self.run_main(*self.argv, "--logs", self.logs)
+        self.assertFalse(os.path.exists(self.logs))
+
+    def test_an_unexpandable_logs_folder_is_an_error_line_before_the_server_is_created(self):
+        exit_text = self.run_main(*self.argv, "--logs", "%ACE_TEST_NO_SUCH_VAR%/l")
+        self.assertTrue(exit_text.startswith("error: cannot expand the logs directory"), exit_text)
+        self.assertEqual(StubServer.log, [])
 
     def test_the_game_option_is_accepted_and_kept_in_the_config(self):
         self.assertIsNone(self.run_main(*self.argv, "--game", "game.kspkg"))
@@ -4182,7 +4515,8 @@ class TestCli(unittest.TestCase):
 
 for _name, _argv in (("positional", ["foo"]), ("positional_after_options", ["--port", "8765", "foo"]),
                      ("unknown_option", ["--bogus", "1"]), ("help", ["--help"]), ("port_without_value", ["--port"]),
-                     ("work_without_value", ["--work"]), ("mods_without_value", ["--mods"]), ("bind_without_value", ["--bind"])):
+                     ("work_without_value", ["--work"]), ("mods_without_value", ["--mods"]), ("logs_without_value", ["--logs"]),
+                     ("bind_without_value", ["--bind"])):
     setattr(TestCli, "test_usage_" + _name, usage_case(_name, _argv))
 
 
@@ -4213,6 +4547,7 @@ class TestUsageText(unittest.TestCase):
         self.assertEqual(len(ts.__doc__.split("\n\n")[0].splitlines()), 1)
         self.assertTrue(USAGE.startswith("usage:\n  python tools/tuner_server.py [--port N]"), USAGE)
         self.assertIn("[--bind <address>]", USAGE)
+        self.assertIn("[--logs <dir>]", USAGE)
 
     def test_the_documented_defaults_match_the_code(self):
         self.assertIn("default port 8080", ts.__doc__)

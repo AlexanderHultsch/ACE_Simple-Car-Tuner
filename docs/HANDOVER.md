@@ -1,6 +1,6 @@
 # HANDOVER: continuing the work in a new session (local or cloud)
 
-Read this first in a new session (after `docs/CLAUDE.md`), then [TUNER_SPEC.md](TUNER_SPEC.md) (state of the project). User-facing usage is in [USER_GUIDE.md](USER_GUIDE.md) (the short GitHub overview is [README.md](README.md)). Owner: Alex (GitHub AlexanderHultsch). Last updated 2026-11-15.
+Read this first in a new session (after `docs/CLAUDE.md`), then [TUNER_SPEC.md](TUNER_SPEC.md) (state of the project). User-facing usage is in [USER_GUIDE.md](USER_GUIDE.md) (the short GitHub overview is [README.md](README.md)). Owner: Alex (GitHub AlexanderHultsch). Last updated 2026-11-16.
 
 ## 1. Start here
 
@@ -25,7 +25,7 @@ What exists (details in TUNER_SPEC): the table page (collapsible categories, def
 | Can do | everything: extract cars, build, install, read game logs, run the tuner page | code and docs work that needs only the repo; analysis of text files |
 | Cannot do | | extract from the game, create `schemas/` (git-ignored, regenerated locally), install, any test with real game files |
 
-State that lives only on the local PC and is not in git: `schemas/` (from the SDK Editor exe), the work folder `%USERPROFILE%\ace_modded_cars_work` (per car: `<car id>\base`, `build`, `tune_state.json`, `stock_info.json`, `draft_state.json`, `tunes\<id>\`; shared `backups\`, `stock_loc\`, `cars_index.json`, `ranges.json`, `tyres\<id>.json` = the tyre library), the installed packages in `Saved Games\ACE\mods\`, and the game logs. State files stay local and are never committed. To hand over to the cloud: commit and push first. To come back to the local PC: pull; re-run `tools\extract_protos.py` only if `schemas/` is missing.
+State that lives only on the local PC and is not in git: `schemas/` (from the SDK Editor exe), the work folder `%USERPROFILE%\ace_modded_cars_work` (per car: `<car id>\base`, `build`, `tune_state.json`, `stock_info.json`, `draft_state.json`, `tunes\<id>\`, `snapshots\<id>.json` = the record of each modded car's last build, used for the "changes since the last build" overview; shared `backups\`, `stock_loc\`, `cars_index.json`, `ranges.json`, `tyres\<id>.json` = the tyre library), the installed packages in `Saved Games\ACE\mods\`, and the game logs. State files stay local and are never committed. To hand over to the cloud: commit and push first. To come back to the local PC: pull; re-run `tools\extract_protos.py` only if `schemas/` is missing.
 
 Local setup: Python 3.12 (not on PATH): `%LOCALAPPDATA%\Programs\Python\Python312\python.exe`, run tools with `-I`. Git for Windows installed; commits use the GitHub noreply address. In PowerShell 5.1 pass multi-line commit messages through a file (`git commit -F`): quotes inside here-strings break the argument list. **Gotcha:** the Claude desktop app writes under `AppData\Local` into a private redirected folder that the user's own terminal cannot see; keep work data outside AppData (and outside OneDrive).
 

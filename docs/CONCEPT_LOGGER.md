@@ -29,6 +29,7 @@ The logger is a separate process (A: its own batch file). It uses the tuner's fu
 - **Only settings the game shows directly are tickable** (A, 2026-11-16). Indirect and invisible settings stay in the list, greyed and not tickable, with a note ("not published by the game", or "only its effect is visible: use the behaviour values").
 - Ticking a direct setting logs its once-only value and its live values (the channels listed for it in section 6). Nothing is logged that is not ticked. The time stamp `t` is always in every sample line.
 - One extra group at the end, "Behaviour values (not a tuner setting)", tickable row by row: speed, rpm, gear, gas, brake, steering, g-forces, yaw rate, pitch and roll, wheel load, slip angle and slip ratio, suspension travel, tyre temperatures, brake temperatures. This is how the effect of the greyed settings (springs, dampers, anti-roll bars, toe, the tyre model) is recorded. Ticked by default, tickable like everything else.
+- A second extra group, "Car state (not a tuner setting)", tickable row by row and **not ticked by default** (A, 2026-11-16): the car-side values of section 8d. Each row has once-only and live readings like the others.
 - A sample rate selector (30 Hz or 60 Hz), a **logger status line** and a list of the recent session files (name, size, car, track, duration). The status line says whether the logger runs: "not running", "waiting for the game" or "logging <file>, <n> samples, <duration>". The logger writes `logs/logger_status.json` once a second (state, file, sample count, start time, process id); the route `/api/log_status` reads it and calls it "not running" when the file is older than 5 s. The tab refreshes it every 2 s while it is open.
 - Saved automatically as `log_config.json`; the logger reads it when a session starts, so a change applies to the next session.
 
@@ -122,6 +123,31 @@ After a second look at the bridge (`RacingDashboard`: the physics page fields `w
 - A tier "Measurable" (gear ratios from rpm / wheel speed, nominal rpm, autoshift rpm, toe from the contact heading, spring rates from load / travel, tyre grip from `fx`, `fy`): these settings stay greyed; the raw channels are available in the "Behaviour values" group.
 - Reading the game's own log (`Saved Games\ACE\Logs`: car id, `FUEL ... setup with <n> L`, `POWER CLASS INDEX ... HP W:<kg>`) as a second source: not done; the logger reads shared memory only.
 - A one-time discovery recording (`dump --record`, all raw blocks at 5 Hz while garage settings change) to find more fields: not done.
+
+## 8c. Check against Kunos' official documentation (2026-11-16)
+
+Kunos' `ACE_SharedFileOut_Documentation_v1.pdf` (attached to the Race-Element discussion 302; change log 2026-03-31) was read in full and compared with the layouts of the RacingDashboard bridge, the Rust bindings `dSyncro/acevo-shared-memory` (MIT) and the Python library `ooocheckitout/py-assettocorsa-evo` (MIT), and the study document of `albertowd/live-telemetry-evo`. Result:
+
+- The three pages are complete in the dashboard: `SPageFilePhysics` (85 fields, 800 bytes), `SPageFileGraphicEvo` (135 top-level fields) and `SPageFileStaticEvo` (19 fields) match the official field lists one to one, including all nested structs (tyre 256, damage 128, pit 64, electronics 128, instrumentation 128, session 256, timing 256, assists 64 bytes). Nothing is missing.
+- **The game publishes no car setup values**: no spring, damper rate, anti-roll bar, toe, caster, gear ratio, mass, tyre model or hardware diff values; the static page has no car data any more. The 29 direct rows are therefore the full list for catalogue settings. The only car-side values the document adds are in-car adjustable levels and car facts (section 8d).
+- Official wording that matters for channels: `steerAngle` is normalised -1..1; `camberRAD`, `pitch`, `roll`, `heading`, `slipAngle` are radians; `rideHeight`, `suspensionTravel` and `cgHeight` are metres; `wheelLoad`, `fx`, `fy` N; `mz`, `brakeTorque` Nm; `wheelsPressure` psi; `accG` is [lateral X, longitudinal Y, vertical Z]; `g_forces_x/y/z` are lateral, longitudinal, vertical; `current_torque` Nm and `current_bhp` hp.
+- Known deviations between the document and the game (from the dashboard checks and the third-party study): `tyreWear` stays 0 (the document says 0..1); physics `carDamage` holds absolute values up to about 550 (the graphics `car_damage` is 0..1); `camberRAD` has the opposite sign on the right-side wheels (to be checked); `rideHeight` may arrive in mm on some cars and `suspensionTravel` may be signed; the study document claims `accG` is [lateral, vertical, longitudinal], which contradicts the official order. The logger therefore writes arrays raw, in the documented order, and the AI is told the open points. Whether an array order or sign holds is checked on the PC.
+
+## 8d. Car state group: car-side values the game shows (A: added, not ticked by default)
+
+The group "Car state (not a tuner setting)" in the Logging tab. From the official document; useful to check that tuner changes arrived. One tickable row each:
+
+| Row | Channels | Checks |
+|---|---|---|
+| Tyre compounds | `tyre_compound_front`, `tyre_compound_rear` (once, and live) | that the garage tyres of the Tyre Creator are the ones in the game |
+| Turbo | `turbo_level` (boost target setting), `max_turbo_boost`, `boost` | that a turbo kit works and what the car's own boost target is (`max_turbo_boost` is 0 or unreliable on some cars, see the dashboard notes) |
+| Damper levels | `damper_levels` (front and rear, bump and rebound) | the in-car damper adjustment level of cars that offer it (a level, not the damping value) |
+| Engine brake and brake balance | `engine_brake`, `ebb_level` | in-car adjustments |
+| Engine map and performance mode | `engine_map`, `performance_mode` (index and name) | in-car adjustments |
+| Electronics limits | the min, max and modifiable tables of the electronics block | which adjustments the car offers |
+| Gears and fuel | `max_gears`, `max_fuel` | |
+| Mass and balance | `cg_height`, `ballast` | |
+| Brake wear | `pad_life`, `disc_life`, `front_brake_compound`, `rear_brake_compound` | |
 
 ## 9. Open points
 

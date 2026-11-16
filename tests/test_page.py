@@ -21,6 +21,8 @@ CODE = re.sub(r"(?m)^\s*//.*$", "", re.sub(r"/\*.*?\*/", "", SCRIPT, flags=re.S)
 TITLE = "ACE - Simple Car Tuner"
 # classes the script sets through a variable (addStat(.., "bad"), setMsg(.., "err")), not as a literal next to el() / classList
 DYNAMIC_CLASSES = {"ok", "bad", "warn", "err"}
+# the query parameter of every GET route that carries one
+QUERY_PARAMS = {"/api/tyre": "id", "/api/log_file": "file"}
 
 
 def function_body(name):
@@ -203,7 +205,7 @@ def called_paths():
     """The route paths the script writes as plain strings, plus the routes of ts.QUERY_ROUTES, which the script writes with their
     query string: "/api/tyre?id=" + encodeURIComponent(id). No other route may carry a query string."""
     paths = set(re.findall(r'"(/api/[^"?]*)"', CODE))
-    return paths | {p for p in re.findall(r'"(/api/[^"?]*)\?id=" \+ encodeURIComponent\(', CODE) if p in ts.QUERY_ROUTES}
+    return paths | {p for p, key in re.findall(r'"(/api/[^"?]*)\?(\w+)=" \+ encodeURIComponent\(', CODE) if p in ts.QUERY_ROUTES and QUERY_PARAMS[p] == key}
 
 
 class TestApiContract(unittest.TestCase):
@@ -226,12 +228,12 @@ class TestApiContract(unittest.TestCase):
             with self.subTest(route):
                 self.assertRegex(CODE, r'api\("%s", undefined' % route)
                 self.assertNotRegex(CODE, r'(?:api|startJob)\("%s", \{' % route)
-        # a GET route with a query string carries the id of the tyre there and still has no body
+        # a GET route with a query string carries the id of the tyre or the name of the file there and still has no body
         for route in ts.QUERY_ROUTES:
             with self.subTest(route):
-                self.assertRegex(CODE, r'api\("%s\?id=" \+ encodeURIComponent\(\w+\), undefined, selection\)' % route)
+                self.assertRegex(CODE, r'api\("%s\?%s=" \+ encodeURIComponent\(\w+\), undefined, selection\)' % (route, QUERY_PARAMS[route]))
                 self.assertNotRegex(CODE, r'(?:api|startJob)\("%s"' % route)
-                self.assertNotRegex(CODE, r'(?:api|startJob)\("%s\?id=[^)]*, \{' % route)
+                self.assertNotRegex(CODE, r'(?:api|startJob)\("%s\?%s=[^)]*, \{' % (route, QUERY_PARAMS[route]))
         for route in (r for r in ts.POST_ROUTES if r in self.ROUTES):
             with self.subTest(route):
                 self.assertRegex(CODE, r'(?:api|startJob)\("%s", \{' % route)
@@ -240,7 +242,7 @@ class TestApiContract(unittest.TestCase):
     def test_api_requests_are_relative_to_the_page_below_the_base_path(self):
         self.assertIn('res = await fetch(path.replace(/^\//, ""), opts);', function_body("api"))
         self.assertEqual(re.findall(r"\bfetch\((\w+)", CODE), ["path"])
-        self.assertEqual(re.findall(r"\b(?:href|src|action)\s*=|EventSource|location\.|window\.open|<(?:a|link|img|form|iframe)\b", re.sub(r'<link rel="[a-z-]+"[^>]*>', "", HTML)), [])
+        self.assertEqual(re.findall(r"\b(?:href|src|action)\s*=|EventSource|location\.(?!hostname\b)|window\.open|<(?:a|link|img|form|iframe)\b", re.sub(r'<link rel="[a-z-]+"[^>]*>', "", HTML)), [])
 
     def test_the_page_sends_the_headers_the_server_demands(self):
         body = function_body("api")
@@ -256,12 +258,12 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 33, calls)
+        self.assertEqual(len(calls), 36, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
         plain = set(re.findall(r'\b(?:api|startJob)\("(/api/[a-z_]+)"', CODE))
-        queried = {r for r in ts.QUERY_ROUTES if re.search(r'\bapi\("%s\?id=" \+ encodeURIComponent\(\w+\), undefined, selection\)' % r, CODE)}
+        queried = {r for r in ts.QUERY_ROUTES if re.search(r'\bapi\("%s\?%s=" \+ encodeURIComponent\(\w+\), undefined, selection\)' % (r, QUERY_PARAMS[r]), CODE)}
         self.assertEqual(sorted(plain | queried), sorted(self.ROUTES))
         self.assertEqual(re.findall(r"async function api\((.*?)\) \{", CODE), ["path, body, target"])
 
@@ -418,7 +420,7 @@ class TestTexts(unittest.TestCase):
         heads = [h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', MARKUP)]
         self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description",
                                  "Variable name", "Value", "Default (source tyre)", "Description",
-                                 "File", "Car", "Track", "Duration", "Samples", "Size", "Modified"])
+                                 "File", "Car", "Track", "Duration", "Samples", "Size", "Modified", "Copy for AI"])
 
     def test_both_default_headers_break_the_line_directly_before_the_opening_bracket(self):
         heads = re.findall(r'<th scope="col">(Default.*?)</th>', MARKUP)
@@ -1405,7 +1407,7 @@ class TestTyreCreator(unittest.TestCase):
                 self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', handler)))
         self.assertEqual(len(re.findall(r'api\("/api/tyres", undefined, selection\)', CODE)), 1)
         self.assertEqual(len(re.findall(r'api\("/api/tyre\?id=" \+ encodeURIComponent\(id\), undefined, selection\)', CODE)), 1)
-        self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre",))
+        self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre", "/api/log_file"))
         self.assertIn("(path.includes(\"?\") ? \"&\" : \"?\")", function_body("api"))
 
     def test_the_selected_tyre_is_remembered_in_a_variable_and_falls_back_to_the_first_valid_one(self):
@@ -2323,7 +2325,8 @@ class TestLogging(unittest.TestCase):
     FUNCTIONS = ("fmtDuration", "logStatusText", "pollLogStatus", "stopLogPoll", "startLogPoll", "renderLogLines", "renderLogSessions",
                  "loadLogSessions", "logChannelCell", "buildLogRow", "buildLogTable", "buildLogGroup", "renderLogControls", "renderLog",
                  "loadLog", "showLog", "logFailed", "sendLogSet", "saveLog", "logChanged", "setAllLog", "logRateChanged",
-                 "renderLoggerButtons", "beginLogRequest", "endLogRequest", "startLogger", "stopLogger")
+                 "renderLoggerButtons", "beginLogRequest", "endLogRequest", "startLogger", "stopLogger", "copyText", "kiloBytes",
+                 "showCopyMsg", "beginCopy", "endCopy", "copyAiCommand", "copyFileAsText", "copyFileOnPc", "onThisPc", "copySessionFile")
 
     @staticmethod
     def tag(ident):
@@ -2413,8 +2416,9 @@ class TestLogging(unittest.TestCase):
 
     def test_the_heading_the_paragraph_and_the_status_line_are_in_the_panel(self):
         self.assertIn("<h2>Session logging</h2>", self.PANEL)
-        self.assertIn("<p>Choose what the logger records. Start start_logger.bat, then the game: a session file is written to the logs "
-                      "folder while the game runs. Your choices are saved at once and apply from the next session.</p>", self.PANEL)
+        self.assertIn("<p>Choose what the logger records. Press Start logger (or double-click start_logger.bat), then start the game: a "
+                      "session file is written to the logs folder while the game runs. Your choices are saved at once and apply from the "
+                      "next session.</p>", self.PANEL)
         self.assertIn('<p id="log-status"></p>', self.PANEL)
         self.assertLess(self.PANEL.index("<h2>Session logging</h2>"), self.PANEL.index('id="log-status"'))
         self.assertLess(self.PANEL.index('id="log-status"'), self.PANEL.index('id="log-rate"'))
@@ -2537,11 +2541,12 @@ class TestLogging(unittest.TestCase):
         self.assertIn('if (r.description) name.appendChild(el("span", "id", r.description));', body)
         self.assertRegex(STYLE, r"\.name \.id \{[^}]*display: block;[^}]*color: var\(--color-text-muted\);")
 
-    def test_a_greyed_row_has_a_dash_with_a_hidden_text_instead_of_a_box_and_its_badge_and_note_under_the_label(self):
+    def test_a_greyed_row_has_a_dash_with_a_hidden_text_instead_of_a_box_and_its_badge_under_the_label_and_the_note_only_when_the_status_is_indirect(self):
         body = function_body("buildLogRow")
         self.assertIn('tick.append("-", el("span", "sr-only", "not tickable"));', body)
         self.assertIn('el("span", "badge", r.status === "indirect" ? "effect only" : "not published")', body)
-        self.assertIn('if (r.note) line.append(" " + r.note);', body)
+        self.assertIn('if (r.status === "indirect" && r.note) line.append(" " + r.note);', body)
+        self.assertNotIn("if (r.note)", body)
         self.assertLess(body.index('el("span", "badge"'), body.index("line.append(\" \" + r.note)"))
         self.assertEqual(body.count('el("span", "id"'), 2)
 
@@ -2664,9 +2669,10 @@ class TestLogging(unittest.TestCase):
         self.assertTrue({"file", "car", "track", "duration_s", "samples", "size", "modified"} <= set(re.findall(r"\bs\.(\w+)", function_body("renderLogSessions"))))
         self.assertTrue({"rate_hz", "rates", "groups"} <= set(re.findall(r"\blogData\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS))))
 
-    def test_the_sessions_table_has_the_seven_columns_and_the_empty_text(self):
+    def test_the_sessions_table_has_the_eight_columns_and_the_empty_text(self):
         table = re.search(r"<table>.*?</table>", self.PANEL, re.S).group(0)
-        self.assertEqual(re.findall(r'<th scope="col">(.*?)</th>', table), ["File", "Car", "Track", "Duration", "Samples", "Size", "Modified"])
+        self.assertEqual(re.findall(r'<th scope="col">(.*?)</th>', table),
+                         ["File", "Car", "Track", "Duration", "Samples", "Size", "Modified", "Copy for AI"])
         self.assertIn('<tbody id="log-sessions"></tbody>', table)
         self.assertIn('<caption class="sr-only">Recent session files</caption>', table)
         self.assertRegex(self.tag("log-sessions-empty"), r'class="empty" hidden>$')
@@ -2725,8 +2731,155 @@ class TestLogging(unittest.TestCase):
                 self.assertIn(cls, css_classes())
                 self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
         self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
-                         {"panel", "actions", "toolbar", "carpick", "msg err", "tablewrap", "sr-only", "empty"})
+                         {"panel", "actions", "toolbar", "carpick", "msg err", "garage-help", "tablewrap", "sr-only", "empty"})
         self.assertIn(".panel summary { cursor: pointer; }", STYLE)
+
+
+class TestLoggingCopy(unittest.TestCase):
+    """The AI command button, the Copy for AI column of the sessions table and the copy helper (string-level checks, no browser)."""
+    PANEL = TestLogging.PANEL
+    SECTION = PANEL[PANEL.index("<h2>Recent sessions</h2>"):]
+    TOO_LARGE = "larger than 1 MB"
+
+    def test_the_ai_command_button_and_the_status_paragraph_sit_above_the_table_in_the_recent_sessions_section(self):
+        self.assertIn('<div class="actions">\n        <button id="btn-log-ai" type="button">Copy AI command</button>\n      </div>', self.SECTION)
+        self.assertIn('<p id="log-copy-msg" class="garage-help" role="status" hidden></p>', self.SECTION)
+        self.assertLess(self.SECTION.index("<h2>Recent sessions</h2>"), self.SECTION.index('id="btn-log-ai"'))
+        self.assertLess(self.SECTION.index('id="btn-log-ai"'), self.SECTION.index('id="log-copy-msg"'))
+        self.assertLess(self.SECTION.index('id="log-copy-msg"'), self.SECTION.index("<table>"))
+        self.assertEqual(self.PANEL.count('id="btn-log-ai"'), 1)
+        self.assertEqual(self.PANEL.count('id="log-copy-msg"'), 1)
+        self.assertRegex(STYLE, r"#log-copy-msg \+ \.tablewrap \{[^}]*margin-top: \d+px;")
+        self.assertIn('$("btn-log-ai").addEventListener("click", copyAiCommand);', CODE)
+
+    def test_the_three_routes_are_called_with_the_selection_the_two_reads_without_a_body_and_the_copy_with_the_file_name(self):
+        for route in ("/api/log_ai_command", "/api/log_file"):
+            self.assertIn(route, ts.GET_ROUTES)
+        self.assertIn("/api/log_file", ts.QUERY_ROUTES)
+        self.assertIn("/api/log_copy", ts.POST_ROUTES)
+        self.assertEqual(len(re.findall(r'await api\("/api/log_ai_command", undefined, selection\);', CODE)), 1)
+        self.assertEqual(len(re.findall(r'await api\("/api/log_file\?file=" \+ encodeURIComponent\(name\), undefined, selection\);', CODE)), 1)
+        self.assertEqual(len(re.findall(r'await api\("/api/log_copy", \{ file: name \}, selection\);', CODE)), 1)
+        self.assertIn('await api("/api/log_ai_command", undefined, selection);', function_body("copyAiCommand"))
+        self.assertIn('await api("/api/log_file?file=" + encodeURIComponent(name), undefined, selection);', function_body("copyFileAsText"))
+        self.assertIn('await api("/api/log_copy", { file: name }, selection);', function_body("copyFileOnPc"))
+        self.assertEqual(ts.QUERY_ROUTES.index("/api/log_file"), 1)
+        self.assertIn('.get("file")', inspect.getsource(ts.api_log_file))
+        self.assertIn('body.get("file")', inspect.getsource(ts.api_log_copy))
+
+    def test_the_page_reads_only_fields_the_server_sends(self):
+        self.assertEqual(set(re.findall(r"\bres\.(\w+)", function_body("copyAiCommand"))), {"text", "size"})
+        self.assertEqual(set(re.findall(r"\bres\.(\w+)", function_body("copyFileAsText"))), {"text", "size"})
+        self.assertTrue({"text", "size"} <= set(re.findall(r'"(\w+)"', inspect.getsource(ts.api_log_ai_command))))
+        self.assertTrue({"text", "size", "file"} <= set(re.findall(r'"(\w+)"', inspect.getsource(ts.api_log_file))))
+
+    def test_the_ai_command_button_fetches_the_text_copies_it_and_says_how_big_it_was(self):
+        body = function_body("copyAiCommand")
+        self.assertIn('const button = $("btn-log-ai");', body)
+        self.assertLess(body.index("beginCopy(button);"), body.index("await api("))
+        self.assertLess(body.index("await api("), body.index("await copyText(res.text);"))
+        self.assertLess(body.index("await copyText(res.text);"), body.index('showCopyMsg("AI command copied ("'))
+        self.assertIn('showCopyMsg("AI command copied (" + kiloBytes(res.size) + " KB)");', body)
+        self.assertRegex(body, r"\} catch \(e\) \{\s*logError = e\.message;\s*\}\s*endCopy\(button\);")
+        self.assertIn("return (size / 1024).toFixed(1);", function_body("kiloBytes"))
+
+    def test_the_page_is_on_the_pc_for_127_0_0_1_localhost_and_ipv6_loopback_only(self):
+        body = function_body("onThisPc")
+        self.assertIn('return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(window.location.hostname);', body)
+        self.assertEqual(len(re.findall(r"\blocation\.", CODE)), 1)
+        self.assertEqual(re.findall(r"\blocation\.(\w+)", HTML), ["hostname"])
+
+    def test_on_the_pc_the_server_copies_the_file_and_the_text_is_the_fallback_that_says_so(self):
+        decide = function_body("copySessionFile")
+        self.assertIn("showCopyMsg(onThisPc() ? await copyFileOnPc(name) : await copyFileAsText(name));", decide)
+        pc = function_body("copyFileOnPc")
+        self.assertRegex(pc, r"try \{\s*await api\(\"/api/log_copy\", \{ file: name \}, selection\);\s*\} catch \(e\) \{")
+        self.assertIn('return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;', pc)
+        self.assertIn('return name + " copied: paste it into the chat with Ctrl+V";', pc)
+        self.assertLess(pc.index("catch (e)"), pc.index("copyFileAsText(name)"))
+        self.assertNotIn("copyText(", pc)
+
+    def test_from_another_device_the_text_of_the_file_is_copied_and_a_413_adds_the_hint_to_open_the_page_on_the_pc(self):
+        body = function_body("copyFileAsText")
+        self.assertIn('encodeURIComponent(name)', body)
+        self.assertLess(body.index("await api("), body.index("await copyText(res.text);"))
+        self.assertIn('return name + " copied as text (" + kiloBytes(res.size) + " KB)";', body)
+        self.assertIn('const hint = !onThisPc() && e.message.includes("%s") ? " Open the page on the PC to copy the file itself." : "";' % self.TOO_LARGE, body)
+        self.assertIn("throw new Error(e.message + hint);", body)
+        self.assertIn("the file is larger than 1 MB: too large to copy as text", inspect.getsource(ts.api_log_file))
+        self.assertIn(self.TOO_LARGE, inspect.getsource(ts.api_log_file))
+        self.assertEqual(ts.LOG_FILE_MAX, 1048576)
+
+    def test_a_failure_shows_in_the_error_line_a_success_in_the_status_paragraph_and_the_next_copy_clears_both(self):
+        begin = function_body("beginCopy")
+        self.assertIn('logError = "";', begin)
+        self.assertIn('showCopyMsg("");', begin)
+        self.assertIn("renderLogLines();", begin)
+        show = function_body("showCopyMsg")
+        self.assertIn('$("log-copy-msg").textContent = text;', show)
+        self.assertIn('$("log-copy-msg").hidden = text === "";', show)
+        for name in ("copyAiCommand", "copySessionFile"):
+            with self.subTest(name):
+                body = function_body(name)
+                self.assertIn("logError = e.message;", body)
+                self.assertIn("showCopyMsg(", body)
+                self.assertNotIn("setMsg(", body)
+                self.assertNotIn("alert(", body)
+        self.assertIn("renderLogLines();", function_body("endCopy"))
+
+    def test_both_buttons_are_off_while_their_own_request_runs_and_on_again_afterwards_whatever_happened(self):
+        self.assertIn("button.disabled = true;", function_body("beginCopy"))
+        self.assertIn("button.disabled = false;", function_body("endCopy"))
+        for name in ("copyAiCommand", "copySessionFile"):
+            with self.subTest(name):
+                body = function_body(name)
+                self.assertLess(body.index("beginCopy(button);"), body.index("await "))
+                self.assertGreater(body.index("endCopy(button);"), body.rindex("catch (e)"))
+                self.assertEqual(body.count("endCopy(button);"), 1)
+        self.assertIn("async function copySessionFile(name, button) {", CODE)
+
+    def test_every_session_row_has_a_small_copy_file_button_in_the_last_cell(self):
+        body = function_body("renderLogSessions")
+        self.assertIn('const button = el("button", "reset", "Copy file");', body)
+        self.assertIn('button.type = "button";', body)
+        self.assertIn('button.setAttribute("aria-label", "Copy file " + s.file);', body)
+        self.assertIn('button.addEventListener("click", () => copySessionFile(s.file, button));', body)
+        self.assertLess(body.index("for (const text of cells)"), body.index('el("button", "reset", "Copy file")'))
+        self.assertLess(body.index("copy.appendChild(button);"), body.index("tr.appendChild(copy);"))
+        self.assertLess(body.index("tr.appendChild(copy);"), body.index("body.appendChild(tr);"))
+        self.assertRegex(STYLE, r"button\.reset \{[^}]*font-size: 12px;")
+
+    def test_the_text_copy_uses_the_clipboard_api_on_a_secure_page_and_a_hidden_text_box_with_the_copy_command_otherwise(self):
+        body = function_body("copyText")
+        self.assertIn("if (window.isSecureContext && navigator.clipboard) {", body)
+        self.assertIn("await navigator.clipboard.writeText(text);", body)
+        self.assertLess(body.index("navigator.clipboard.writeText(text)"), body.index('el("textarea"'))
+        self.assertIn('const area = el("textarea", "sr-only", text);', body)
+        self.assertIn('area.setAttribute("readonly", "");', body)
+        self.assertIn("document.body.appendChild(area);", body)
+        self.assertIn("area.select();", body)
+        self.assertIn('done = document.execCommand("copy");', body)
+        self.assertLess(body.index('document.execCommand("copy")'), body.index("area.remove();"))
+        self.assertLess(body.index("area.remove();"), body.index("if (!done) throw new Error("))
+        self.assertEqual(body.count("area.remove();"), 1)
+        self.assertNotIn("style", body)
+        self.assertNotIn("innerHTML", body)
+
+    def test_the_text_copy_falls_back_when_the_clipboard_api_rejects_and_throws_when_both_ways_fail(self):
+        body = function_body("copyText")
+        self.assertRegex(body, r"try \{\s*await navigator\.clipboard\.writeText\(text\);\s*return;\s*\} catch \(e\) \{")
+        self.assertRegex(body, r"try \{\s*done = document\.execCommand\(\"copy\"\);\s*\} catch \(e\) \{\s*done = false;\s*\}")
+        self.assertIn('if (!done) throw new Error("the text could not be copied to the clipboard");', body)
+        self.assertEqual(len(re.findall(r"navigator\.clipboard", CODE)), 2)
+        self.assertEqual(len(re.findall(r"execCommand", CODE)), 1)
+        for name in ("copyAiCommand", "copyFileAsText"):
+            self.assertIn("await copyText(res.text);", function_body(name))
+
+    def test_the_copy_code_is_ascii_and_builds_no_html(self):
+        code = "".join(function_body(n) for n in ("copyText", "kiloBytes", "showCopyMsg", "beginCopy", "endCopy", "copyAiCommand",
+                                                   "copyFileAsText", "copyFileOnPc", "onThisPc", "copySessionFile", "renderLogSessions"))
+        code.encode("ascii")
+        self.assertNotRegex(code, r"\.html\b|innerHTML|insertAdjacentHTML")
 
 
 class TestStartBat(unittest.TestCase):

@@ -107,9 +107,18 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         waiting for the logger; 409 when the logger already runs (per the status file), 500 when it cannot be started
   POST /api/logger_stop   {}                              asks the running logger to stop (creates <logs>/logger_stop); answers
                         {"stopping": true}; 409 when the logger is not running
-The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the six
-log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes do not wait
-for and are not refused by a running job.
+  GET  /api/log_ai_command  the AI command ("text") built from tuner/log_ai_command.txt, tuner/log_glossary.json and the rows of the
+                        Logging tab, and its "size" in bytes (utf-8)
+  GET  /api/log_file?file=<name>  one session file of the logs folder as text: "file", "size" (bytes) and "text" (utf-8); 400 for a
+                        name that is not a plain file name ending in .jsonl, 404 for a missing file, 413 (the file is not read) for a
+                        file larger than 1 MB (1048576 bytes)
+  POST /api/log_copy    {"file": <name>}                  puts the session file on the clipboard of the PC (Windows, PowerShell
+                        Set-Clipboard: pasting attaches the file); answers {"copied": true, "file": name, "how": "file"}; 403 for
+                        a client that is not loopback (127.0.0.1 or ::1), 400 for a bad name or when the PC is not Windows, 404 for a
+                        missing file, 500 with the PowerShell error text when the copy fails
+The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the nine
+log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes and the three
+file routes do not wait for and are not refused by a running job.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
 and without the game package only the tested cars of tuner/cars.json): the query parameter ?car=<id> on GET, the field
 "car" in the JSON body on POST (any other id is a 400 error). Without it the default car of tuner/cars.json is used.
@@ -117,7 +126,7 @@ Every route also takes an optional tune next to the car (?tune=<x> on GET, the f
 the default tune of the car (the modded car <new_id>), "draft" the draft of the base car (the values of the base car
 that are not saved as a modded car yet), any other value the id of a modded car of that car (400 otherwise).
 
-Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner), 404 (unknown path), 405 (any method but GET and POST, with the header Allow: GET, POST), 413 (body over 65536 bytes), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, garage, turbo kit or sound edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
+Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner, a client that is not loopback on /api/log_copy), 404 (unknown path, missing session file), 405 (any method but GET and POST, with the header Allow: GET, POST), 413 (body over 65536 bytes, session file over 1 MB on /api/log_file), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, garage, turbo kit or sound edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
 
 The job state (GET /api/state "job") is global, there is one background job at a time for all cars. The state answer
 also lists the car ("car", "cars") and the installed package of the selected modded car; the old single-car layout of the work folder
@@ -173,7 +182,11 @@ MAX_BODY = 65536
 # routes that start a background job answer 202 instead of 200
 ACCEPTED = ("/api/init", "/api/apply")
 # GET routes that take the raw query string as a third argument
-QUERY_ROUTES = ("/api/tyre",)
+QUERY_ROUTES = ("/api/tyre", "/api/log_file")
+# POST routes that only a client on the PC itself (loopback) may call
+LOCAL_ROUTES = ("/api/log_copy",)
+LOG_FILE_MAX = 1048576
+CLIPBOARD_TIMEOUT = 15
 
 CONFIG = {"port": DEFAULT_PORT, "work": None, "mods": None, "logs": None, "game": tune.DEFAULT_GAME}
 JOB = {"kind": None, "state": "idle", "log": [], "result": None, "error": None, "thread": None}
@@ -798,6 +811,56 @@ def api_log_status(car, tune_id):
     return logconf.logger_status(logs_dir())
 
 
+def api_log_ai_command(car, tune_id):
+    text = logconf.ai_command(logconf.load_channels(), tune.load_catalogue(), logconf.load_glossary(), logconf.load_ai_template())
+    return {"text": text, "size": len(text.encode("utf-8"))}
+
+
+def log_file_path(name):
+    logs = logs_dir()
+    try:
+        return logconf.session_file(logs, name)
+    except FileNotFoundError as e:
+        raise ApiError(404, str(e)) from None
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+
+
+def api_log_file(car, tune_id, query):
+    name = (urllib.parse.parse_qs(query).get("file") or [None])[0]
+    if name is None:
+        raise ApiError(400, "need file (text)")
+    path = log_file_path(name)
+    if os.path.getsize(path) > LOG_FILE_MAX:
+        raise ApiError(413, "the file is larger than 1 MB: too large to copy as text")
+    with open(path, "rb") as f:
+        data = f.read()
+    return {"file": name, "size": len(data), "text": data.decode("utf-8")}
+
+
+def copy_file_to_clipboard(path):
+    """Puts the file on the Windows clipboard with PowerShell Set-Clipboard (pasting attaches the file); ApiError 500 with the error
+    text when that fails."""
+    command = "Set-Clipboard -LiteralPath '%s'" % path.replace("'", "''")
+    flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    try:
+        res = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], capture_output=True, text=True,
+                             timeout=CLIPBOARD_TIMEOUT, creationflags=flags)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        raise ApiError(500, str(e)) from None
+    if res.returncode != 0:
+        raise ApiError(500, (res.stderr or "").strip() or "PowerShell failed with exit code %d" % res.returncode)
+
+
+def api_log_copy(car, body):
+    name = body.get("file")
+    path = log_file_path(name)
+    if sys.platform != "win32":
+        raise ApiError(400, "copying a file to the clipboard needs Windows")
+    copy_file_to_clipboard(path)
+    return {"copied": True, "file": name, "how": "file"}
+
+
 def spawn_logger(work, mods, logs):
     """Starts tools/logger.py in the background (own process group, no console window on Windows) with its console output appended
     to <logs>/logger_console.log; returns the process id."""
@@ -850,7 +913,8 @@ def request_tune(value, query, car):
 GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyres": api_tyres,
               "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
               "/api/sounds": api_sounds, "/api/log_config": api_log_config, "/api/log_sessions": api_log_sessions,
-              "/api/log_status": api_log_status}
+              "/api/log_status": api_log_status,
+              "/api/log_ai_command": api_log_ai_command, "/api/log_file": api_log_file}
 POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": api_reset_all,
                "/api/init": api_init, "/api/duplicate": api_duplicate,
                "/api/apply": api_apply, "/api/tyre_new": api_tyre_new, "/api/tyre_rename": api_tyre_rename,
@@ -858,7 +922,7 @@ POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": a
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
                "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset,
                "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset, "/api/log_config_set": api_log_config_set,
-               "/api/logger_start": api_logger_start, "/api/logger_stop": api_logger_stop}
+               "/api/logger_start": api_logger_start, "/api/logger_stop": api_logger_stop, "/api/log_copy": api_log_copy}
 
 
 def private_ip(text):
@@ -880,6 +944,13 @@ def check_host(host):
 def check_client(address):
     if not private_ip(address):
         raise ApiError(403, "forbidden client address")
+
+
+def loopback_ip(text):
+    try:
+        return ipaddress.ip_address(text).is_loopback
+    except ValueError:
+        return False
 
 
 def lan_addresses():
@@ -982,6 +1053,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         route = (GET_ROUTES if method == "GET" else POST_ROUTES).get(path)
         if route is None:
             raise ApiError(404, "not found")
+        if path in LOCAL_ROUTES and not loopback_ip(self.client_address[0]):
+            raise ApiError(403, "the file can only be copied on the PC where the tuner runs")
         if method == "POST":
             body = self.read_body()
             car = request_car(body.get("car"), query)

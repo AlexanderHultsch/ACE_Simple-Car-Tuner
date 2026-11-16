@@ -15,9 +15,12 @@ import logconf
 import tune
 
 CHANNELS_FILE = ROOT / "tuner" / "log_channels.json"
+GLOSSARY_FILE = ROOT / "tuner" / "log_glossary.json"
 CAT = tune.load_catalogue()
 RAW = tune.read_json(CHANNELS_FILE)
 CHAN = logconf.load_channels()
+GLOSSARY_RAW = tune.read_json(GLOSSARY_FILE)
+TEMPLATE = logconf.load_ai_template()
 KNOWN = set(ace_shm.channels(b"", b""))
 
 DIRECT = {
@@ -87,6 +90,13 @@ def changed(mutate):
     chan = copy.deepcopy(RAW)
     mutate(chan)
     return chan
+
+
+def glossary_changed(mutate):
+    """A copy of the real glossary after mutate(copy)."""
+    glossary = copy.deepcopy(GLOSSARY_RAW)
+    mutate(glossary)
+    return glossary
 
 
 def row_of(chan, group, row):
@@ -971,6 +981,368 @@ class TestLoggerStatus(unittest.TestCase):
     def test_the_answer_is_json(self):
         self.put(self.status())
         json.dumps(logconf.logger_status(self.logs, now=1101))
+
+
+class TestGlossary(unittest.TestCase):
+    def fails(self, glossary, pattern):
+        with self.assertRaisesRegex(ValueError, pattern):
+            logconf.validate_glossary(glossary)
+
+    def test_the_real_glossary_validates_and_covers_exactly_the_68_channels_in_the_order_of_ace_shm(self):
+        logconf.validate_glossary(GLOSSARY_RAW)
+        self.assertEqual(logconf.load_glossary(), GLOSSARY_RAW)
+        self.assertEqual(GLOSSARY_RAW["version"], 1)
+        self.assertEqual(list(GLOSSARY_RAW["channels"]), list(ace_shm.channels(b"", b"")))
+        self.assertEqual(list(GLOSSARY_RAW["channels"]), logconf.channel_names())
+        self.assertEqual(len(GLOSSARY_RAW["channels"]), 68)
+
+    def test_the_file_is_the_one_next_to_the_channel_table_and_plain_ascii(self):
+        self.assertEqual(logconf.GLOSSARY, GLOSSARY_FILE)
+        self.assertEqual(logconf.GLOSSARY, tune.CATALOGUE.parent / "log_glossary.json")
+        GLOSSARY_FILE.read_bytes().decode("ascii")
+
+    def test_every_entry_has_the_four_texts_and_no_other_key(self):
+        for name, entry in GLOSSARY_RAW["channels"].items():
+            with self.subTest(name):
+                self.assertEqual(set(entry), {"unit", "meaning", "range", "notes"})
+                for key in ("unit", "meaning", "range"):
+                    self.assertTrue(entry[key].strip(), key)
+                self.assertIsInstance(entry["notes"], str)
+                self.assertEqual(entry["meaning"], entry["meaning"].strip())
+
+    def test_the_facts_the_ai_needs_are_stated(self):
+        ch = GLOSSARY_RAW["channels"]
+        self.assertIn("minus 1", ch["gear"]["notes"])
+        self.assertIn("-1 = reverse", ch["gear"]["notes"])
+        self.assertIn("NOT verified", ch["acc_g"]["notes"])
+        self.assertIn("lateral, longitudinal, vertical", ch["g_forces"]["meaning"])
+        self.assertIn("locked wheel", ch["slip_ratio"]["notes"])
+        self.assertIn("Not reliable", ch["boost_max"]["notes"])
+        self.assertIn("overall gear ratio", ch["wheel_speed"]["notes"])
+        self.assertIn("counts from 0", ch["engine_map"]["notes"])
+        self.assertIn("level", ch["damper_levels"]["notes"])
+        self.assertIn("deg C", {e["unit"] for e in ch.values()})
+        self.assertEqual(ch["gas"]["unit"], "-")
+        self.assertEqual(ch["steer"]["range"], "-1 to 1")
+
+    def test_it_needs_an_object(self):
+        self.fails([], "expected an object")
+        self.fails(None, "expected an object")
+
+    def test_the_version_must_be_1(self):
+        for version in (2, 0, "1", 1.0, True, None):
+            with self.subTest(version):
+                self.fails(glossary_changed(lambda g: g.update(version=version)), "version must be 1")
+        self.fails(glossary_changed(lambda g: g.pop("version")), "version must be 1")
+
+    def test_channels_must_be_an_object(self):
+        self.fails(glossary_changed(lambda g: g.update(channels=[])), "needs channels")
+        self.fails(glossary_changed(lambda g: g.pop("channels")), "needs channels")
+
+    def test_a_missing_channel_is_named(self):
+        self.fails(glossary_changed(lambda g: g["channels"].pop("rpm")), "channel rpm has no entry")
+        self.fails(glossary_changed(lambda g: g["channels"].pop("rpm") and g["channels"].pop("gas")), "rpm")
+
+    def test_an_unknown_entry_is_named(self):
+        self.fails(glossary_changed(lambda g: g["channels"].update(bogus=dict(g["channels"]["rpm"]))), "entry bogus is not a channel")
+
+    def test_an_entry_must_be_an_object(self):
+        for value in ([], "rpm", None):
+            with self.subTest(value):
+                self.fails(glossary_changed(lambda g: g["channels"].update(rpm=value)), "channel rpm: expected an object")
+
+    def test_unit_meaning_and_range_must_be_text_that_is_not_empty(self):
+        for key in ("unit", "meaning", "range"):
+            for value in ("", "  ", None, 3, ["a"]):
+                with self.subTest((key, value)):
+                    self.fails(glossary_changed(lambda g: g["channels"]["rpm"].update({key: value})), "channel rpm: %s must be text" % key)
+            with self.subTest((key, "missing")):
+                self.fails(glossary_changed(lambda g: g["channels"]["rpm"].pop(key)), "channel rpm: %s must be text" % key)
+
+    def test_notes_must_be_text_but_may_be_empty(self):
+        logconf.validate_glossary(glossary_changed(lambda g: g["channels"]["rpm"].update(notes="")))
+        for value in (None, 3, ["a"]):
+            with self.subTest(value):
+                self.fails(glossary_changed(lambda g: g["channels"]["rpm"].update(notes=value)), "channel rpm: notes must be text")
+        self.fails(glossary_changed(lambda g: g["channels"]["rpm"].pop("notes")), "channel rpm: notes must be text")
+
+    def test_the_order_of_the_entries_does_not_matter_to_the_validator(self):
+        logconf.validate_glossary(glossary_changed(lambda g: g.update(channels=dict(reversed(list(g["channels"].items()))))))
+
+    def test_load_glossary_reads_the_file_at_the_given_path_and_validates_it(self):
+        with tmp() as d:
+            path = write(str(d / "g.json"), GLOSSARY_RAW)
+            self.assertEqual(logconf.load_glossary(path), GLOSSARY_RAW)
+            bad = write(str(d / "bad.json"), glossary_changed(lambda g: g["channels"].pop("rpm")))
+            with self.assertRaisesRegex(ValueError, "rpm"):
+                logconf.load_glossary(bad)
+            broken = write(str(d / "broken.json"), "{not json")
+            with self.assertRaises(ValueError):
+                logconf.load_glossary(broken)
+            with self.assertRaises(OSError):
+                logconf.load_glossary(str(d / "none.json"))
+
+
+class TestAiTemplate(unittest.TestCase):
+    def test_the_real_template_has_both_placeholders_once_and_is_read_as_text(self):
+        text = logconf.load_ai_template()
+        self.assertEqual((text.count("{{CHANNELS}}"), text.count("{{ROWS}}")), (1, 1))
+        self.assertEqual(text, TEMPLATE)
+        self.assertTrue(text.startswith("ROLE\n"))
+        self.assertEqual(logconf.AI_TEMPLATE, ROOT / "tuner" / "log_ai_command.txt")
+
+    def test_it_reads_the_file_at_the_given_path_as_utf_8(self):
+        with tmp() as d:
+            path = write(str(d / "t.txt"), "A \u00e9 {{CHANNELS}} B\n{{ROWS}}\n")
+            self.assertEqual(logconf.load_ai_template(path), "A \u00e9 {{CHANNELS}} B\n{{ROWS}}\n")
+
+    def test_a_missing_or_doubled_placeholder_is_a_value_error_that_names_it(self):
+        with tmp() as d:
+            for text, name in (("{{ROWS}}", "{{CHANNELS}}"), ("{{CHANNELS}}", "{{ROWS}}"), ("none", "{{CHANNELS}}"),
+                               ("{{CHANNELS}} {{CHANNELS}} {{ROWS}}", "{{CHANNELS}}"), ("{{CHANNELS}} {{ROWS}} {{ROWS}}", "{{ROWS}}")):
+                with self.subTest(text):
+                    path = write(str(d / "t.txt"), text)
+                    with self.assertRaisesRegex(ValueError, "%s must occur exactly once" % name.replace("{", r"\{").replace("}", r"\}")):
+                        logconf.load_ai_template(path)
+
+    def test_a_missing_file_is_an_os_error(self):
+        with tmp() as d, self.assertRaises(OSError):
+            logconf.load_ai_template(str(d / "none.txt"))
+
+
+class TestAiCommand(unittest.TestCase):
+    def build(self, **kw):
+        args = dict(chan=CHAN, catalogue=CAT, glossary=GLOSSARY_RAW, template=TEMPLATE)
+        args.update(kw)
+        return logconf.ai_command(args["chan"], args["catalogue"], args["glossary"], args["template"])
+
+    def setUp(self):
+        self.text = self.build()
+        self.lines = self.text.split("\n")
+
+    def section(self, title):
+        start = self.lines.index(title)
+        return self.lines[start:]
+
+    def test_both_placeholders_are_replaced_and_the_rest_of_the_template_is_kept(self):
+        self.assertNotIn("{{", self.text)
+        self.assertNotIn("}}", self.text)
+        head, tail = TEMPLATE.split("{{CHANNELS}}")
+        middle, end = tail.split("{{ROWS}}")
+        self.assertTrue(self.text.startswith(head + "GLOSSARY OF THE VALUES IN THE LOG\n"))
+        self.assertIn(middle, self.text)
+        self.assertTrue(self.text.endswith(end))
+        self.assertEqual(self.text.count("GLOSSARY OF THE VALUES IN THE LOG"), 1)
+        self.assertEqual(self.text.count("TUNER ROWS: WHAT CAN BE LOGGED AND WHERE IT COMES FROM"), 1)
+        self.assertEqual(self.text.count("NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)"), 1)
+        self.assertLess(self.text.index("GLOSSARY OF THE VALUES"), self.text.index("TUNER ROWS: WHAT CAN"))
+        self.assertLess(self.text.index("TUNER ROWS: WHAT CAN"), self.text.index("NOT VISIBLE TO THE GAME"))
+
+    def test_the_glossary_has_one_line_per_channel_in_the_glossary_order(self):
+        block = self.section("GLOSSARY OF THE VALUES IN THE LOG")[1:69]
+        self.assertEqual(len(block), 68)
+        for line, (name, e) in zip(block, GLOSSARY_RAW["channels"].items()):
+            expected = "- %s [%s]: %s Range: %s." % (name, e["unit"], e["meaning"], e["range"])
+            if e["notes"]:
+                expected += " Notes: " + e["notes"]
+            self.assertEqual(line, expected)
+        self.assertIn("- rpm [rpm]: Engine speed in revolutions per minute. Range: 0 up to the rev limiter (see rpm_max); no other fixed limit. Notes: ",
+                      self.text)
+        self.assertTrue(self.section("GLOSSARY OF THE VALUES IN THE LOG")[69].strip() == "")
+
+    def test_a_channel_without_notes_has_no_notes_part(self):
+        self.assertEqual(GLOSSARY_RAW["channels"]["speed_kmh"]["notes"], "")
+        line = next(l for l in self.lines if l.startswith("- speed_kmh ["))
+        self.assertEqual(line, "- speed_kmh [km/h]: Speed of the car. Range: no fixed limit; 0 at rest.")
+
+    def test_every_channel_name_is_in_the_text(self):
+        for name in KNOWN:
+            self.assertIn("- %s [" % name, self.text)
+
+    def test_a_catalogue_row_names_its_id_unit_limits_and_its_once_and_live_channels(self):
+        self.assertIn("- Rev limiter (id limiter, unit rpm, tuner limits 3000 to 12000): reads once: rpm_max; live: rpm", self.lines)
+        self.assertIn("- Diff power lock (id diff_power_default, unit -, tuner limits 0 to 1): reads once: diff_power_level, diff_coast_level, "
+                      "diff_power_pct, diff_coast_pct; live: diff_power_pct, diff_coast_pct, wheel_speed, slip_ratio", self.lines)
+        self.assertIn("- Steering lock (id steer_lock_deg, unit deg, tuner limits 90 to 1440): reads once: none; live: steer, steer_deg, angular_vel",
+                      self.lines)
+
+    def test_a_setting_without_limits_has_no_limits_part(self):
+        line = next(l for l in self.lines if l.startswith("- Driver aids off (id driver_aids_off"))
+        self.assertTrue(line.startswith("- Driver aids off (id driver_aids_off, unit -): reads once: "), line)
+        self.assertNotIn("tuner limits", line)
+
+    def test_the_limits_come_from_the_catalogue_and_only_when_both_are_numbers(self):
+        def set_limits(lo, hi):
+            cat = copy.deepcopy(CAT)
+            setting = next(s for s in cat["settings"] if s["id"] == "limiter")
+            setting["min"], setting["max"] = lo, hi
+            return self.build(catalogue=cat)
+        self.assertIn("- Rev limiter (id limiter, unit rpm, tuner limits 1.5 to 2.5): reads", set_limits(1.5, 2.5))
+        for lo, hi in ((None, 5), (5, None), ("1", 5), (True, 5), (float("nan"), 5)):
+            with self.subTest((lo, hi)):
+                self.assertIn("- Rev limiter (id limiter, unit rpm): reads", set_limits(lo, hi))
+
+    def test_an_extra_row_names_its_row_id_description_and_channels(self):
+        self.assertIn("- Speed (row behaviour.speed): Speed of the car in km/h. Reads once: none; live: speed_kmh", self.lines)
+        self.assertIn("- Turbo (row car_state.turbo): The boost target of the car and the boost; shows whether a turbo kit works. "
+                      "Reads once: turbo_level, boost_max; live: boost, turbo_level", self.lines)
+
+    def test_every_tickable_row_is_listed_once_with_its_label_and_channels_in_the_order_of_the_tree(self):
+        groups = logconf.tree(CHAN, CAT, logconf.default_config(CHAN))
+        rows = self.section("TUNER ROWS: WHAT CAN BE LOGGED AND WHERE IT COMES FROM")
+        shown = [l for l in rows[:rows.index("NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)")] if l.startswith("- ")]
+        tickable = [r for g in groups for r in g["rows"] if r["tickable"]]
+        self.assertEqual(len(shown), len(tickable))
+        self.assertEqual(len(tickable), 29 + 13 + 9)
+        for line, r in zip(shown, tickable):
+            with self.subTest(r["id"]):
+                self.assertTrue(line.startswith("- %s (" % r["label"]), line)
+                self.assertIn(r["id"], line)
+                self.assertTrue(line.endswith("reads once: %s; live: %s" % (", ".join(r["once"]) or "none", ", ".join(r["live"]) or "none"))
+                                or line.endswith("Reads once: %s; live: %s" % (", ".join(r["once"]) or "none", ", ".join(r["live"]) or "none")), line)
+
+    def test_a_group_line_names_the_group_and_its_description_only_for_groups_with_a_tickable_row(self):
+        for g in logconf.tree(CHAN, CAT, logconf.default_config(CHAN)):
+            line = "GROUP %s: %s" % (g["name"], g["description"])
+            with self.subTest(g["name"]):
+                self.assertEqual(line in self.lines, g["tickable"] > 0)
+        order = [l for l in self.lines if l.startswith("GROUP ")]
+        self.assertEqual(len(order), len([g for g in logconf.tree(CHAN, CAT, logconf.default_config(CHAN)) if g["tickable"]]))
+        self.assertTrue(order[0].startswith("GROUP Behaviour values: "))
+        self.assertTrue(order[1].startswith("GROUP Car state: "))
+
+    def test_the_rows_section_explains_what_a_row_is(self):
+        intro = self.lines[self.lines.index("TUNER ROWS: WHAT CAN BE LOGGED AND WHERE IT COMES FROM") + 1]
+        self.assertIn("one checkbox in the Logging tab", intro)
+        self.assertIn("once channels once per session", intro)
+        self.assertIn("live channels in every sample", intro)
+        self.assertIn("30 or 60 Hz", intro)
+
+    def test_the_greyed_rows_are_in_the_not_visible_section_with_their_status_words_and_never_among_the_tickable_rows(self):
+        end = self.lines.index("NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)")
+        rows, hidden = self.lines[:end], self.lines[end + 1:]
+        indirect = next(l for l in hidden if l.startswith("- judged only through their effect: "))
+        none = next(l for l in hidden if l.startswith("- not published: "))
+        for status, line in (("indirect", indirect), ("none", none)):
+            ids = [s["id"] for s in CAT["settings"] if CHAN["settings"][s["id"]]["status"] == status]
+            labels = {s["id"]: s["label"] for s in CAT["settings"]}
+            entries = line.split(": ", 1)[1].split("; ")
+            self.assertEqual(len(entries), len(ids))
+            self.assertEqual(sorted(entries), sorted("%s (%s)" % (labels[i], i) for i in ids))
+        self.assertEqual((len(indirect.split("; ")), len(none.split("; "))), (90, 24))
+        self.assertIn("Final drive ratio (final_ratio)", indirect)
+        self.assertIn("Handbrake torque (handbrake_torque)", none)
+        for sid in ("final_ratio", "handbrake_torque", "gear_1", "toe_front"):
+            self.assertNotIn("(id %s" % sid, "\n".join(rows))
+        self.assertEqual(len([l for l in hidden if l.startswith("- ")]), 2)
+
+    def test_the_text_is_ascii_and_the_same_every_time_whatever_the_choice(self):
+        self.text.encode("ascii")
+        self.assertEqual(self.build(), self.text)
+        same = logconf.ai_command(CHAN, CAT, GLOSSARY_RAW, TEMPLATE, {"version": 1, "rate_hz": 60, "ticked": ["limiter", "car_state.turbo"]})
+        self.assertEqual(same, self.text)
+        self.assertEqual(logconf.ai_command(CHAN, CAT, GLOSSARY_RAW, TEMPLATE, logconf.default_config(CHAN)), self.text)
+
+    def test_the_inputs_are_not_changed(self):
+        chan, cat, glossary = copy.deepcopy(CHAN), copy.deepcopy(CAT), copy.deepcopy(GLOSSARY_RAW)
+        logconf.ai_command(chan, cat, glossary, TEMPLATE)
+        self.assertEqual((chan, cat, glossary), (CHAN, CAT, GLOSSARY_RAW))
+
+    def test_non_ascii_characters_are_replaced_by_a_plain_equivalent_or_a_question_mark(self):
+        glossary = glossary_changed(lambda g: g["channels"]["rpm"].update(meaning="Speed \u00b0 \u2013 \u201cx\u201d \u2019 caf\u00e9 \u4e2d"))
+        text = self.build(glossary=glossary)
+        text.encode("ascii")
+        self.assertIn("Speed deg - \"x\" ' caf? ?", text)
+        cat = copy.deepcopy(CAT)
+        next(s for s in cat["settings"] if s["id"] == "limiter")["label"] = "Rev limiter \u00b0"
+        self.assertIn("- Rev limiter deg (id limiter", self.build(catalogue=cat))
+        self.build(template=TEMPLATE.replace("ROLE", "R\u00d6LE", 1)).encode("ascii")
+
+    def test_a_line_per_channel_stays_one_line_even_when_the_text_has_line_breaks(self):
+        glossary = glossary_changed(lambda g: g["channels"]["rpm"].update(meaning="two\nlines  here", notes="a\r\nb"))
+        text = self.build(glossary=glossary)
+        self.assertIn("- rpm [rpm]: two lines here Range: 0 up to the rev limiter (see rpm_max); no other fixed limit. Notes: a b", text.split("\n"))
+
+    def test_a_placeholder_left_in_the_result_is_a_value_error(self):
+        for template in (TEMPLATE + "\n{{OTHER}}", TEMPLATE + " }}", "{{ROWS}} {{CHANNELS}} {{"):
+            with self.subTest(template[-12:]), self.assertRaisesRegex(ValueError, "placeholder is left"):
+                self.build(template=template)
+        glossary = glossary_changed(lambda g: g["channels"]["rpm"].update(notes="see {{ROWS}} here"))
+        with self.assertRaisesRegex(ValueError, "placeholder is left"):
+            self.build(glossary=glossary)
+
+    def test_a_template_without_placeholders_comes_back_unchanged(self):
+        self.assertEqual(self.build(template="plain\ntext\n"), "plain\ntext\n")
+
+    def test_the_text_is_not_empty_and_big_enough_to_hold_everything(self):
+        self.assertGreater(len(self.text), 20000)
+        self.assertLess(len(self.text), 1048576)
+
+
+class TestSessionFile(unittest.TestCase):
+    def setUp(self):
+        cm = tmp()
+        self.d = cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.logs = str(self.d / "logs")
+        self.path = write(os.path.join(self.logs, "2026-11-16_12-00-00_ks_x.jsonl"), "{}\n")
+
+    def test_a_plain_name_of_an_existing_file_is_the_absolute_path(self):
+        path = logconf.session_file(self.logs, "2026-11-16_12-00-00_ks_x.jsonl")
+        self.assertEqual(path, os.path.abspath(self.path))
+        self.assertTrue(os.path.isabs(path))
+
+    def test_a_relative_logs_folder_gives_an_absolute_path(self):
+        rel = os.path.relpath(self.logs)
+        self.assertTrue(os.path.isabs(logconf.session_file(rel, "2026-11-16_12-00-00_ks_x.jsonl")))
+
+    def test_a_name_with_spaces_an_apostrophe_and_capitals_is_fine(self):
+        for name in ("my file.jsonl", "it's.jsonl", "UPPER.JSONL", "Mixed.JsonL"):
+            with self.subTest(name):
+                write(os.path.join(self.logs, name), "{}\n")
+                self.assertEqual(logconf.session_file(self.logs, name), os.path.abspath(os.path.join(self.logs, name)))
+
+    def test_a_name_that_is_not_text_or_is_empty_is_a_value_error(self):
+        for name in ("", "  ", None, 5, b"a.jsonl", ["a.jsonl"]):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "must be text"):
+                logconf.session_file(self.logs, name)
+
+    def test_a_name_that_is_not_a_plain_file_name_is_a_value_error_and_reaches_nothing(self):
+        write(str(self.d / "outside.jsonl"), "{}\n")
+        write(os.path.join(self.logs, "sub", "x.jsonl"), "{}\n")
+        for name in ("..\\outside.jsonl", "../outside.jsonl", "..\\x.jsonl", "a/b.jsonl", "a\\b.jsonl", "sub/x.jsonl", "sub\\x.jsonl", "..",
+                     "x..jsonl", "..jsonl", os.path.abspath(self.path), "/etc/passwd.jsonl", "C:\\x.jsonl", "C:x.jsonl", "x.jsonl:stream",
+                     "x\0.jsonl", "\\\\server\\share\\x.jsonl"):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "plain file name"):
+                logconf.session_file(self.logs, name)
+
+    def test_a_name_without_the_jsonl_extension_is_a_value_error(self):
+        write(os.path.join(self.logs, "a.txt"), "{}\n")
+        write(os.path.join(self.logs, "a.jsonl.txt"), "{}\n")
+        for name in ("a.txt", "a", "a.json", "a.jsonl.txt", "a.jsonl ", "jsonl", "."):
+            with self.subTest(name), self.assertRaisesRegex(ValueError, "must end in .jsonl"):
+                logconf.session_file(self.logs, name)
+
+    def test_a_missing_file_is_a_file_not_found_error_that_names_it(self):
+        with self.assertRaisesRegex(FileNotFoundError, "no session file nope.jsonl"):
+            logconf.session_file(self.logs, "nope.jsonl")
+        with self.assertRaises(FileNotFoundError):
+            logconf.session_file(str(self.d / "no_such_folder"), "a.jsonl")
+
+    def test_a_folder_with_a_jsonl_name_is_not_a_file(self):
+        os.makedirs(os.path.join(self.logs, "dir.jsonl"))
+        with self.assertRaises(FileNotFoundError):
+            logconf.session_file(self.logs, "dir.jsonl")
+
+    def test_the_messages_are_plain_text_that_can_be_shown_as_an_error(self):
+        for name, kind in (("..\\x.jsonl", ValueError), ("a.txt", ValueError), ("nope.jsonl", FileNotFoundError)):
+            with self.subTest(name):
+                try:
+                    logconf.session_file(self.logs, name)
+                except kind as e:
+                    self.assertEqual(len(e.args), 1)
+                    self.assertNotIn(self.logs, str(e))
+                    self.assertEqual(str(e), str(e).strip())
 
 
 if __name__ == "__main__":

@@ -183,6 +183,7 @@ tr.changed td { background: var(--color-accent-tint); }
 tr.off td { color: var(--color-text-muted); font-style: italic; }
 .tablewrap.scroll { overflow-x: auto; }
 table.logtable { table-layout: auto; min-width: 560px; }
+#log-copy-msg + .tablewrap { margin-top: 10px; }
 .logtable th:first-child, .logtable td:first-child { width: 1%; }
 .name b { display: block; }
 .name .id { display: block; font-size: 12px; color: var(--color-text-muted); }
@@ -449,7 +450,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   <div id="panel-logging" role="tabpanel" aria-labelledby="tab-logging" hidden>
     <section class="panel">
       <h2>Session logging</h2>
-      <p>Choose what the logger records. Start start_logger.bat, then the game: a session file is written to the logs folder while the game runs. Your choices are saved at once and apply from the next session.</p>
+      <p>Choose what the logger records. Press Start logger (or double-click start_logger.bat), then start the game: a session file is written to the logs folder while the game runs. Your choices are saved at once and apply from the next session.</p>
       <p id="log-status"></p>
       <div class="actions">
         <button id="btn-log-start" type="button" disabled>Start logger</button>
@@ -470,6 +471,10 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 
     <section class="panel">
       <h2>Recent sessions</h2>
+      <div class="actions">
+        <button id="btn-log-ai" type="button">Copy AI command</button>
+      </div>
+      <p id="log-copy-msg" class="garage-help" role="status" hidden></p>
       <div class="tablewrap">
         <table>
           <caption class="sr-only">Recent session files</caption>
@@ -482,6 +487,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
               <th scope="col">Samples</th>
               <th scope="col">Size</th>
               <th scope="col">Modified</th>
+              <th scope="col">Copy for AI</th>
             </tr>
           </thead>
           <tbody id="log-sessions"></tbody>
@@ -2423,10 +2429,114 @@ function renderLogSessions() {
     const cells = [s.file, s.car || "-", s.track || "-", fmtDuration(s.duration_s), s.samples === null ? "-" : String(s.samples),
       fmtBytes(s.size), new Date(s.modified * 1000).toLocaleString()];
     for (const text of cells) tr.appendChild(el("td", "", text));
+    const copy = el("td");
+    const button = el("button", "reset", "Copy file");
+    button.type = "button";
+    button.setAttribute("aria-label", "Copy file " + s.file);
+    button.addEventListener("click", () => copySessionFile(s.file, button));
+    copy.appendChild(button);
+    tr.appendChild(copy);
     body.appendChild(tr);
   }
   $("log-sessions-empty").hidden = logSessions.length > 0;
   renderLogLines();
+}
+
+// the clipboard API needs a secure page (https or localhost): on another device over http a hidden text box and the old copy
+// command are used; it throws when both ways fail
+async function copyText(text) {
+  if (window.isSecureContext && navigator.clipboard) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch (e) {
+      /* the text box below is tried next */
+    }
+  }
+  const area = el("textarea", "sr-only", text);
+  area.setAttribute("readonly", "");
+  document.body.appendChild(area);
+  area.select();
+  let done = false;
+  try {
+    done = document.execCommand("copy");
+  } catch (e) {
+    done = false;
+  }
+  area.remove();
+  if (!done) throw new Error("the text could not be copied to the clipboard");
+}
+
+function kiloBytes(size) {
+  return (size / 1024).toFixed(1);
+}
+
+function showCopyMsg(text) {
+  $("log-copy-msg").textContent = text;
+  $("log-copy-msg").hidden = text === "";
+}
+
+// a copy button is off while its own request runs; the message of the last copy and the error line are cleared when the next starts
+function beginCopy(button) {
+  button.disabled = true;
+  logError = "";
+  showCopyMsg("");
+  renderLogLines();
+}
+
+function endCopy(button) {
+  button.disabled = false;
+  renderLogLines();
+}
+
+async function copyAiCommand() {
+  const button = $("btn-log-ai");
+  beginCopy(button);
+  try {
+    const res = await api("/api/log_ai_command", undefined, selection);
+    await copyText(res.text);
+    showCopyMsg("AI command copied (" + kiloBytes(res.size) + " KB)");
+  } catch (e) {
+    logError = e.message;
+  }
+  endCopy(button);
+}
+
+// another device cannot get the file itself: the text of the file is copied, up to the 1 MB the server sends
+async function copyFileAsText(name) {
+  let res;
+  try {
+    res = await api("/api/log_file?file=" + encodeURIComponent(name), undefined, selection);
+  } catch (e) {
+    const hint = !onThisPc() && e.message.includes("larger than 1 MB") ? " Open the page on the PC to copy the file itself." : "";
+    throw new Error(e.message + hint);
+  }
+  await copyText(res.text);
+  return name + " copied as text (" + kiloBytes(res.size) + " KB)";
+}
+
+// the page is on the PC itself: the server puts the file on the clipboard, and when that fails the text of the file is copied
+async function copyFileOnPc(name) {
+  try {
+    await api("/api/log_copy", { file: name }, selection);
+  } catch (e) {
+    return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;
+  }
+  return name + " copied: paste it into the chat with Ctrl+V";
+}
+
+function onThisPc() {
+  return ["127.0.0.1", "localhost", "[::1]", "::1"].includes(window.location.hostname);
+}
+
+async function copySessionFile(name, button) {
+  beginCopy(button);
+  try {
+    showCopyMsg(onThisPc() ? await copyFileOnPc(name) : await copyFileAsText(name));
+  } catch (e) {
+    logError = e.message;
+  }
+  endCopy(button);
 }
 
 async function loadLogSessions() {
@@ -2467,7 +2577,7 @@ function buildLogRow(r) {
   } else {
     const line = el("span", "id");
     line.append(el("span", "badge", r.status === "indirect" ? "effect only" : "not published"));
-    if (r.note) line.append(" " + r.note);
+    if (r.status === "indirect" && r.note) line.append(" " + r.note);
     name.appendChild(line);
   }
   tr.append(tick, name, el("td", "unit", r.unit || ""), logChannelCell(r.once), logChannelCell(r.live));
@@ -2694,6 +2804,7 @@ $("btn-sound-reset").addEventListener("click", resetSounds);
 $("log-rate").addEventListener("change", logRateChanged);
 $("btn-log-start").addEventListener("click", startLogger);
 $("btn-log-stop").addEventListener("click", stopLogger);
+$("btn-log-ai").addEventListener("click", copyAiCommand);
 $("btn-log-all").addEventListener("click", () => setAllLog(true));
 $("btn-log-none").addEventListener("click", () => setAllLog(false));
 $("log-groups").addEventListener("change", logChanged);

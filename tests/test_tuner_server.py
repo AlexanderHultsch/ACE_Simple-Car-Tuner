@@ -12,10 +12,12 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 import sys
 import threading
 import time
 import unittest
+import urllib.parse
 from unittest import mock
 
 from support import ROOT, FakeCar, mini_catalogue, mini_setting, run_tool, tmp
@@ -272,15 +274,18 @@ class TestRoutes(ServerCase):
         self.make_car()
 
     def test_route_tables(self):
-        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/log_config", "/api/log_sessions", "/api/log_status",
+        self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/log_ai_command", "/api/log_config", "/api/log_file",
+                                                 "/api/log_sessions", "/api/log_status",
                                                  "/api/settings", "/api/sounds", "/api/state", "/api/turbo", "/api/tyre", "/api/tyres"])
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
-                                                  "/api/log_config_set", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
+                                                  "/api/log_config_set", "/api/log_copy", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
                                                   "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
-        self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre",))
+        self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre", "/api/log_file"))
         self.assertTrue(set(ts.QUERY_ROUTES) <= set(ts.GET_ROUTES))
+        self.assertEqual(ts.LOCAL_ROUTES, ("/api/log_copy",))
+        self.assertTrue(set(ts.LOCAL_ROUTES) <= set(ts.POST_ROUTES))
 
     def test_the_index_page_is_served_from_the_repo_file(self):
         r = self.get("/")
@@ -2529,6 +2534,352 @@ class TestLoggerRoutes(LogCase):
         self.assertTrue(r.json["error"].startswith("unknown car"), r.json)
         self.assertEqual(self.post("/api/logger_start", {"tune": "nope"}).status, 400)
         self.popen.assert_not_called()
+
+
+class TestLogAiCommandRoute(LogCase):
+    """GET /api/log_ai_command: the AI command built from the template, the glossary and the rows of the Logging tab."""
+
+    def command(self):
+        return logconf.ai_command(logconf.load_channels(), REAL_CATALOGUE, logconf.load_glossary(), logconf.load_ai_template())
+
+    def test_the_answer_is_the_text_of_the_command_and_its_size_in_bytes(self):
+        r = self.get("/api/log_ai_command")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.headers.get("Cache-Control")),
+                         (200, "application/json; charset=utf-8", "no-store"))
+        self.assertEqual(set(r.json), {"text", "size"})
+        self.assertEqual(r.json["text"], self.command())
+        self.assertEqual(r.json["size"], len(r.json["text"].encode("utf-8")))
+        self.assertGreater(r.json["size"], 20000)
+
+    def test_the_text_holds_the_template_the_glossary_of_every_channel_and_the_rows(self):
+        text = self.get("/api/log_ai_command").json["text"]
+        self.assertTrue(text.startswith("ROLE\n"))
+        for part in ("GLOSSARY OF THE VALUES IN THE LOG", "TUNER ROWS: WHAT CAN BE LOGGED AND WHERE IT COMES FROM",
+                     "NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)"):
+            self.assertEqual(text.count(part), 1, part)
+        for name in logconf.channel_names():
+            self.assertIn("- %s [" % name, text)
+        self.assertNotIn("{{", text)
+        text.encode("ascii")
+
+    def test_it_needs_no_base_car_and_no_idle_job_and_writes_nothing(self):
+        ts.JOB["state"] = "running"
+        with ts.STATE_LOCK:
+            self.assertEqual(self.get("/api/log_ai_command?car=ks_y").status, 200)
+        self.assertFalse(os.path.exists(self.logs))
+        self.assertFalse(os.path.exists(self.config_file))
+        self.assertEqual(self.get("/api/log_ai_command?car=nope").status, 400)
+
+    def test_the_handler_gets_the_resolved_car_and_tune_and_no_query(self):
+        seen = []
+        with mock.patch.dict(ts.GET_ROUTES, {"/api/log_ai_command": lambda car, tune_id: seen.append((car, tune_id)) or {"text": "", "size": 0}}):
+            self.assertEqual(self.get("/api/log_ai_command?tune=draft").status, 200)
+        self.assertEqual(seen, [("ks_x", "draft")])
+        self.assertNotIn("/api/log_ai_command", ts.QUERY_ROUTES)
+        self.assertNotIn("/api/log_ai_command", ts.ACCEPTED)
+
+    def test_a_damaged_glossary_or_template_is_a_500_with_the_text(self):
+        for name, error in (("load_glossary", "log glossary: broken"), ("load_ai_template", "AI command template: broken"),
+                            ("load_channels", "log channels: broken")):
+            with self.subTest(name), mock.patch.object(logconf, name, side_effect=ValueError(error)):
+                r = self.get("/api/log_ai_command")
+                self.assertEqual((r.status, r.json), (500, {"error": error}))
+
+    def test_methods_and_paths(self):
+        self.assertEqual(self.post("/api/log_ai_command").status, 404)
+        self.assertEqual(self.request("PUT", "/api/log_ai_command").status, 405)
+        self.assertEqual(self.get("/api/log_ai_command", host="evil.example").status, 403)
+
+
+class TestLogFileRoute(LogCase):
+    """GET /api/log_file?file=<name>: the text of one session file of the logs folder, up to 1 MB."""
+
+    def put(self, name, data):
+        path = os.path.join(self.logs, name)
+        os.makedirs(self.logs, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data if isinstance(data, bytes) else data.encode("utf-8"))
+        return path
+
+    def fetch(self, name):
+        return self.get("/api/log_file?file=" + urllib.parse.quote(name, safe=""))
+
+    def test_the_answer_is_the_name_the_size_in_bytes_and_the_utf_8_text(self):
+        text = '{"type":"header","car":"Café X"}\n{"type":"end","duration_s":1,"samples":0}\n'
+        self.put("a.jsonl", text)
+        r = self.fetch("a.jsonl")
+        self.assertEqual((r.status, r.headers.get("Content-Type")), (200, "application/json; charset=utf-8"))
+        self.assertEqual(r.json, {"file": "a.jsonl", "size": len(text.encode("utf-8")), "text": text})
+        self.assertGreater(r.json["size"], len(text))
+
+    def test_a_name_with_spaces_and_an_apostrophe_is_url_decoded(self):
+        self.put("my file's 1.jsonl", "{}\n")
+        r = self.fetch("my file's 1.jsonl")
+        self.assertEqual((r.status, r.json["file"], r.json["text"]), (200, "my file's 1.jsonl", "{}\n"))
+
+    def test_the_text_keeps_its_line_ends(self):
+        self.put("crlf.jsonl", b"{}\r\n{}\n")
+        self.assertEqual(self.fetch("crlf.jsonl").json["text"], "{}\r\n{}\n")
+
+    def test_a_bad_name_is_400_and_reads_nothing(self):
+        self.put("a.jsonl", "{}\n")
+        self.put("a.txt", "{}\n")
+        for name in ("..\\a.jsonl", "../a.jsonl", "..", "a/b.jsonl", "sub\\a.jsonl", os.path.join(self.logs, "a.jsonl"), "/etc/a.jsonl",
+                     "C:a.jsonl", "a.jsonl:stream", "a.txt", "a", "a.jsonl.txt", ".jsonl.exe", " "):
+            with self.subTest(name), mock.patch.object(ts, "open", create=True, side_effect=AssertionError("a file was opened")):
+                r = self.fetch(name)
+                self.assertEqual(r.status, 400, r.data)
+                self.assertIn("error", r.json)
+
+    def test_a_missing_file_parameter_is_400(self):
+        for path in ("/api/log_file", "/api/log_file?file=", "/api/log_file?other=a.jsonl"):
+            with self.subTest(path):
+                self.assertEqual((self.get(path).status, self.get(path).json), (400, {"error": "need file (text)"}))
+
+    def test_a_missing_file_is_404_and_so_is_a_folder_with_such_a_name(self):
+        r = self.fetch("nope.jsonl")
+        self.assertEqual((r.status, r.json), (404, {"error": "no session file nope.jsonl"}))
+        os.makedirs(os.path.join(self.logs, "dir.jsonl"))
+        self.assertEqual(self.fetch("dir.jsonl").status, 404)
+
+    def test_a_file_of_exactly_1_mb_is_sent_and_a_larger_one_is_413_without_being_read(self):
+        self.put("edge.jsonl", b"x" * 1048576)
+        r = self.fetch("edge.jsonl")
+        self.assertEqual((r.status, r.json["size"], len(r.json["text"])), (200, 1048576, 1048576))
+        self.put("big.jsonl", b"x" * 1048577)
+        with mock.patch.object(ts, "open", create=True, side_effect=AssertionError("the file was opened")):
+            r = self.fetch("big.jsonl")
+        self.assertEqual((r.status, r.json), (413, {"error": "the file is larger than 1 MB: too large to copy as text"}))
+
+    def test_the_folder_is_the_logs_option_of_the_server(self):
+        other = str(self.d / "other_logs")
+        self.put("here.jsonl", "{}\n")
+        os.makedirs(other)
+        with open(os.path.join(other, "there.jsonl"), "wb") as f:
+            f.write(b"[]\n")
+        ts.CONFIG["logs"] = other
+        self.assertEqual(self.fetch("here.jsonl").status, 404)
+        self.assertEqual(self.fetch("there.jsonl").json["text"], "[]\n")
+
+    def test_the_raw_query_is_the_third_argument_and_the_file_comes_from_it(self):
+        seen = []
+
+        def spy(car, tune_id, query):
+            seen.append((car, tune_id, query))
+            return {}
+        with mock.patch.dict(ts.GET_ROUTES, {"/api/log_file": spy}):
+            self.assertEqual(self.get("/api/log_file?file=a.jsonl&car=ks_x&tune=draft").status, 200)
+        self.assertEqual(seen, [("ks_x", "draft", "file=a.jsonl&car=ks_x&tune=draft")])
+        self.assertIn("/api/log_file", ts.QUERY_ROUTES)
+        self.put("a.jsonl", "{}\n")
+        self.assertEqual(self.get("/api/log_file?file=a.jsonl&car=ks_y&tune=draft").json["file"], "a.jsonl")
+
+    def test_it_needs_no_base_car_and_no_idle_job_and_writes_nothing(self):
+        self.put("a.jsonl", "{}\n")
+        before = sorted(os.listdir(self.logs))
+        ts.JOB["state"] = "running"
+        with ts.STATE_LOCK:
+            self.assertEqual(self.get("/api/log_file?file=a.jsonl&car=ks_y").status, 200)
+        self.assertEqual(sorted(os.listdir(self.logs)), before)
+        self.assertEqual(self.get("/api/log_file?file=a.jsonl&car=nope").status, 400)
+
+    def test_methods_and_paths(self):
+        self.put("a.jsonl", "{}\n")
+        self.assertEqual(self.post("/api/log_file", {"file": "a.jsonl"}).status, 404)
+        self.assertEqual(self.request("DELETE", "/api/log_file?file=a.jsonl").status, 405)
+        self.assertEqual(self.get("/api/log_file?file=a.jsonl", host="evil.example").status, 403)
+
+    def test_a_client_on_the_home_network_may_read_the_file(self):
+        self.assertNotIn("/api/log_file", ts.LOCAL_ROUTES)
+
+
+class LanHandler(ts.Handler):
+    """A Handler whose client always comes from a private address of the home network, not from the PC itself."""
+    @property
+    def client_address(self):
+        return ("192.168.1.20", 4711)
+
+    @client_address.setter
+    def client_address(self, value):
+        pass
+
+
+class CopyCase(LogCase):
+    """LogCase with subprocess.run replaced by a recorder (the clipboard and PowerShell are never touched) and helpers for a session file."""
+    NO_WINDOW = 0x08000000
+
+    def setUp(self):
+        super().setUp()
+        self.completed = mock.Mock(returncode=0, stdout="", stderr="")
+        self.run = self.patch(ts.subprocess, "run", mock.Mock(return_value=self.completed))
+
+    def put(self, name="a.jsonl", data="{}\n"):
+        path = os.path.join(self.logs, name)
+        os.makedirs(self.logs, exist_ok=True)
+        with open(path, "w", encoding="utf-8", newline="\n") as f:
+            f.write(data)
+        return os.path.abspath(path)
+
+    def copy_on(self, platform, name="a.jsonl", body=None, **kw):
+        with mock.patch.object(sys, "platform", platform), mock.patch.object(ts.subprocess, "CREATE_NO_WINDOW", self.NO_WINDOW, create=True):
+            return self.post("/api/log_copy", {"file": name} if body is None else body, **kw)
+
+
+class TestLogCopyRoute(CopyCase):
+    """POST /api/log_copy: puts a session file on the clipboard of the PC with PowerShell (subprocess.run is a recorder)."""
+
+    def test_the_powershell_call_has_exactly_the_documented_arguments(self):
+        path = self.put()
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"copied": True, "file": "a.jsonl", "how": "file"}))
+        self.run.assert_called_once()
+        args, kw = self.run.call_args
+        self.assertEqual(args, (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -LiteralPath '%s'" % path],))
+        self.assertEqual(kw, {"capture_output": True, "text": True, "timeout": 15, "creationflags": self.NO_WINDOW})
+        self.assertEqual(ts.CLIPBOARD_TIMEOUT, 15)
+
+    def test_an_apostrophe_in_the_name_or_the_folder_is_doubled_in_the_command(self):
+        path = self.put("it's.jsonl")
+        self.assertEqual(self.copy_on("win32", "it's.jsonl").status, 200)
+        command = self.run.call_args[0][0][4]
+        self.assertEqual(command, "Set-Clipboard -LiteralPath '%s'" % path.replace("'", "''"))
+        self.assertIn("it''s.jsonl'", command)
+        self.assertTrue(command.endswith("'"))
+        other = str(self.d / "o'brien")
+        ts.CONFIG["logs"] = other
+        self.write(os.path.join(other, "b.jsonl"), "{}\n")
+        self.assertEqual(self.copy_on("win32", "b.jsonl").status, 200)
+        self.assertIn("o''brien", self.run.call_args[0][0][4])
+        self.assertNotIn("o'brien", self.run.call_args[0][0][4])
+
+    def test_the_path_is_the_absolute_path_of_the_file_in_the_logs_folder_from_session_file_only(self):
+        path = self.put("c.jsonl")
+        with mock.patch.object(logconf, "session_file", wraps=logconf.session_file) as spy:
+            self.assertEqual(self.copy_on("win32", "c.jsonl").status, 200)
+        spy.assert_called_once_with(clone_car.expand(self.logs), "c.jsonl")
+        self.assertTrue(os.path.isabs(path))
+        self.assertIn("'%s'" % path, self.run.call_args[0][0][4])
+
+    def test_the_powershell_call_is_one_small_function_and_no_shell_is_used(self):
+        path = self.put()
+        ts.copy_file_to_clipboard(path)
+        self.run.assert_called_once()
+        self.assertNotIn("shell", self.run.call_args[1])
+        self.assertIsInstance(self.run.call_args[0][0], list)
+
+    def test_off_windows_the_creation_flags_are_zero(self):
+        self.put()
+        with mock.patch.object(sys, "platform", "linux"):
+            ts.copy_file_to_clipboard(os.path.join(self.logs, "a.jsonl"))
+        self.assertEqual(self.run.call_args[1]["creationflags"], 0)
+
+    def test_a_bad_name_is_400_and_a_missing_file_404_and_nothing_runs(self):
+        self.put()
+        for name, status in (("..\\a.jsonl", 400), ("a/b.jsonl", 400), ("C:a.jsonl", 400), ("a.txt", 400), ("", 400), (None, 400), (5, 400),
+                             ("nope.jsonl", 404)):
+            with self.subTest(name):
+                r = self.copy_on("win32", name)
+                self.assertEqual(r.status, status, r.data)
+                self.assertIn("error", r.json)
+        self.assertEqual(self.copy_on("win32", body={}).status, 400)
+        self.assertEqual(self.copy_on("win32", body={"file": ["a.jsonl"]}).status, 400)
+        self.assertEqual(self.copy_on("win32", "nope.jsonl").json, {"error": "no session file nope.jsonl"})
+        self.run.assert_not_called()
+
+    def test_off_windows_it_is_400_and_nothing_runs(self):
+        self.put()
+        r = self.copy_on("linux")
+        self.assertEqual((r.status, r.json), (400, {"error": "copying a file to the clipboard needs Windows"}))
+        self.run.assert_not_called()
+
+    def test_a_bad_name_is_refused_before_the_platform_check(self):
+        self.assertEqual(self.copy_on("linux", "..\\x.jsonl").status, 400)
+        self.assertEqual(self.copy_on("linux", "nope.jsonl").status, 404)
+
+    def test_a_non_zero_return_code_is_a_500_with_the_error_text_of_powershell(self):
+        self.put()
+        self.completed.returncode, self.completed.stderr = 1, "Set-Clipboard : access denied\r\n"
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.json), (500, {"error": "Set-Clipboard : access denied"}))
+
+    def test_a_non_zero_return_code_without_text_says_the_exit_code(self):
+        self.put()
+        self.completed.returncode, self.completed.stderr = 3, ""
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.json), (500, {"error": "PowerShell failed with exit code 3"}))
+        self.completed.stderr = None
+        self.assertEqual(self.copy_on("win32").json, {"error": "PowerShell failed with exit code 3"})
+
+    def test_a_timeout_or_an_os_error_is_a_500_with_the_text_of_the_exception(self):
+        self.put()
+        self.run.side_effect = subprocess.TimeoutExpired(["powershell.exe"], 15)
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.json), (500, {"error": str(subprocess.TimeoutExpired(["powershell.exe"], 15))}))
+        self.assertIn("timed out after 15", r.json["error"])
+        self.run.side_effect = FileNotFoundError("powershell.exe not found")
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.json), (500, {"error": "powershell.exe not found"}))
+        self.run.side_effect = PermissionError("access is denied")
+        self.assertEqual(self.copy_on("win32").json, {"error": "access is denied"})
+
+    def test_it_needs_no_base_car_and_no_idle_job_and_writes_nothing(self):
+        self.put()
+        before = sorted(os.listdir(self.logs))
+        ts.JOB["state"] = "running"
+        with ts.STATE_LOCK:
+            self.assertEqual(self.copy_on("win32", body={"file": "a.jsonl", "car": "ks_y"}).status, 200)
+        self.assertEqual(sorted(os.listdir(self.logs)), before)
+        self.assertEqual(self.copy_on("win32", body={"file": "a.jsonl", "car": "nope"}).status, 400)
+
+    def test_it_is_a_post_route_with_the_usual_checks(self):
+        self.put()
+        self.assertEqual(self.get("/api/log_copy").status, 404)
+        self.assertEqual(self.copy_on("win32", post_headers=False).status, 403)
+        self.assertEqual(self.copy_on("win32", host="evil.example").status, 403)
+        self.assertEqual(self.request("PUT", "/api/log_copy").status, 405)
+        self.assertNotIn("/api/log_copy", ts.ACCEPTED)
+        self.assertNotIn("/api/log_copy", ts.QUERY_ROUTES)
+        self.run.assert_not_called()
+
+    def test_a_client_on_this_pc_may_call_it_and_the_check_is_the_loopback_test(self):
+        for address in ("127.0.0.1", "127.0.0.2", "::1"):
+            with self.subTest(address):
+                self.assertTrue(ts.loopback_ip(address))
+        for address in ("192.168.1.20", "10.0.0.1", "8.8.8.8", "::2", "fe80::1", "", "localhost", "x"):
+            with self.subTest(address):
+                self.assertFalse(ts.loopback_ip(address))
+
+
+class TestLogCopyFromTheNetwork(CopyCase):
+    """The same route called by a client of the home network (192.168.1.20): refused, and nothing runs."""
+    handler = LanHandler
+    MESSAGE = {"error": "the file can only be copied on the PC where the tuner runs"}
+
+    def test_a_client_that_is_not_loopback_is_403_and_nothing_runs(self):
+        self.put()
+        r = self.copy_on("win32")
+        self.assertEqual((r.status, r.json), (403, self.MESSAGE))
+        self.run.assert_not_called()
+
+    def test_the_refusal_comes_before_the_name_and_the_platform_checks(self):
+        for platform, name in (("win32", "nope.jsonl"), ("win32", "..\\x.jsonl"), ("linux", "a.jsonl")):
+            with self.subTest((platform, name)):
+                self.assertEqual(self.copy_on(platform, name).json, self.MESSAGE)
+        self.assertEqual(self.copy_on("win32", body={"file": "a" * 1000}).json, self.MESSAGE)
+        self.run.assert_not_called()
+
+    def test_the_other_checks_of_the_server_still_come_first(self):
+        self.put()
+        self.assertEqual(self.copy_on("win32", host="evil.example").status, 403)
+        self.assertEqual(self.copy_on("win32", host="evil.example").json, {"error": "forbidden host"})
+        self.assertEqual(self.copy_on("win32", post_headers=False).json, {"error": "missing header X-Tuner: 1"})
+
+    def test_the_other_routes_still_answer_such_a_client(self):
+        self.put()
+        self.assertEqual(self.get("/api/log_file?file=a.jsonl").status, 200)
+        self.assertEqual(self.get("/api/log_ai_command").status, 200)
+        self.assertEqual(self.get("/api/log_sessions").status, 200)
+        self.assertEqual(self.post("/api/log_config_set", {"ticked": [], "rate_hz": 30}).status, 200)
 
 
 class TestLogsDir(Env):

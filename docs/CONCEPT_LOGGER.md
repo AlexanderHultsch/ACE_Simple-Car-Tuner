@@ -1,6 +1,6 @@
 # Concept: Session Logger (2026-11-16)
 
-Status: **built on 2026-11-16 (packages 1 to 5), tested on synthetic memory only, never run against the real game.** The result is described in [TUNER_SPEC.md](TUNER_SPEC.md) section 4j; PC checks are HANDOVER rows 49 to 54. This document keeps the concept and the interview decisions marked (A). Differences between the concept and the build: the packages ran in the order 1, 2, 4, 3, 5; the `step()` of the logger waits 1 ms instead of 0 when a sample is due but no new physics packet came (no busy loop); in the game menu the status file says `waiting` with the file `null`; the static line is not gated on live status; a session whose game closed ends after the 5 s without new data. Open points are in section 9.
+Status: **built on 2026-11-16 (packages 1 to 5), tested on synthetic memory only, never run against the real game.** The result is described in [TUNER_SPEC.md](TUNER_SPEC.md) section 4j; PC checks are HANDOVER rows 49 to 56. This document keeps the concept and the interview decisions marked (A). Differences between the concept and the build: the packages ran in the order 1, 2, 4, 3, 5; the `step()` of the logger waits 1 ms instead of 0 when a sample is due but no new physics packet came (no busy loop); in the game menu the status file says `waiting` with the file `null`; the static line is not gated on live status; a session whose game closed ends after the 5 s without new data. Open points are in section 9.
 
 ## 1. Purpose and scope
 
@@ -28,8 +28,12 @@ The logger is a separate process (A: its own batch file). It uses the tuner's fu
 - Same groups as the tuner table, in the same order, expandable like the table, with the same group descriptions. One list: each tuner setting is a row with a checkbox; a group checkbox ticks the whole group.
 - **Only settings the game shows directly are tickable** (A, 2026-11-16). Indirect and invisible settings stay in the list, greyed and not tickable, with a note ("not published by the game", or "only its effect is visible: use the behaviour values").
 - Ticking a direct setting logs its once-only value and its live values (the channels listed for it in section 6). Nothing is logged that is not ticked. The time stamp `t` is always in every sample line.
-- One extra group at the end, "Behaviour values (not a tuner setting)", tickable row by row: speed, rpm, gear, gas, brake, steering, g-forces, yaw rate, pitch and roll, wheel load, slip angle and slip ratio, suspension travel, tyre temperatures, brake temperatures. This is how the effect of the greyed settings (springs, dampers, anti-roll bars, toe, the tyre model) is recorded. Ticked by default, tickable like everything else.
-- A second extra group, "Car state (not a tuner setting)", tickable row by row and **not ticked by default** (A, 2026-11-16): the car-side values of section 8d. Each row has once-only and live readings like the others.
+- Changed on 2026-11-16 after the first use (A): the tab lists **first "Behaviour values", then "Car state"**, then the tuner groups that have tickable rows (catalogue order), and **last the groups without any tickable row**; inside a group the tickable rows come first and the greyed rows last. The words "(not a tuner setting)" are dropped. Each group is a table with the columns tick, Setting, Unit, Once, Live; a greyed row has no checkbox (a dash), dimmed italic text and a badge ("effect only" or "not published").
+- "Behaviour values", tickable row by row: speed, rpm, gear, gas, brake, steering, g-forces, rotation (yaw rate, pitch, roll, heading), wheel load, slip, suspension travel, tyre temperatures, brake temperatures. This is how the effect of the greyed settings (springs, dampers, anti-roll bars, toe, the tyre model) is recorded. **Only Speed and Engine rpm are ticked by default** (a per-row default in `log_channels.json`); the rest must be ticked.
+- "Car state", tickable row by row and **not ticked by default** (A, 2026-11-16): the car-side values of section 8d. Each row has once-only and live readings like the others.
+- Ticking several rows that read the same channel (for example gas in seven rows) logs that channel **once** per sample: the logger works on the union of the channels.
+- **Start logger / Stop logger** buttons beside the status line (A, 2026-11-16): the server starts `tools/logger.py` as a hidden background process with its own work, mods and logs folders (console output in `logs/logger_console.log`) and stops it by creating `logs/logger_stop`, which ends an open session cleanly (reason "logger stopped"). `start_logger.bat` stays for manual use.
+- "Recent sessions" has a button **Copy AI command** (an AI-independent instruction for ChatGPT, Claude and others, generated from `tuner/log_ai_command.txt` plus a glossary of every channel from `tuner/log_glossary.json` and of every tickable row) and a column **Copy for AI** per file: on the PC itself the server puts the file on the Windows clipboard (paste = attached file), from another device the file's text is copied (up to 1 MB).
 - A sample rate selector (30 Hz or 60 Hz), a **logger status line** and a list of the recent session files (name, size, car, track, duration). The status line says whether the logger runs: "not running", "waiting for the game" or "logging <file>, <n> samples, <duration>". The logger writes `logs/logger_status.json` once a second (state, file, sample count, start time, process id); the route `/api/log_status` reads it and calls it "not running" when the file is older than 5 s. The tab refreshes it every 2 s while it is open.
 - Saved automatically as `log_config.json`; the logger reads it when a session starts, so a change applies to the next session.
 
@@ -135,7 +139,7 @@ Kunos' `ACE_SharedFileOut_Documentation_v1.pdf` (attached to the Race-Element di
 
 ## 8d. Car state group: car-side values the game shows (A: added, not ticked by default)
 
-The group "Car state (not a tuner setting)" in the Logging tab. From the official document; useful to check that tuner changes arrived. One tickable row each:
+The group "Car state" in the Logging tab. From the official document; useful to check that tuner changes arrived. One tickable row each:
 
 | Row | Channels | Checks |
 |---|---|---|

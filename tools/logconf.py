@@ -3,6 +3,7 @@
 Library module of tools/tuner_server.py and the logger (no command line of its own). tuner/log_channels.json names, for every setting of tuner/catalogue.json, whether the game shows it (status "direct": a once-only reading and live values, tickable; "indirect" and "none": greyed, not tickable, "once" and "live" empty and a note) and which channels of tools/ace_shm.py channels() it logs ("once": read once at the start of a session, "live": in every sample). "extra_groups" are groups of tickable rows that are not tuner settings (behaviour values, car state); the id of such a row in a choice is "<group id>.<row id>". A tickable id is a direct setting id or such a row id.
 The choice (log_config.json) is {"version": 1, "rate_hz": 30 or 60, "ticked": [tickable ids]}. A missing, damaged or invalid file reads as the default choice: the extra rows whose "default" is true, at 30 Hz.
 Session files are logs/*.jsonl, one JSON object per line: the first line has "type": "header" (with "car" and "track"), the last line of a finished session "type": "end" (with "duration_s" and "samples"). The running logger writes logs/logger_status.json = {"state": "waiting" or "logging", "file": text or null, "samples": int, "started": epoch seconds, "updated": epoch seconds, "pid": int}; it counts as running while "updated" is at most STATUS_MAX_AGE seconds old. The empty file logs/logger_stop (STOP_FILE) asks the running logger to stop; the logger deletes it.
+tuner/log_glossary.json describes every channel of ace_shm.channels() (unit, meaning, range, notes); tuner/log_ai_command.txt is the text of the AI command with the placeholders {{CHANNELS}} and {{ROWS}}, which ai_command() fills from the glossary and the rows of the Logging tab. session_file() turns the name of a session file into its path (plain names only).
 
 Stdlib only.
 """
@@ -11,6 +12,7 @@ import json
 import math
 import os
 import pathlib
+import re
 import sys
 import time
 
@@ -19,6 +21,8 @@ import ace_shm  # noqa: E402
 import tune  # noqa: E402
 
 CHANNELS = tune.REPO / "tuner" / "log_channels.json"
+GLOSSARY = tune.REPO / "tuner" / "log_glossary.json"
+AI_TEMPLATE = tune.REPO / "tuner" / "log_ai_command.txt"
 VERSION = 1
 RATES = (30, 60)
 DEFAULT_RATE = 30
@@ -28,6 +32,9 @@ STATUS_FILE = "logger_status.json"
 STATUS_MAX_AGE = 5
 STOP_FILE = "logger_stop"
 SESSION_TAIL = 4096
+AI_PLACEHOLDERS = ("{{CHANNELS}}", "{{ROWS}}")
+ASCII_FIXES = {"°": "deg", "–": "-", "—": "-", "‘": "'", "’": "'", "“": '"', "”": '"'}
+GREYED_STATUS_WORDS = (("indirect", "judged only through their effect"), ("none", "not published"))
 
 
 def known_channels():
@@ -351,3 +358,133 @@ def logger_status(logs_dir, now=None):
         return not_running()
     return {"running": True, "state": data["state"], "file": data["file"], "samples": data["samples"], "started": data["started"],
             "seconds": now - data["started"] if data["state"] == "logging" else None}
+
+
+def channel_names():
+    """The channel names of ace_shm.channels() in the order it builds them."""
+    return list(ace_shm.channels(b"", b""))
+
+
+def validate_glossary(glossary):
+    """Raises ValueError with a clear message unless the glossary is valid: version 1; channels has exactly the channel names of
+    ace_shm.channels(); every entry has the text keys unit, meaning and range (not empty) and notes (may be empty)."""
+    if not isinstance(glossary, dict):
+        raise ValueError("log glossary: expected an object")
+    if type(glossary.get("version")) is not int or glossary["version"] != VERSION:
+        raise ValueError("log glossary: version must be %d" % VERSION)
+    channels = glossary.get("channels")
+    if not isinstance(channels, dict):
+        raise ValueError("log glossary: needs channels, an object with one entry per channel")
+    wanted = channel_names()
+    missing = [n for n in wanted if n not in channels]
+    if missing:
+        raise ValueError("log glossary: channel %s has no entry" % ", ".join(missing))
+    extra = [n for n in channels if n not in wanted]
+    if extra:
+        raise ValueError("log glossary: entry %s is not a channel" % ", ".join(map(str, extra)))
+    for name, entry in channels.items():
+        where = "log glossary: channel %s" % name
+        if not isinstance(entry, dict):
+            raise ValueError("%s: expected an object" % where)
+        for key in ("unit", "meaning", "range"):
+            if not is_text(entry.get(key)):
+                raise ValueError("%s: %s must be text (not empty)" % (where, key))
+        if not isinstance(entry.get("notes"), str):
+            raise ValueError("%s: notes must be text" % where)
+
+
+def load_glossary(path=None):
+    """tuner/log_glossary.json (or the file at path), validated."""
+    glossary = tune.read_json(path or GLOSSARY)
+    validate_glossary(glossary)
+    return glossary
+
+
+def load_ai_template(path=None):
+    """The text of tuner/log_ai_command.txt (or the file at path); ValueError unless {{CHANNELS}} and {{ROWS}} each occur once."""
+    with open(path or AI_TEMPLATE, encoding="utf-8") as f:
+        template = f.read()
+    for placeholder in AI_PLACEHOLDERS:
+        if template.count(placeholder) != 1:
+            raise ValueError("AI command template: %s must occur exactly once" % placeholder)
+    return template
+
+
+def ascii_text(text):
+    return "".join(c if c.isascii() else ASCII_FIXES.get(c, "?") for c in text)
+
+
+def one_line(text):
+    return " ".join(text.split())
+
+
+def names_text(names):
+    return ", ".join(names) if names else "none"
+
+
+def glossary_section(glossary):
+    lines = ["GLOSSARY OF THE VALUES IN THE LOG"]
+    for name, e in glossary["channels"].items():
+        line = "- %s [%s]: %s Range: %s." % (name, e["unit"], e["meaning"], e["range"])
+        if e["notes"].strip():
+            line += " Notes: " + e["notes"]
+        lines.append(one_line(line))
+    return "\n".join(lines)
+
+
+def row_line(row, setting):
+    if row["status"] == "extra":
+        text = "- %s (row %s): %s Reads once: %s; live: %s" % (row["label"], row["id"], row["description"], names_text(row["once"]), names_text(row["live"]))
+    else:
+        parts = ["id %s" % row["id"], "unit %s" % (row["unit"] or "-")]
+        if number(setting.get("min")) and number(setting.get("max")):
+            parts.append("tuner limits %g to %g" % (setting["min"], setting["max"]))
+        text = "- %s (%s): reads once: %s; live: %s" % (row["label"], ", ".join(parts), names_text(row["once"]), names_text(row["live"]))
+    return one_line(text)
+
+
+def rows_section(chan, catalogue, config):
+    settings = {s["id"]: s for s in catalogue["settings"]}
+    groups = tree(chan, catalogue, config)
+    lines = ["TUNER ROWS: WHAT CAN BE LOGGED AND WHERE IT COMES FROM",
+             "A row is one checkbox in the Logging tab of the tuner page. Ticking a row logs its once channels once per session and its "
+             "live channels in every sample, at 30 or 60 Hz."]
+    for g in groups:
+        rows = [r for r in g["rows"] if r["tickable"]]
+        if rows:
+            lines.append(one_line("GROUP %s: %s" % (g["name"], g["description"])))
+            lines += [row_line(r, settings.get(r["id"], {})) for r in rows]
+    lines.append("NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)")
+    for status, words in GREYED_STATUS_WORDS:
+        rows = [r for g in groups for r in g["rows"] if not r["tickable"] and r["status"] == status]
+        if rows:
+            lines.append(one_line("- %s: %s" % (words, "; ".join("%s (%s)" % (r["label"], r["id"]) for r in rows))))
+    return "\n".join(lines)
+
+
+def ai_command(chan, catalogue, glossary, template, config=None):
+    """The template with {{CHANNELS}} replaced by the glossary of the values in the log (one line per channel, in the order of the
+    glossary) and {{ROWS}} by the rows of the Logging tab (the tickable rows of every group with their once and live channels and the
+    tuner limits, then the rows the game does not show); config is the choice the rows are listed for (default: the default choice).
+    ASCII only; ValueError when a placeholder is left in the result."""
+    config = default_config(chan) if config is None else config
+    sections = {"{{CHANNELS}}": glossary_section(glossary), "{{ROWS}}": rows_section(chan, catalogue, config)}
+    text = re.sub("|".join(map(re.escape, sections)), lambda m: sections[m.group(0)], template)
+    if "{{" in text or "}}" in text:
+        raise ValueError("AI command: a placeholder is left in the text")
+    return ascii_text(text)
+
+
+def session_file(logs_dir, name):
+    """The absolute path of the session file name in logs_dir. ValueError unless name is a plain file name (no path separator, no
+    drive, no ..) that ends in .jsonl; FileNotFoundError when logs_dir has no such file."""
+    if not isinstance(name, str) or not name.strip():
+        raise ValueError("the session file name must be text")
+    if any(c in name for c in "/\\:\0") or ".." in name or os.path.isabs(name):
+        raise ValueError("the session file name must be a plain file name")
+    if not name.lower().endswith(".jsonl"):
+        raise ValueError("the session file name must end in .jsonl")
+    path = os.path.join(logs_dir, name)
+    if not os.path.isfile(path):
+        raise FileNotFoundError("no session file %s" % name)
+    return os.path.abspath(path)

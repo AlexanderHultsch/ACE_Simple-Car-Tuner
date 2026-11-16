@@ -701,6 +701,120 @@ class TestStatusFile(LoggerCase):
         self.assertFalse([n for n in os.listdir(self.logs) if n.endswith(".tmp")])
 
 
+class TestStopRequest(LoggerCase):
+    def setUp(self):
+        super().setUp()
+        self.config(["behaviour.speed"])
+        self.stop_path = logconf.stop_path(self.logs)
+
+    def test_the_stop_file_is_the_one_of_logconf_in_the_logs_folder(self):
+        self.assertEqual(logconf.STOP_FILE, "logger_stop")
+        self.assertEqual(self.logger.stop_path, os.path.join(self.logs, "logger_stop"))
+        self.assertIs(self.logger.stop_requested, False)
+
+    def test_without_a_stop_file_nothing_is_requested(self):
+        self.drive(3.0)
+        self.assertIs(self.logger.stop_requested, False)
+        self.assertNotIn("stop requested", self.lines)
+
+    def test_a_stop_file_while_waiting_for_the_game_is_deleted_and_requests_the_stop(self):
+        self.game.running = False
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        self.clock.now += 1.0
+        self.assertEqual(self.logger.step(), logger.WAIT_S)
+        self.assertIs(self.logger.stop_requested, True)
+        self.assertFalse(os.path.exists(self.stop_path))
+        self.assertEqual(self.lines, ["waiting for the game ...", "stop requested"])
+
+    def test_a_stop_file_while_a_session_is_open_is_deleted_and_requests_the_stop(self):
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        self.clock.now += 1.0
+        self.game.tick()
+        wait = self.logger.step()
+        self.assertGreater(wait, 0)
+        self.assertIs(self.logger.stop_requested, True)
+        self.assertFalse(os.path.exists(self.stop_path))
+        self.assertEqual(self.lines[-1], "stop requested")
+        self.assertIsNotNone(self.logger.session)
+        self.assertNotIn("end", {r["type"] for r in self.records()})
+
+    def test_it_looks_for_the_file_at_most_once_a_second_together_with_the_status(self):
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        for dt in (0.4, 0.4):
+            self.clock.now += dt
+            self.game.tick()
+            self.logger.step()
+            self.assertTrue(os.path.exists(self.stop_path))
+            self.assertIs(self.logger.stop_requested, False)
+        self.clock.now += 0.3
+        self.game.tick()
+        self.logger.step()
+        self.assertFalse(os.path.exists(self.stop_path))
+        self.assertIs(self.logger.stop_requested, True)
+        self.assertEqual(logger.STATUS_EVERY_S, 1.0)
+
+    def test_it_looks_once_a_second_while_waiting_too(self):
+        self.game.running = False
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        self.clock.now += 0.9
+        self.logger.step()
+        self.assertTrue(os.path.exists(self.stop_path))
+        self.assertIs(self.logger.stop_requested, False)
+        self.clock.now += 0.1
+        self.logger.step()
+        self.assertFalse(os.path.exists(self.stop_path))
+        self.assertIs(self.logger.stop_requested, True)
+
+    def test_the_request_is_printed_once(self):
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        for _ in range(4):
+            self.clock.now += 1.0
+            self.game.tick()
+            self.logger.step()
+        self.assertEqual(self.lines.count("stop requested"), 1)
+
+    def test_a_stop_file_that_cannot_be_deleted_still_requests_the_stop(self):
+        self.logger.step()
+        os.makedirs(self.stop_path)
+        self.clock.now += 1.0
+        self.logger.step()
+        self.assertIs(self.logger.stop_requested, True)
+        self.assertEqual(self.lines[-1], "stop requested")
+
+    def test_other_files_in_the_logs_folder_are_no_stop_request(self):
+        self.logger.step()
+        for name in ("logger_stop.txt", "stop", "logger_status.json"):
+            self.write_file(name)
+        self.clock.now += 1.0
+        self.logger.step()
+        self.assertIs(self.logger.stop_requested, False)
+
+    def write_file(self, name):
+        with open(os.path.join(self.logs, name), "w"):
+            pass
+
+    def test_close_after_a_stop_request_writes_the_end_line_logger_stopped_and_removes_the_status_file(self):
+        self.drive(0.5)
+        name = self.names()[0]
+        logconf.request_stop(self.logs)
+        self.clock.now += 1.0
+        self.game.tick()
+        self.logger.step()
+        self.assertIs(self.logger.stop_requested, True)
+        count = len(self.samples())
+        self.clock.now += 0.2
+        self.logger.close()
+        self.assertEqual(self.records(name)[-1], {"type": "end", "reason": "logger stopped", "duration_s": round(self.clock.now - T0, 3), "samples": count})
+        self.assertEqual(self.lines[-1], "session ended: logger stopped, %d samples" % count)
+        self.assertFalse(os.path.exists(self.status_path))
+        self.assertEqual(self.game.opened[0].closed, 1)
+
+
 class TestFinishedSession(LoggerCase):
     def test_logconf_lists_the_finished_session_with_car_track_duration_and_samples(self):
         self.config(["behaviour.speed"])
@@ -753,6 +867,78 @@ class TestRun(LoggerCase):
         self.logger.run()
         self.assertEqual(self.records(name)[-1]["reason"], "logger stopped")
         self.assertEqual(self.lines[-2:], ["stopped", "session ended: logger stopped, 1 samples"])
+
+    def test_run_removes_a_stale_stop_file_before_the_first_step_and_does_not_stop_because_of_it(self):
+        logconf.request_stop(self.logs)
+        seen = []
+
+        def step():
+            seen.append(os.path.exists(logconf.stop_path(self.logs)))
+            if len(seen) == 3:
+                raise KeyboardInterrupt()
+            return 0.5
+
+        self.logger.step = step
+        self.logger.run()
+        self.assertEqual(seen, [False, False, False])
+        self.assertEqual(self.slept, [0.5, 0.5])
+        self.assertEqual(self.lines, ["stopped"])
+        self.assertFalse(os.path.exists(logconf.stop_path(self.logs)))
+
+    def test_the_stale_stop_file_is_removed_in_run_and_not_in_the_constructor(self):
+        logconf.request_stop(self.logs)
+        self.make()
+        self.assertTrue(os.path.exists(logconf.stop_path(self.logs)))
+        self.logger.step = mock.Mock(side_effect=KeyboardInterrupt())
+        self.logger.run()
+        self.assertFalse(os.path.exists(logconf.stop_path(self.logs)))
+
+    def test_run_leaves_the_loop_after_a_stop_request_and_closes_the_session_with_logger_stopped(self):
+        self.config(["behaviour.speed"])
+        calls = []
+
+        def sleep(seconds):
+            calls.append(seconds)
+            self.assertLess(len(calls), 500, "run() did not stop")
+            self.clock.now += max(seconds, 1e-6)
+            self.game.tick()
+            if len(calls) == 5:
+                logconf.request_stop(self.logs)
+
+        self.logger = self.make(sleep=sleep)
+        self.game.tick()
+        self.logger.run()
+        self.assertIs(self.logger.stop_requested, True)
+        self.assertFalse(os.path.exists(logconf.stop_path(self.logs)))
+        self.assertGreater(len(calls), 5)
+        [name] = self.names()
+        records = self.records(name)
+        self.assertEqual([r["type"] for r in records].count("end"), 1)
+        self.assertEqual(records[-1]["reason"], "logger stopped")
+        self.assertEqual(records[-1]["samples"], len([r for r in records if r["type"] == "s"]))
+        self.assertEqual(self.lines[-2:], ["stop requested", "session ended: logger stopped, %d samples" % records[-1]["samples"]])
+        self.assertNotIn("stopped", self.lines)
+        self.assertFalse(os.path.exists(self.status_path))
+        self.assertIsNone(self.logger.source)
+        self.assertEqual(self.timer.call_args_list, [mock.call(True), mock.call(False)])
+
+    def test_run_stops_while_waiting_for_the_game(self):
+        self.game.running = False
+        calls = []
+
+        def sleep(seconds):
+            calls.append(seconds)
+            self.assertLess(len(calls), 20, "run() did not stop")
+            self.clock.now += seconds
+            if len(calls) == 2:
+                logconf.request_stop(self.logs)
+
+        self.logger = self.make(sleep=sleep)
+        self.logger.run()
+        self.assertEqual(calls, [logger.WAIT_S] * 3)
+        self.assertEqual(self.lines, ["waiting for the game ...", "stop requested"])
+        self.assertEqual(self.names(), [])
+        self.assertFalse(os.path.exists(self.status_path))
 
     def test_run_closes_and_restores_the_timer_after_any_other_error_too(self):
         self.logger.step()

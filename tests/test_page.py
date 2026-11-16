@@ -256,7 +256,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 31, calls)
+        self.assertEqual(len(calls), 33, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -2321,8 +2321,9 @@ class TestSounds(unittest.TestCase):
 class TestLogging(unittest.TestCase):
     PANEL = MARKUP[MARKUP.index('id="panel-logging"'):]
     FUNCTIONS = ("fmtDuration", "logStatusText", "pollLogStatus", "stopLogPoll", "startLogPoll", "renderLogLines", "renderLogSessions",
-                 "loadLogSessions", "logChannelText", "buildLogRow", "buildLogGroup", "renderLogControls", "renderLog", "loadLog",
-                 "showLog", "logFailed", "sendLogSet", "saveLog", "logChanged", "setAllLog", "logRateChanged")
+                 "loadLogSessions", "logChannelCell", "buildLogRow", "buildLogTable", "buildLogGroup", "renderLogControls", "renderLog",
+                 "loadLog", "showLog", "logFailed", "sendLogSet", "saveLog", "logChanged", "setAllLog", "logRateChanged",
+                 "renderLoggerButtons", "beginLogRequest", "endLogRequest", "startLogger", "stopLogger")
 
     @staticmethod
     def tag(ident):
@@ -2477,9 +2478,9 @@ class TestLogging(unittest.TestCase):
         self.assertNotRegex(self.PANEL, r"\bopen\b")
         self.assertNotIn("<details", MARKUP)
         self.assertIn('summary.append(input, " ", el("span", "gname", g.name), " ", '
-                      'el("span", "gcount unit", "(" + ticked + " of " + tickable.length + " ticked)"));', body)
+                      'el("span", "gcount unit", "(" + ticked + " of " + g.tickable + " ticked)"));', body)
         self.assertIn("details.appendChild(summary);", body)
-        self.assertLess(body.index("details.appendChild(summary);"), body.index("for (const r of g.rows) details.appendChild(buildLogRow(r));"))
+        self.assertLess(body.index("details.appendChild(summary);"), body.index("details.appendChild(buildLogTable(g));"))
         self.assertIn('if (g.description) details.appendChild(el("p", "garage-help", g.description));', body)
         self.assertRegex(CODE, r"(?m)^const logOpen = new Set\(\);")
 
@@ -2511,30 +2512,136 @@ class TestLogging(unittest.TestCase):
         save = function_body("saveLog")
         self.assertLess(save.index("renderLog();"), save.index("logPending += 1;"))
 
-    def test_a_row_is_a_checkbox_in_a_label_ticked_from_the_server_and_greyed_and_disabled_when_it_is_not_tickable(self):
+    def test_a_row_is_a_table_row_with_a_checkbox_named_by_the_label_ticked_from_the_server_and_none_when_it_is_not_tickable(self):
         body = function_body("buildLogRow")
-        self.assertIn('const row = el("div", "garage-row");', body)
-        self.assertIn('if (!r.tickable) row.classList.add("off");', body)
+        self.assertIn('const tr = el("tr");', body)
+        self.assertNotIn("garage-row", body)
+        self.assertIn('if (!r.tickable) tr.classList.add("off");', body)
         self.assertIn('input.type = "checkbox";', body)
         self.assertIn("input.checked = r.ticked;", body)
-        self.assertIn("input.disabled = !r.tickable;", body)
-        self.assertIn('label.append(input, el("span", "", r.label));', body)
-        self.assertIn('if (r.unit) row.appendChild(el("span", "unit", r.unit));', body)
-        self.assertRegex(STYLE, r"\.garage-row\.off label \{[^}]*color: var\(--color-text-muted\);")
+        self.assertIn('input.setAttribute("aria-label", r.label);', body)
+        self.assertNotIn("input.disabled", body)
+        self.assertEqual(body.count('el("input")'), 1)
+        self.assertIn('el("b", "", r.label)', body)
+        self.assertIn('el("td", "unit", r.unit || "")', body)
+        self.assertIn("tr.append(tick, name, el(\"td\", \"unit\", r.unit || \"\"), logChannelCell(r.once), logChannelCell(r.live));", body)
 
-    def test_a_tickable_row_shows_once_and_live_channels_and_a_greyed_row_its_badge_and_note(self):
+    def test_a_tickable_row_has_its_box_and_for_an_extra_row_its_description_under_the_label(self):
         body = function_body("buildLogRow")
         self.assertIn('logBoxes.push({ key: r.id, input: input, rows: [r] });', body)
-        self.assertLess(body.index("if (r.tickable) {"), body.index("} else {"))
-        tickable, greyed = body.split("} else {")
-        self.assertIn("logChannelText(r)", tickable)
+        self.assertEqual(body.count("logBoxes"), 1)
+        tickable, greyed = body.split("} else {", 1)
+        self.assertLess(tickable.index("if (r.tickable) {"), tickable.index('const input = el("input");'))
+        self.assertIn("logBoxes.push", tickable)
         self.assertNotIn("logBoxes", greyed)
-        self.assertIn('el("span", "badge", r.status === "indirect" ? "effect only" : "not published")', greyed)
-        self.assertIn('if (r.note) row.appendChild(el("span", "unit", r.note));', greyed)
-        text = function_body("logChannelText")
-        self.assertIn('if (r.once.length) parts.push("once: " + r.once.join(", "));', text)
-        self.assertIn('if (r.live.length) parts.push("live: " + r.live.join(", "));', text)
-        self.assertIn('return parts.join(" | ");', text)
+        self.assertIn('if (r.description) name.appendChild(el("span", "id", r.description));', body)
+        self.assertRegex(STYLE, r"\.name \.id \{[^}]*display: block;[^}]*color: var\(--color-text-muted\);")
+
+    def test_a_greyed_row_has_a_dash_with_a_hidden_text_instead_of_a_box_and_its_badge_and_note_under_the_label(self):
+        body = function_body("buildLogRow")
+        self.assertIn('tick.append("-", el("span", "sr-only", "not tickable"));', body)
+        self.assertIn('el("span", "badge", r.status === "indirect" ? "effect only" : "not published")', body)
+        self.assertIn('if (r.note) line.append(" " + r.note);', body)
+        self.assertLess(body.index('el("span", "badge"'), body.index("line.append(\" \" + r.note)"))
+        self.assertEqual(body.count('el("span", "id"'), 2)
+
+    def test_a_greyed_row_is_dimmed_and_italic_through_the_class_off(self):
+        self.assertRegex(STYLE, r"tr\.off td \{[^}]*color: var\(--color-text-muted\);[^}]*font-style: italic;")
+        self.assertNotIn(".garage-row.off", STYLE)
+        self.assertIn('if (!r.tickable) tr.classList.add("off");', function_body("buildLogRow"))
+
+    def test_the_once_and_live_cells_list_the_channel_names_comma_separated_and_a_dash_when_there_are_none(self):
+        body = function_body("logChannelCell")
+        self.assertIn('return el("td", "mono", names.length ? names.join(", ") : "-");', body)
+        self.assertIn("logChannelCell(r.once), logChannelCell(r.live)", function_body("buildLogRow"))
+        self.assertNotIn("once:", CODE)
+        self.assertNotIn("logChannelText", CODE)
+
+    def test_every_group_is_a_table_in_the_scroll_wrapper_with_the_five_columns_in_order(self):
+        body = function_body("buildLogTable")
+        self.assertIn('const wrap = el("div", "tablewrap scroll");', body)
+        self.assertIn('const table = el("table", "logtable");', body)
+        self.assertIn('for (const text of ["Tick", "Setting", "Unit", "Once", "Live"]) {', body)
+        self.assertIn('th.scope = "col";', body)
+        self.assertIn('if (text === "Tick") th.appendChild(el("span", "sr-only", text));', body)
+        self.assertIn("else th.textContent = text;", body)
+        self.assertIn('el("caption", "sr-only", "Logging channels of " + g.name)', body)
+        self.assertIn("for (const r of g.rows) body.appendChild(buildLogRow(r));", body)
+        self.assertIn("wrap.appendChild(table);", body)
+        self.assertRegex(STYLE, r"\.tablewrap\.scroll \{[^}]*overflow-x: auto;")
+        self.assertRegex(STYLE, r"table\.logtable \{[^}]*min-width: \d+px;")
+        self.assertRegex(STYLE, r"\.logtable th:first-child, \.logtable td:first-child \{[^}]*width: 1%;")
+
+    def test_the_groups_are_drawn_in_the_order_the_server_sends_nothing_is_sorted(self):
+        for name in self.FUNCTIONS:
+            with self.subTest(name):
+                self.assertNotRegex(function_body(name), r"\.sort\(|\.reverse\(|localeCompare")
+        self.assertIn("for (const g of logData ? logData.groups : []) box.appendChild(buildLogGroup(g));", function_body("renderLog"))
+        self.assertIn("for (const r of g.rows) body.appendChild(buildLogRow(r));", function_body("buildLogTable"))
+        self.assertEqual(ts.logconf.tree.__doc__.count("tickable rows come first"), 1)
+
+    def test_the_start_and_stop_buttons_sit_in_the_first_panel_after_the_status_line_and_start_disabled(self):
+        self.assertIn('<button id="btn-log-start" type="button" disabled>Start logger</button>', self.PANEL)
+        self.assertIn('<button id="btn-log-stop" type="button" disabled>Stop logger</button>', self.PANEL)
+        self.assertLess(self.PANEL.index('id="log-status"'), self.PANEL.index('id="btn-log-start"'))
+        self.assertLess(self.PANEL.index('id="btn-log-start"'), self.PANEL.index('id="btn-log-stop"'))
+        self.assertLess(self.PANEL.index('id="btn-log-stop"'), self.PANEL.index('id="log-rate"'))
+        panel = self.PANEL[:self.PANEL.index("</section>")]
+        self.assertIn('id="btn-log-stop"', panel)
+        self.assertIn('$("btn-log-start").addEventListener("click", startLogger);', CODE)
+        self.assertIn('$("btn-log-stop").addEventListener("click", stopLogger);', CODE)
+
+    def test_start_is_on_while_the_logger_does_not_run_stop_while_it_runs_and_both_are_off_before_the_first_answer_and_while_busy(self):
+        body = function_body("renderLoggerButtons")
+        self.assertIn('$("btn-log-start").disabled = logRunning !== false || logBusy;', body)
+        self.assertIn('$("btn-log-stop").disabled = logRunning !== true || logBusy;', body)
+        self.assertRegex(CODE, r"(?m)^let logRunning = null;")
+        self.assertRegex(CODE, r"(?m)^let logBusy = false;")
+        poll = function_body("pollLogStatus")
+        self.assertIn("logRunning = s.running;", poll)
+        self.assertRegex(poll, r'textContent = "Logger: status unavailable";\s*logRunning = null;\s*renderLoggerButtons\(\);')
+        self.assertLess(poll.index("logRunning = s.running;"), poll.index("renderLoggerButtons();", poll.index("logRunning = s.running;")))
+        self.assertIn("running", ts.logconf.not_running())
+
+    def test_start_and_stop_post_an_empty_body_with_the_selection_and_never_start_a_second_poll_loop(self):
+        self.assertIn("/api/logger_start", ts.POST_ROUTES)
+        self.assertIn("/api/logger_stop", ts.POST_ROUTES)
+        self.assertEqual(len(re.findall(r'await api\("/api/logger_start", \{\}, selection\);', CODE)), 1)
+        self.assertEqual(len(re.findall(r'await api\("/api/logger_stop", \{\}, selection\);', CODE)), 1)
+        self.assertIn('await api("/api/logger_start", {}, selection);', function_body("startLogger"))
+        self.assertIn('await api("/api/logger_stop", {}, selection);', function_body("stopLogger"))
+        for name in ("startLogger", "stopLogger"):
+            with self.subTest(name):
+                body = function_body(name)
+                self.assertLess(body.index("beginLogRequest();"), body.index("await api("))
+                self.assertLess(body.index("await api("), body.index("await endLogRequest(message);"))
+                self.assertNotIn("startLogPoll", body)
+                self.assertNotIn("setInterval", body)
+        self.assertEqual(re.findall(r"setInterval\(", CODE), ["setInterval("])
+
+    def test_the_buttons_are_off_while_a_request_is_in_flight_and_the_status_is_read_once_at_once_afterwards(self):
+        begin = function_body("beginLogRequest")
+        self.assertLess(begin.index("logBusy = true;"), begin.index("renderLoggerButtons();"))
+        end = function_body("endLogRequest")
+        self.assertLess(end.index("logBusy = false;"), end.index("await pollLogStatus();"))
+        self.assertLess(end.index("await pollLogStatus();"), end.rindex("renderLoggerButtons();"))
+        self.assertEqual(end.count("pollLogStatus()"), 1)
+        self.assertNotIn("startLogPoll", end)
+        self.assertEqual(len(re.findall(r"\bpollLogStatus\(\)", CODE)), 3)
+
+    def test_a_failed_or_refused_start_or_stop_shows_its_message_in_the_error_line_and_a_409_too(self):
+        for name in ("startLogger", "stopLogger"):
+            with self.subTest(name):
+                body = function_body(name)
+                self.assertIn('let message = "";', body)
+                self.assertRegex(body, r"\} catch \(e\) \{\s*message = e\.message;\s*\}")
+        end = function_body("endLogRequest")
+        self.assertLess(end.index("logError = message;"), end.index("renderLogLines();"))
+        self.assertLess(end.index("renderLogLines();"), end.index("await pollLogStatus();"))
+        self.assertIn('logError = "";', function_body("beginLogRequest"))
+        self.assertIn('const text = logError || logSessionsError;', function_body("renderLogLines"))
+        self.assertIn('if (!res.ok) throw new Error((data && data.error) || ("HTTP " + res.status));', function_body("api"))
+        self.assertNotIn("alert(", CODE)
 
     def test_the_status_words_of_the_page_are_the_ones_the_server_sends(self):
         self.assertEqual(ts.logconf.STATUSES, ("direct", "indirect", "none"))
@@ -2611,13 +2718,14 @@ class TestLogging(unittest.TestCase):
         self.PANEL.encode("ascii")
         "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
 
-    def test_the_panel_reuses_the_existing_styles_and_adds_the_one_for_greyed_rows(self):
-        for cls in ("panel", "toolbar", "carpick", "msg", "err", "empty", "tablewrap", "sr-only", "garage-row", "garage-help", "gname",
-                    "gcount", "unit", "badge", "off"):
+    def test_the_panel_reuses_the_existing_styles_and_adds_the_ones_for_greyed_rows_and_the_scrolling_group_tables(self):
+        for cls in ("panel", "toolbar", "carpick", "msg", "err", "empty", "tablewrap", "sr-only", "garage-help", "gname",
+                    "gcount", "unit", "badge", "name", "id", "mono", "actions", "off", "scroll", "logtable"):
             with self.subTest(cls):
                 self.assertIn(cls, css_classes())
                 self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
-        self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)), {"panel", "toolbar", "carpick", "msg err", "tablewrap", "sr-only", "empty"})
+        self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
+                         {"panel", "actions", "toolbar", "carpick", "msg err", "tablewrap", "sr-only", "empty"})
         self.assertIn(".panel summary { cursor: pointer; }", STYLE)
 
 

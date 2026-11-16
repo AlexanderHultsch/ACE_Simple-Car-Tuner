@@ -13,7 +13,7 @@ it when a session starts), --mods the mods folder of the game (default %USERPROF
 header (tools/logfacts.py) says which modded car of the tuner the game's car name is and holds its effective settings with their
 stock defaults, garage tyres, turbo kit, sounds, the data of its last build (snapshot, package file time, changes) and the start time
 of the game process; a car that is not found in the work folder has "matched": false and a reason. While it runs the logger writes
-<logs>/logger_status.json once a second and removes it when it stops. The game's memory is only read, never written.
+<logs>/logger_status.json once a second and removes it when it stops; once a second it also looks for the empty file <logs>/logger_stop (the Logging tab creates it) and, when it is there, deletes it and stops like Ctrl+C does. The game's memory is only read, never written.
 Wrong arguments print this usage block and exit 2; a runtime error prints "error: ..." on stderr and exits 1.
 
 Stdlib only.
@@ -104,6 +104,8 @@ class Logger:
         self.out = out
         self.pid = os.getpid() if pid is None else pid
         self.status_path = os.path.join(logs, logconf.STATUS_FILE)
+        self.stop_path = logconf.stop_path(logs)
+        self.stop_requested = False
         self.started = self.wall().timestamp()
         self.source = None
         self.session = None
@@ -178,7 +180,15 @@ class Logger:
         self.status_at = now
         tune.save_json(self.status_path, {"state": state, "file": name, "samples": samples, "started": started,
                                           "updated": self.wall().timestamp(), "pid": self.pid})
+        self.check_stop()
         return True
+
+    def check_stop(self):
+        """A stop file in the logs folder (logconf.STOP_FILE) is deleted and sets stop_requested."""
+        if os.path.exists(self.stop_path):
+            logconf.clear_stop(self.logs)
+            self.stop_requested = True
+            self.out("stop requested")
 
     def session_name(self, moment, car):
         slug = re.sub(r"[^A-Za-z0-9._-]", "_", car)[:SLUG_MAX] or "car"
@@ -263,7 +273,8 @@ class Logger:
     def run(self):
         timer_resolution(True)
         try:
-            while True:
+            logconf.clear_stop(self.logs)
+            while not self.stop_requested:
                 self.sleep(self.step())
         except KeyboardInterrupt:
             self.out("stopped")

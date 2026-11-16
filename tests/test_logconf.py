@@ -64,6 +64,7 @@ HINTS = {"Engine": ENGINE_HINT, "Gearbox & clutch": "gear, rpm, speed_kmh, wheel
          "Differential (hardware)": "wheel_speed, slip_ratio", "Steering": "steer, steer_deg, angular_vel",
          "Springs & anti-roll": SPRING_HINT, "Ride height & bump stops": "susp_travel, wheel_load", "Dampers": DAMPER_HINT,
          "Tyres": "slip_angle_deg, slip_ratio, wheel_load, acc_g, tyre_temp_core"}
+DEFAULT_ROWS = ["speed", "rpm"]
 BEHAVIOUR = {"speed": ["speed_kmh"], "rpm": ["rpm"], "gear": ["gear"], "gas": ["gas"], "brake": ["brake"],
              "steering": ["steer", "steer_deg"], "g_forces": ["acc_g", "g_forces"],
              "rotation": ["angular_vel", "pitch_deg", "roll_deg", "heading_deg"], "wheel_load": ["wheel_load"],
@@ -174,8 +175,7 @@ class TestChannelTable(unittest.TestCase):
     def test_the_extra_groups(self):
         self.assertEqual([g["id"] for g in RAW["extra_groups"]], ["behaviour", "car_state"])
         behaviour, car_state = RAW["extra_groups"]
-        self.assertEqual((behaviour["name"], behaviour["default"]), ("Behaviour values (not a tuner setting)", True))
-        self.assertEqual((car_state["name"], car_state["default"]), ("Car state (not a tuner setting)", False))
+        self.assertEqual((behaviour["name"], car_state["name"]), ("Behaviour values", "Car state"))
         self.assertEqual([r["id"] for r in behaviour["rows"]], list(BEHAVIOUR))
         for r in behaviour["rows"]:
             with self.subTest(r["id"]):
@@ -188,6 +188,22 @@ class TestChannelTable(unittest.TestCase):
             self.assertTrue(g["description"].strip())
             for r in g["rows"]:
                 self.assertTrue(r["label"].strip() and r["description"].strip(), r["id"])
+
+    def test_the_default_is_set_per_row_and_only_speed_and_rpm_are_ticked_by_default(self):
+        for g in RAW["extra_groups"]:
+            self.assertNotIn("default", g, g["id"])
+            for r in g["rows"]:
+                with self.subTest((g["id"], r["id"])):
+                    self.assertIs(r["default"], g["id"] == "behaviour" and r["id"] in DEFAULT_ROWS)
+        self.assertEqual([r["id"] for r in group_of(RAW, "behaviour")["rows"] if r["default"]], DEFAULT_ROWS)
+        self.assertFalse(any(r["default"] for r in group_of(RAW, "car_state")["rows"]))
+
+    def test_the_words_not_a_tuner_setting_are_nowhere_in_the_table(self):
+        self.assertNotIn("not a tuner setting", CHANNELS_FILE.read_text(encoding="utf-8").lower())
+        for g in RAW["extra_groups"]:
+            self.assertNotIn("tuner setting", g["name"] + g["description"])
+            for r in g["rows"]:
+                self.assertNotIn("tuner setting", r["label"] + r["description"])
 
     def test_a_catalogue_setting_without_an_entry_fails_the_validation(self):
         cat = copy.deepcopy(CAT)
@@ -291,11 +307,24 @@ class TestValidateChannels(unittest.TestCase):
             with self.subTest(name):
                 self.fails(changed(lambda c: c["extra_groups"][0].update(name=name)), "extra group behaviour: needs a name")
 
-    def test_the_default_of_an_extra_group_must_be_a_bool(self):
-        for default in ("true", 1, 0, None):
+    def test_an_extra_group_must_not_have_a_default_of_its_own(self):
+        for default in (True, False, "true", 1, None):
             with self.subTest(default):
-                self.fails(changed(lambda c: c["extra_groups"][0].update(default=default)), "extra group behaviour: default must be true or false")
-        self.fails(changed(lambda c: c["extra_groups"][0].pop("default")), "default must be true or false")
+                self.fails(changed(lambda c: c["extra_groups"][0].update(default=default)), "extra group behaviour: default is not allowed")
+
+    def test_the_default_of_an_extra_row_must_be_a_bool(self):
+        for default in ("true", "false", 1, 0, None, []):
+            with self.subTest(default):
+                self.fails(changed(lambda c: row_of(c, "behaviour", "speed").update(default=default)),
+                           "extra group behaviour: row speed: default must be true or false")
+                self.fails(changed(lambda c: row_of(c, "car_state", "turbo").update(default=default)),
+                           "extra group car_state: row turbo: default must be true or false")
+        self.fails(changed(lambda c: row_of(c, "behaviour", "speed").pop("default")), "row speed: default must be true or false")
+        self.fails(changed(lambda c: row_of(c, "car_state", "brake_wear").pop("default")), "row brake_wear: default must be true or false")
+
+    def test_a_row_may_default_to_true_or_false_in_any_group(self):
+        logconf.validate_channels(changed(lambda c: row_of(c, "car_state", "turbo").update(default=True)), CAT)
+        logconf.validate_channels(changed(lambda c: row_of(c, "behaviour", "speed").update(default=False)), CAT)
 
     def test_the_description_of_an_extra_group_must_be_text(self):
         self.fails(changed(lambda c: c["extra_groups"][0].update(description=None)), "extra group behaviour: description must be text")
@@ -361,15 +390,27 @@ class TestTickableIds(unittest.TestCase):
 
 
 class TestDefaultConfig(unittest.TestCase):
-    def test_it_is_30_hz_with_the_rows_of_the_groups_that_default_to_ticked(self):
+    def test_it_is_30_hz_with_the_rows_whose_default_is_true(self):
         config = logconf.default_config(CHAN)
-        self.assertEqual(config, {"version": 1, "rate_hz": 30, "ticked": ["behaviour." + r for r in BEHAVIOUR]})
+        self.assertEqual(config, {"version": 1, "rate_hz": 30, "ticked": ["behaviour.speed", "behaviour.rpm"]})
         self.assertFalse(any(i.startswith("car_state.") for i in config["ticked"]))
         logconf.validate_config(config, CHAN)
 
-    def test_a_group_that_defaults_to_unticked_adds_nothing_and_one_that_defaults_to_ticked_adds_all(self):
-        chan = changed(lambda c: (group_of(c, "behaviour").update(default=False), group_of(c, "car_state").update(default=True)))
-        self.assertEqual(logconf.default_config(chan)["ticked"], ["car_state." + r for r in CAR_STATE])
+    def test_a_row_that_defaults_to_false_adds_nothing_and_the_ticked_rows_follow_the_table_order(self):
+        chan = changed(lambda c: (row_of(c, "behaviour", "speed").update(default=False), row_of(c, "car_state", "turbo").update(default=True),
+                                  row_of(c, "car_state", "brake_wear").update(default=True), row_of(c, "behaviour", "gas").update(default=True)))
+        self.assertEqual(logconf.default_config(chan)["ticked"], ["behaviour.rpm", "behaviour.gas", "car_state.turbo", "car_state.brake_wear"])
+        self.assertEqual(logconf.default_config(chan)["ticked"], [i for i in logconf.tickable_ids(chan) if i in logconf.default_config(chan)["ticked"]])
+
+    def test_a_table_without_a_default_row_ticks_nothing(self):
+        chan = changed(lambda c: [r.update(default=False) for g in c["extra_groups"] for r in g["rows"]])
+        self.assertEqual(logconf.default_config(chan), {"version": 1, "rate_hz": 30, "ticked": []})
+
+    def test_a_saved_file_stays_as_saved_and_does_not_get_the_default_rows_added(self):
+        with tmp() as d:
+            work = str(d / "work")
+            write(logconf.config_path(work), {"version": 1, "rate_hz": 60, "ticked": ["car_state.turbo"]})
+            self.assertEqual(logconf.load_config(work, CHAN), {"version": 1, "rate_hz": 60, "ticked": ["car_state.turbo"]})
 
     def test_every_call_returns_a_new_object(self):
         a = logconf.default_config(CHAN)
@@ -502,24 +543,60 @@ class TestTree(unittest.TestCase):
         self.config = {"version": 1, "rate_hz": 30, "ticked": ["limiter", "behaviour.speed", "car_state.turbo"]}
         self.groups = logconf.tree(CHAN, CAT, self.config)
 
-    def test_every_catalogue_group_comes_first_in_catalogue_order_then_the_extra_groups(self):
-        names = [g["name"] for g in CAT["groups"]]
-        self.assertEqual([g["name"] for g in self.groups], names + ["Behaviour values (not a tuner setting)", "Car state (not a tuner setting)"])
-        self.assertEqual([g["id"] for g in self.groups], ["catalogue." + n for n in names] + ["behaviour", "car_state"])
-        self.assertEqual(len(self.groups), 20)
+    def catalogue_groups(self):
+        return self.groups[2:]
 
-    def test_a_catalogue_group_has_its_description_and_all_its_settings_in_catalogue_order(self):
-        for g, cg in zip(self.groups, CAT["groups"]):
-            with self.subTest(cg["name"]):
-                self.assertEqual(set(g), {"id", "name", "description", "rows"})
-                self.assertEqual(g["description"], cg["description"])
-                self.assertEqual([r["id"] for r in g["rows"]], [s["id"] for s in CAT["settings"] if s["group"] == cg["name"]])
+    def test_the_extra_groups_come_first_then_the_groups_with_tickable_rows_then_those_without(self):
+        names = [g["name"] for g in CAT["groups"]]
+        direct = {s["group"] for s in CAT["settings"] if s["id"] in DIRECT}
+        with_rows = [n for n in names if n in direct]
+        without_rows = [n for n in names if n not in direct]
+        self.assertTrue(with_rows and without_rows)
+        self.assertEqual([g["name"] for g in self.groups], ["Behaviour values", "Car state"] + with_rows + without_rows)
+        self.assertEqual([g["id"] for g in self.groups], ["behaviour", "car_state"] + ["catalogue." + n for n in with_rows + without_rows])
+        self.assertEqual(len(self.groups), 20)
+        self.assertEqual(sorted(g["name"] for g in self.catalogue_groups()), sorted(names))
+        for name in ("Meta", "Gearbox & clutch", "Springs & anti-roll", "Tyres", "Dampers"):
+            self.assertIn(name, without_rows)
+        for name in ("Engine", "Differential", "Brakes"):
+            self.assertIn(name, with_rows)
+
+    def test_the_groups_with_tickable_rows_have_all_a_positive_count_and_the_others_zero(self):
+        counts = [g["tickable"] for g in self.catalogue_groups()]
+        first_empty = counts.index(0)
+        self.assertTrue(all(c > 0 for c in counts[:first_empty]))
+        self.assertTrue(all(c == 0 for c in counts[first_empty:]))
+
+    def test_a_catalogue_group_has_its_description_and_all_its_settings_with_the_tickable_ones_first(self):
+        cgs = {g["name"]: g for g in CAT["groups"]}
+        for g in self.catalogue_groups():
+            with self.subTest(g["name"]):
+                self.assertEqual(set(g), {"id", "name", "description", "tickable", "rows"})
+                self.assertEqual(g["description"], cgs[g["name"]]["description"])
+                ids = [s["id"] for s in CAT["settings"] if s["group"] == g["name"]]
+                self.assertEqual([r["id"] for r in g["rows"]], [i for i in ids if i in DIRECT] + [i for i in ids if i not in DIRECT])
+                self.assertEqual(g["tickable"], sum(i in DIRECT for i in ids))
+
+    def test_the_rows_of_a_group_are_tickable_first_and_the_counts_add_up_to_the_tickable_rows(self):
+        for g in self.groups:
+            flags = [r["tickable"] for r in g["rows"]]
+            with self.subTest(g["name"]):
+                self.assertEqual(flags, sorted(flags, reverse=True))
+                self.assertEqual(g["tickable"], sum(flags))
+                self.assertIs(type(g["tickable"]), int)
+        self.assertEqual(sum(g["tickable"] for g in self.groups), len(logconf.tickable_ids(CHAN)))
+        by = {g["name"]: g for g in self.groups}
+        self.assertEqual((by["Engine"]["tickable"], by["Meta"]["tickable"], by["Alignment & tyres"]["tickable"]), (2, 0, 4))
+        self.assertEqual([r["id"] for r in by["Engine"]["rows"]][:3], ["limiter", "idle_rpm", "power_scale"])
+        self.assertEqual([r["tickable"] for r in by["Engine"]["rows"]][:3], [True, True, False])
+        self.assertEqual([r["id"] for r in by["Alignment & tyres"]["rows"]][:5], ["camber_front", "camber_rear", "tyre_pressure_front", "tyre_pressure_rear", "caster_front"])
 
     def test_groups_without_a_direct_row_are_listed_too(self):
         by = {g["name"]: g for g in self.groups}
-        for name in ("Meta", "Gearbox & clutch", "Springs & anti-roll", "Tyres", "Dampers"):
+        for name in ("Meta", "Gearbox & clutch", "Springs & anti-roll", "Dampers"):
             self.assertTrue(by[name]["rows"])
             self.assertFalse(any(r["tickable"] for r in by[name]["rows"]), name)
+            self.assertEqual(by[name]["tickable"], 0)
 
     def test_a_catalogue_row(self):
         row = next(r for g in self.groups for r in g["rows"] if r["id"] == "limiter")
@@ -531,39 +608,63 @@ class TestTree(unittest.TestCase):
         self.assertTrue(grey["note"].startswith("only its effect is visible"))
 
     def test_tickable_is_the_direct_status(self):
-        for g in self.groups[:-2]:
+        for g in self.catalogue_groups():
             for r in g["rows"]:
                 self.assertEqual(r["tickable"], r["status"] == "direct", r["id"])
                 self.assertEqual(set(r), {"id", "label", "unit", "status", "note", "tickable", "ticked", "once", "live"})
-        self.assertEqual(sum(r["tickable"] for g in self.groups[:-2] for r in g["rows"]), 29)
+                self.assertNotIn("default", r)
+        self.assertEqual(sum(r["tickable"] for g in self.catalogue_groups() for r in g["rows"]), 29)
 
     def test_ticked_follows_the_config(self):
         ticked = [r["id"] for g in self.groups for r in g["rows"] if r["ticked"]]
         self.assertEqual(sorted(ticked), sorted(self.config["ticked"]))
 
     def test_the_extra_groups(self):
-        behaviour, car_state = self.groups[-2:]
-        self.assertEqual(set(behaviour), {"id", "name", "description", "default", "rows"})
-        self.assertEqual((behaviour["default"], car_state["default"]), (True, False))
+        behaviour, car_state = self.groups[:2]
+        for g in (behaviour, car_state):
+            self.assertEqual(set(g), {"id", "name", "description", "tickable", "rows"})
+        self.assertEqual((behaviour["id"], behaviour["name"], behaviour["tickable"]), ("behaviour", "Behaviour values", 13))
+        self.assertEqual((car_state["id"], car_state["name"], car_state["tickable"]), ("car_state", "Car state", 9))
         self.assertEqual([r["id"] for r in behaviour["rows"]], ["behaviour." + r for r in BEHAVIOUR])
         self.assertEqual([r["id"] for r in car_state["rows"]], ["car_state." + r for r in CAR_STATE])
         row = behaviour["rows"][0]
-        self.assertEqual(row, {"id": "behaviour.speed", "label": "Speed", "description": row["description"], "tickable": True, "ticked": True,
-                               "status": "extra", "note": "", "once": [], "live": ["speed_kmh"]})
+        self.assertEqual(row, {"id": "behaviour.speed", "label": "Speed", "description": row["description"], "default": True, "tickable": True,
+                               "ticked": True, "status": "extra", "note": "", "once": [], "live": ["speed_kmh"]})
         for g in (behaviour, car_state):
             for r in g["rows"]:
                 self.assertEqual((r["tickable"], r["status"], r["note"]), (True, "extra", ""), r["id"])
-                self.assertEqual(set(r), {"id", "label", "description", "tickable", "ticked", "status", "note", "once", "live"})
+                self.assertEqual(set(r), {"id", "label", "description", "default", "tickable", "ticked", "status", "note", "once", "live"})
+                self.assertIs(type(r["default"]), bool)
+        self.assertEqual([r["default"] for r in behaviour["rows"]], [r in DEFAULT_ROWS for r in BEHAVIOUR])
+        self.assertEqual([r["default"] for r in car_state["rows"]], [False] * len(CAR_STATE))
         self.assertEqual([r["ticked"] for r in behaviour["rows"]], [r == "speed" for r in BEHAVIOUR])
         self.assertEqual([r["ticked"] for r in car_state["rows"]], [r == "turbo" for r in CAR_STATE])
 
-    def test_the_default_config_ticks_the_behaviour_group_only(self):
+    def test_the_default_of_an_extra_row_is_the_default_of_the_table_and_not_the_ticked_state(self):
+        groups = logconf.tree(CHAN, CAT, {"version": 1, "rate_hz": 30, "ticked": ["car_state.turbo"]})
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")], ["behaviour.speed", "behaviour.rpm"])
+        chan = changed(lambda c: row_of(c, "car_state", "turbo").update(default=True))
+        groups = logconf.tree(chan, CAT, self.config)
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r.get("default")], ["behaviour.speed", "behaviour.rpm", "car_state.turbo"])
+
+    def test_the_default_config_ticks_speed_and_rpm_only(self):
         groups = logconf.tree(CHAN, CAT, logconf.default_config(CHAN))
-        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r["ticked"]], ["behaviour." + r for r in BEHAVIOUR])
+        self.assertEqual([r["id"] for g in groups for r in g["rows"] if r["ticked"]], ["behaviour.speed", "behaviour.rpm"])
+
+    def test_the_display_order_does_not_change_the_order_of_the_tickable_ids_or_of_a_saved_choice(self):
+        shown = [r["id"] for g in self.groups for r in g["rows"] if r["tickable"]]
+        ids = logconf.tickable_ids(CHAN)
+        self.assertNotEqual(shown, ids)
+        self.assertEqual(sorted(shown), sorted(ids))
+        self.assertEqual(ids[:29], [s["id"] for s in CAT["settings"] if s["id"] in DIRECT])
+        self.assertEqual(ids[29:], ["behaviour." + r for r in BEHAVIOUR] + ["car_state." + r for r in CAR_STATE])
+        self.assertEqual(logconf.normalised({"version": 1, "rate_hz": 30, "ticked": shown}, CHAN)["ticked"], ids)
+        self.assertEqual(logconf.selected_channels(CHAN, {"version": 1, "rate_hz": 30, "ticked": shown}),
+                         logconf.selected_channels(CHAN, {"version": 1, "rate_hz": 30, "ticked": ids}))
 
     def test_the_tree_is_json_and_does_not_share_lists_with_the_table(self):
         json.dumps(self.groups)
-        self.groups[-1]["rows"][0]["once"].append("x")
+        self.groups[1]["rows"][0]["once"].append("x")
         self.assertNotIn("x", CHAN["extra_groups"][1]["rows"][0]["once"])
         row = next(r for g in self.groups for r in g["rows"] if r["id"] == "limiter")
         row["live"].append("x")
@@ -610,6 +711,51 @@ class TestSelectedChannels(unittest.TestCase):
         self.assertLessEqual(set(sel["once"]) | set(sel["live"]), KNOWN)
         self.assertIn("pad_life", sel["once"])
         self.assertIn("bhp", sel["live"])
+
+
+class TestStopFile(unittest.TestCase):
+    def setUp(self):
+        cm = tmp()
+        self.d = cm.__enter__()
+        self.addCleanup(cm.__exit__, None, None, None)
+        self.logs = str(self.d / "logs")
+
+    def test_the_name_is_logger_stop_and_the_path_is_in_the_logs_folder(self):
+        self.assertEqual(logconf.STOP_FILE, "logger_stop")
+        self.assertEqual(logconf.stop_path(self.logs), os.path.join(self.logs, "logger_stop"))
+
+    def test_request_stop_creates_the_logs_folder_and_an_empty_file_and_returns_its_path(self):
+        self.assertFalse(os.path.exists(self.logs))
+        path = logconf.request_stop(self.logs)
+        self.assertEqual(path, logconf.stop_path(self.logs))
+        self.assertTrue(os.path.isfile(path))
+        self.assertEqual(os.path.getsize(path), 0)
+        self.assertEqual(os.listdir(self.logs), ["logger_stop"])
+
+    def test_request_stop_twice_or_in_an_existing_folder_is_fine(self):
+        os.makedirs(self.logs)
+        write(os.path.join(self.logs, "a.jsonl"), "x")
+        self.assertEqual(logconf.request_stop(self.logs), logconf.request_stop(self.logs))
+        self.assertEqual(sorted(os.listdir(self.logs)), ["a.jsonl", "logger_stop"])
+
+    def test_clear_stop_removes_the_file_and_leaves_the_rest(self):
+        logconf.request_stop(self.logs)
+        write(os.path.join(self.logs, "a.jsonl"), "x")
+        self.assertIsNone(logconf.clear_stop(self.logs))
+        self.assertEqual(os.listdir(self.logs), ["a.jsonl"])
+
+    def test_clear_stop_ignores_a_missing_file_a_missing_folder_and_other_errors(self):
+        logconf.clear_stop(self.logs)
+        os.makedirs(self.logs)
+        logconf.clear_stop(self.logs)
+        os.makedirs(logconf.stop_path(self.logs))
+        logconf.clear_stop(self.logs)
+        self.assertTrue(os.path.isdir(logconf.stop_path(self.logs)))
+
+    def test_a_stop_file_is_not_a_session_and_not_a_status(self):
+        logconf.request_stop(self.logs)
+        self.assertEqual(logconf.list_sessions(self.logs), [])
+        self.assertFalse(logconf.logger_status(self.logs)["running"])
 
 
 class TestSessions(unittest.TestCase):

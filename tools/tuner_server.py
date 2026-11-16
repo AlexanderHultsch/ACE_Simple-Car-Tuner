@@ -101,8 +101,15 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         samples; the last four are null for a file without header or end line), newest first
   GET  /api/log_status  whether the logger runs: running, state ("not running", "waiting" or "logging"), file, samples, started,
                         seconds; read from <logs>/logger_status.json, "not running" when it is missing, damaged or older than 5 s
-The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the four
-log routes (the choice lives in the work folder, the sessions and the status in the logs folder).
+  POST /api/logger_start  {}                              starts tools/logger.py in the background (own process group, no console
+                        window, it outlives the page and the server; its console output is appended to <logs>/logger_console.log)
+                        with this server's work, mods and logs folders; answers {"started": true, "pid": ...} at once, without
+                        waiting for the logger; 409 when the logger already runs (per the status file), 500 when it cannot be started
+  POST /api/logger_stop   {}                              asks the running logger to stop (creates <logs>/logger_stop); answers
+                        {"stopping": true}; 409 when the logger is not running
+The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the six
+log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes do not wait
+for and are not refused by a running job.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
 and without the game package only the tested cars of tuner/cars.json): the query parameter ?car=<id> on GET, the field
 "car" in the JSON body on POST (any other id is a 400 error). Without it the default car of tuner/cars.json is used.
@@ -135,6 +142,7 @@ import json
 import os
 import pathlib
 import socket
+import subprocess
 import sys
 import threading
 import time
@@ -149,6 +157,8 @@ import tune  # noqa: E402
 
 INDEX = tune.REPO / "tuner" / "web" / "index.html"
 WEB = INDEX.parent
+LOGGER = tune.REPO / "tools" / "logger.py"
+LOGGER_CONSOLE = "logger_console.log"
 STATIC_FILES = {"/apple-touch-icon.png": (WEB / "apple-touch-icon.png", "image/png"),
                 "/icon-192.png": (WEB / "icon-192.png", "image/png"),
                 "/icon-512.png": (WEB / "icon-512.png", "image/png"),
@@ -788,6 +798,34 @@ def api_log_status(car, tune_id):
     return logconf.logger_status(logs_dir())
 
 
+def spawn_logger(work, mods, logs):
+    """Starts tools/logger.py in the background (own process group, no console window on Windows) with its console output appended
+    to <logs>/logger_console.log; returns the process id."""
+    flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+    os.makedirs(logs, exist_ok=True)
+    with open(os.path.join(logs, LOGGER_CONSOLE), "ab") as console:
+        proc = subprocess.Popen([sys.executable, "-I", "-B", str(LOGGER), "--work", work, "--mods", mods, "--logs", logs],
+                                cwd=str(tune.REPO), stdin=subprocess.DEVNULL, stdout=console, stderr=subprocess.STDOUT,
+                                close_fds=True, creationflags=flags)
+    return proc.pid
+
+
+def api_logger_start(car, body):
+    logs = logs_dir()
+    if logconf.logger_status(logs)["running"]:
+        raise ApiError(409, "the logger already runs")
+    logconf.clear_stop(logs)
+    return {"started": True, "pid": spawn_logger(CONFIG["work"], mods_dir(), logs)}
+
+
+def api_logger_stop(car, body):
+    logs = logs_dir()
+    if not logconf.logger_status(logs)["running"]:
+        raise ApiError(409, "the logger is not running")
+    logconf.request_stop(logs)
+    return {"stopping": True}
+
+
 def request_car(value, query):
     if value is None:
         value = (urllib.parse.parse_qs(query).get("car") or [None])[0]
@@ -819,7 +857,8 @@ POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": a
                "/api/tyre_source": api_tyre_source, "/api/tyre_set": api_tyre_set, "/api/tyre_unset": api_tyre_unset,
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
                "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset,
-               "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset, "/api/log_config_set": api_log_config_set}
+               "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset, "/api/log_config_set": api_log_config_set,
+               "/api/logger_start": api_logger_start, "/api/logger_stop": api_logger_stop}
 
 
 def private_ip(text):

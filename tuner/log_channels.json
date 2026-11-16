@@ -146,35 +146,35 @@
     "driver_aids_off": {"status": "direct", "note": "", "once": ["tc_level", "tc_cut_level", "abs_level", "esc_level", "engine_map"], "live": ["tc_active", "abs_active", "esc_active", "slip_ratio"]}
   },
   "extra_groups": [
-    {"id": "behaviour", "name": "Behaviour values (not a tuner setting)",
+    {"id": "behaviour", "name": "Behaviour values",
      "description": "How the car behaves while driving. This is how the effect of the greyed settings (springs, dampers, anti-roll bars, toe, the tyre model) is recorded.",
-     "default": true, "rows": [
-      {"id": "speed", "label": "Speed", "description": "Speed of the car in km/h.", "once": [], "live": ["speed_kmh"]},
-      {"id": "rpm", "label": "Engine rpm", "description": "Engine speed.", "once": [], "live": ["rpm"]},
-      {"id": "gear", "label": "Gear", "description": "The engaged gear (0 is neutral, -1 is reverse).", "once": [], "live": ["gear"]},
-      {"id": "gas", "label": "Throttle", "description": "Throttle pedal position from 0 to 1.", "once": [], "live": ["gas"]},
-      {"id": "brake", "label": "Brake", "description": "Brake pedal position from 0 to 1.", "once": [], "live": ["brake"]},
-      {"id": "steering", "label": "Steering", "description": "Steering angle, normalised from -1 to 1 and in degrees.", "once": [], "live": ["steer", "steer_deg"]},
-      {"id": "g_forces", "label": "G-forces", "description": "Lateral, longitudinal and vertical acceleration in g.", "once": [], "live": ["acc_g", "g_forces"]},
-      {"id": "rotation", "label": "Rotation", "description": "Angular velocity of the car and its pitch, roll and heading angle in degrees.", "once": [], "live": ["angular_vel", "pitch_deg", "roll_deg", "heading_deg"]},
-      {"id": "wheel_load", "label": "Wheel load", "description": "Load on each wheel in newtons.", "once": [], "live": ["wheel_load"]},
-      {"id": "slip", "label": "Slip", "description": "Slip angle in degrees and slip ratio of each tyre.", "once": [], "live": ["slip_angle_deg", "slip_ratio"]},
-      {"id": "susp_travel", "label": "Suspension travel", "description": "Travel of each suspension in metres.", "once": [], "live": ["susp_travel"]},
-      {"id": "tyre_temps", "label": "Tyre temperatures", "description": "Core, inner, middle and outer temperature of each tyre.", "once": [], "live": ["tyre_temp_core", "tyre_temp_in", "tyre_temp_mid", "tyre_temp_out"]},
-      {"id": "brake_temp", "label": "Brake temperatures", "description": "Temperature of each brake disc.", "once": [], "live": ["brake_temp"]}
+     "rows": [
+      {"id": "speed", "label": "Speed", "description": "Speed of the car in km/h.", "default": true, "once": [], "live": ["speed_kmh"]},
+      {"id": "rpm", "label": "Engine rpm", "description": "Engine speed.", "default": true, "once": [], "live": ["rpm"]},
+      {"id": "gear", "label": "Gear", "description": "The engaged gear (0 is neutral, -1 is reverse).", "default": false, "once": [], "live": ["gear"]},
+      {"id": "gas", "label": "Throttle", "description": "Throttle pedal position from 0 to 1.", "default": false, "once": [], "live": ["gas"]},
+      {"id": "brake", "label": "Brake", "description": "Brake pedal position from 0 to 1.", "default": false, "once": [], "live": ["brake"]},
+      {"id": "steering", "label": "Steering", "description": "Steering angle, normalised from -1 to 1 and in degrees.", "default": false, "once": [], "live": ["steer", "steer_deg"]},
+      {"id": "g_forces", "label": "G-forces", "description": "Lateral, longitudinal and vertical acceleration in g.", "default": false, "once": [], "live": ["acc_g", "g_forces"]},
+      {"id": "rotation", "label": "Rotation", "description": "Angular velocity of the car and its pitch, roll and heading angle in degrees.", "default": false, "once": [], "live": ["angular_vel", "pitch_deg", "roll_deg", "heading_deg"]},
+      {"id": "wheel_load", "label": "Wheel load", "description": "Load on each wheel in newtons.", "default": false, "once": [], "live": ["wheel_load"]},
+      {"id": "slip", "label": "Slip", "description": "Slip angle in degrees and slip ratio of each tyre.", "default": false, "once": [], "live": ["slip_angle_deg", "slip_ratio"]},
+      {"id": "susp_travel", "label": "Suspension travel", "description": "Travel of each suspension in metres.", "default": false, "once": [], "live": ["susp_travel"]},
+      {"id": "tyre_temps", "label": "Tyre temperatures", "description": "Core, inner, middle and outer temperature of each tyre.", "default": false, "once": [], "live": ["tyre_temp_core", "tyre_temp_in", "tyre_temp_mid", "tyre_temp_out"]},
+      {"id": "brake_temp", "label": "Brake temperatures", "description": "Temperature of each brake disc.", "default": false, "once": [], "live": ["brake_temp"]}
     ]},
-    {"id": "car_state", "name": "Car state (not a tuner setting)",
+    {"id": "car_state", "name": "Car state",
      "description": "Car-side values the game shows: tyre compounds, turbo and damper levels, in-car adjustments and their limits, brake wear. Useful to check that a tuner change arrived in the game.",
-     "default": false, "rows": [
-      {"id": "tyre_compounds", "label": "Tyre compounds", "description": "The front and rear tyre compound in the game; shows whether the garage tyres arrived.", "once": ["tyre_compound_front", "tyre_compound_rear"], "live": ["tyre_compound_front", "tyre_compound_rear"]},
-      {"id": "turbo", "label": "Turbo", "description": "The boost target of the car and the boost; shows whether a turbo kit works.", "once": ["turbo_level", "boost_max"], "live": ["boost", "turbo_level"]},
-      {"id": "damper_levels", "label": "Damper levels", "description": "The in-car damper level (front and rear, bump and rebound) of cars that offer it.", "once": ["damper_levels"], "live": ["damper_levels"]},
-      {"id": "engine_brake", "label": "Engine brake and brake balance", "description": "The in-car engine brake and brake balance adjustments.", "once": ["engine_brake", "ebb_level"], "live": ["engine_brake", "ebb_level"]},
-      {"id": "engine_map", "label": "Engine map and performance mode", "description": "The in-car engine map and performance mode, as index and name.", "once": ["engine_map", "performance_mode", "performance_mode_name"], "live": ["engine_map", "performance_mode", "performance_mode_name"]},
-      {"id": "electronics_limits", "label": "Electronics limits", "description": "The lowest and highest level of each in-car adjustment and which of them the car allows.", "once": ["electronics_min", "electronics_max", "electronics_modifiable"], "live": []},
-      {"id": "gears_fuel", "label": "Gears and fuel", "description": "The number of gears and the size of the fuel tank.", "once": ["max_gears", "fuel_max_l"], "live": []},
-      {"id": "mass_balance", "label": "Mass and balance", "description": "The height of the centre of gravity and the ballast.", "once": ["cg_height", "ballast"], "live": []},
-      {"id": "brake_wear", "label": "Brake wear", "description": "Pad and disc life and the brake compounds.", "once": ["pad_life", "disc_life", "front_brake_compound", "rear_brake_compound"], "live": ["pad_life", "disc_life", "front_brake_compound", "rear_brake_compound"]}
+     "rows": [
+      {"id": "tyre_compounds", "label": "Tyre compounds", "description": "The front and rear tyre compound in the game; shows whether the garage tyres arrived.", "default": false, "once": ["tyre_compound_front", "tyre_compound_rear"], "live": ["tyre_compound_front", "tyre_compound_rear"]},
+      {"id": "turbo", "label": "Turbo", "description": "The boost target of the car and the boost; shows whether a turbo kit works.", "default": false, "once": ["turbo_level", "boost_max"], "live": ["boost", "turbo_level"]},
+      {"id": "damper_levels", "label": "Damper levels", "description": "The in-car damper level (front and rear, bump and rebound) of cars that offer it.", "default": false, "once": ["damper_levels"], "live": ["damper_levels"]},
+      {"id": "engine_brake", "label": "Engine brake and brake balance", "description": "The in-car engine brake and brake balance adjustments.", "default": false, "once": ["engine_brake", "ebb_level"], "live": ["engine_brake", "ebb_level"]},
+      {"id": "engine_map", "label": "Engine map and performance mode", "description": "The in-car engine map and performance mode, as index and name.", "default": false, "once": ["engine_map", "performance_mode", "performance_mode_name"], "live": ["engine_map", "performance_mode", "performance_mode_name"]},
+      {"id": "electronics_limits", "label": "Electronics limits", "description": "The lowest and highest level of each in-car adjustment and which of them the car allows.", "default": false, "once": ["electronics_min", "electronics_max", "electronics_modifiable"], "live": []},
+      {"id": "gears_fuel", "label": "Gears and fuel", "description": "The number of gears and the size of the fuel tank.", "default": false, "once": ["max_gears", "fuel_max_l"], "live": []},
+      {"id": "mass_balance", "label": "Mass and balance", "description": "The height of the centre of gravity and the ballast.", "default": false, "once": ["cg_height", "ballast"], "live": []},
+      {"id": "brake_wear", "label": "Brake wear", "description": "Pad and disc life and the brake compounds.", "default": false, "once": ["pad_life", "disc_life", "front_brake_compound", "rear_brake_compound"], "live": ["pad_life", "disc_life", "front_brake_compound", "rear_brake_compound"]}
     ]}
   ]
 }

@@ -275,7 +275,7 @@ class TestRoutes(ServerCase):
         self.assertEqual(sorted(ts.GET_ROUTES), ["/api/garage", "/api/groups", "/api/log_config", "/api/log_sessions", "/api/log_status",
                                                  "/api/settings", "/api/sounds", "/api/state", "/api/turbo", "/api/tyre", "/api/tyres"])
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
-                                                  "/api/log_config_set", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
+                                                  "/api/log_config_set", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
                                                   "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
@@ -2063,8 +2063,7 @@ class TestLogConfigRoute(LogCase):
                          (200, "application/json; charset=utf-8", "no-store"))
         self.assertEqual(set(r.json), {"rate_hz", "rates", "groups"})
         self.assertEqual((r.json["rate_hz"], r.json["rates"]), (30, [30, 60]))
-        self.assertEqual(self.ticked(r), ["behaviour." + i for i in ("speed", "rpm", "gear", "gas", "brake", "steering", "g_forces", "rotation",
-                                                                       "wheel_load", "slip", "susp_travel", "tyre_temps", "brake_temp")])
+        self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm"])
         self.assertFalse(os.path.exists(self.config_file))
 
     def test_the_groups_are_the_tree_of_the_channel_table(self):
@@ -2072,14 +2071,16 @@ class TestLogConfigRoute(LogCase):
         chan = logconf.load_channels()
         self.assertEqual(r.json["groups"], logconf.tree(chan, REAL_CATALOGUE, logconf.default_config(chan)))
         ids = [g["id"] for g in r.json["groups"]]
-        self.assertEqual(ids[:-2], ["catalogue." + g["name"] for g in REAL_CATALOGUE["groups"]])
-        self.assertEqual(ids[-2:], ["behaviour", "car_state"])
+        self.assertEqual(ids[:2], ["behaviour", "car_state"])
+        self.assertEqual(sorted(ids[2:]), sorted("catalogue." + g["name"] for g in REAL_CATALOGUE["groups"]))
+        counts = [g["tickable"] for g in r.json["groups"][2:]]
+        self.assertEqual(counts, sorted(counts, key=lambda c: c == 0))
 
     def test_the_saved_choice_is_answered(self):
         self.write(self.config_file, {"version": 1, "rate_hz": 60, "ticked": ["limiter", "car_state.turbo"]})
         r = self.get("/api/log_config")
         self.assertEqual((r.status, r.json["rate_hz"]), (200, 60))
-        self.assertEqual(self.ticked(r), ["limiter", "car_state.turbo"])
+        self.assertEqual(self.ticked(r), ["car_state.turbo", "limiter"])
 
     def test_a_damaged_or_invalid_file_answers_the_default_choice(self):
         for data in ("{not json", json.dumps({"version": 1, "rate_hz": 45, "ticked": []}),
@@ -2088,13 +2089,13 @@ class TestLogConfigRoute(LogCase):
                 self.write(self.config_file, data)
                 r = self.get("/api/log_config")
                 self.assertEqual((r.status, r.json["rate_hz"]), (200, 30))
-                self.assertEqual(len(self.ticked(r)), 13)
+                self.assertEqual(self.ticked(r), ["behaviour.speed", "behaviour.rpm"])
 
     def test_set_saves_the_choice_and_answers_like_get(self):
         r = self.post("/api/log_config_set", self.valid())
         self.assertEqual((r.status, r.headers.get("Content-Type")), (200, "application/json; charset=utf-8"))
         self.assertEqual(r.json["rate_hz"], 60)
-        self.assertEqual(self.ticked(r), ["limiter", "behaviour.speed"])
+        self.assertEqual(self.ticked(r), ["behaviour.speed", "limiter"])
         self.assertEqual(self.get("/api/log_config").json, r.json)
         with open(self.config_file, encoding="utf-8") as f:
             self.assertEqual(json.load(f), {"version": 1, "rate_hz": 60, "ticked": ["limiter", "behaviour.speed"]})
@@ -2106,14 +2107,16 @@ class TestLogConfigRoute(LogCase):
 
     def test_set_normalises_the_order_and_a_later_set_replaces_the_choice(self):
         self.post("/api/log_config_set", {"ticked": ["car_state.turbo", "behaviour.rpm", "fuel_start"], "rate_hz": 60})
-        self.assertEqual(self.ticked(self.get("/api/log_config")), ["fuel_start", "behaviour.rpm", "car_state.turbo"])
+        self.assertEqual(self.ticked(self.get("/api/log_config")), ["behaviour.rpm", "car_state.turbo", "fuel_start"])
+        with open(self.config_file, encoding="utf-8") as f:
+            self.assertEqual(json.load(f)["ticked"], ["fuel_start", "behaviour.rpm", "car_state.turbo"])
         self.post("/api/log_config_set", {"ticked": ["limiter"], "rate_hz": 30})
         r = self.get("/api/log_config")
         self.assertEqual((r.json["rate_hz"], self.ticked(r)), (30, ["limiter"]))
 
     def test_only_direct_settings_and_extra_rows_are_tickable_in_the_answer(self):
         r = self.get("/api/log_config")
-        direct = [row["id"] for g in r.json["groups"][:-2] for row in g["rows"] if row["tickable"]]
+        direct = [row["id"] for g in r.json["groups"][2:] for row in g["rows"] if row["tickable"]]
         self.assertEqual(len(direct), 29)
         self.assertIn("limiter", direct)
         self.assertNotIn("gear_1", direct)
@@ -2196,7 +2199,7 @@ class TestLogConfigRoute(LogCase):
         self.post("/api/log_config_set", self.valid())
         for query in ("", "?car=ks_y", "?tune=draft", "?car=ks_x&tune=draft"):
             with self.subTest(query):
-                self.assertEqual(self.ticked(self.get("/api/log_config" + query)), ["limiter", "behaviour.speed"])
+                self.assertEqual(self.ticked(self.get("/api/log_config" + query)), ["behaviour.speed", "limiter"])
 
     def test_it_needs_neither_the_state_lock_nor_an_idle_job(self):
         with ts.STATE_LOCK:
@@ -2320,6 +2323,212 @@ class TestLogStatusRoute(LogCase):
         self.assertEqual(self.post("/api/log_status").status, 404)
         self.assertEqual(self.request("DELETE", "/api/log_status").status, 405)
         self.assertEqual(self.get("/api/log_status", host="evil.example").status, 403)
+
+
+class TestLoggerRoutes(LogCase):
+    """POST /api/logger_start and /api/logger_stop: start the logger in the background, ask it to stop. subprocess.Popen is a mock, no process is started."""
+    PID = 4321
+    ROUTES = ("/api/logger_start", "/api/logger_stop")
+
+    def setUp(self):
+        super().setUp()
+        self.spawned = []
+        self.proc = mock.Mock(pid=self.PID)
+        self.popen = self.patch(ts.subprocess, "Popen", mock.Mock(side_effect=self.fake_popen))
+        self.stop_file = logconf.stop_path(self.logs)
+        self.console = os.path.join(self.logs, "logger_console.log")
+
+    def fake_popen(self, args, **kw):
+        out = kw["stdout"]
+        self.spawned.append({"stdout_closed": out.closed, "stop_file": os.path.exists(self.stop_file)})
+        return self.proc
+
+    def running(self):
+        now = time.time()
+        self.write(self.status_file, {"state": "logging", "file": "x.jsonl", "samples": 40, "started": now - 20, "updated": now, "pid": 7})
+
+    def start_on(self, platform):
+        with mock.patch.object(sys, "platform", platform), \
+                mock.patch.object(ts.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True), \
+                mock.patch.object(ts.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+            return self.post("/api/logger_start")
+
+    def test_the_logger_route_paths_are_post_routes_without_a_job(self):
+        for path in self.ROUTES:
+            self.assertIn(path, ts.POST_ROUTES)
+            self.assertNotIn(path, ts.GET_ROUTES)
+            self.assertNotIn(path, ts.ACCEPTED)
+            self.assertNotIn(path, ts.QUERY_ROUTES)
+
+    def test_start_runs_the_logger_with_this_servers_folders_and_answers_the_pid(self):
+        r = self.start_on("linux")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"started": True, "pid": self.PID}))
+        self.popen.assert_called_once()
+        args, kw = self.popen.call_args
+        self.assertEqual(args, ([sys.executable, "-I", "-B", str(tune.REPO / "tools" / "logger.py"),
+                                 "--work", self.work, "--mods", clone_car.expand(self.mods), "--logs", clone_car.expand(self.logs)],))
+        self.assertEqual(set(kw), {"cwd", "stdin", "stdout", "stderr", "close_fds", "creationflags"})
+        self.assertEqual((kw["cwd"], kw["stdin"], kw["stderr"], kw["close_fds"]),
+                         (str(tune.REPO), ts.subprocess.DEVNULL, ts.subprocess.STDOUT, True))
+
+    def test_the_logger_script_is_the_logger_of_the_tools_folder(self):
+        self.assertEqual(ts.LOGGER, tune.REPO / "tools" / "logger.py")
+        self.assertTrue(ts.LOGGER.is_file())
+
+    def test_start_uses_the_work_mods_and_logs_options_of_the_server(self):
+        mods, logs = str(self.d / "m2"), str(self.d / "l2")
+        ts.CONFIG.update(mods=mods, logs=logs)
+        self.assertEqual(self.start_on("linux").status, 200)
+        args = self.popen.call_args[0][0]
+        self.assertEqual(args[4:], ["--work", self.work, "--mods", clone_car.expand(mods), "--logs", clone_car.expand(logs)])
+        self.assertTrue(os.path.isfile(os.path.join(logs, "logger_console.log")))
+        self.assertFalse(os.path.exists(self.logs))
+
+    def test_the_console_output_goes_to_the_log_file_opened_for_appending_and_closed_afterwards(self):
+        self.write(self.console, "old line")
+        self.assertEqual(self.start_on("linux").status, 200)
+        out = self.popen.call_args[1]["stdout"]
+        self.assertEqual((out.name, out.mode), (os.path.join(clone_car.expand(self.logs), "logger_console.log"), "ab"))
+        self.assertEqual(self.spawned, [{"stdout_closed": False, "stop_file": False}])
+        self.assertTrue(out.closed)
+        with open(self.console, "rb") as f:
+            self.assertEqual(f.read(), b"old line")
+
+    def test_start_creates_the_logs_folder_and_the_log_file(self):
+        self.assertFalse(os.path.exists(self.logs))
+        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertTrue(os.path.isfile(self.console))
+
+    def test_on_windows_the_logger_gets_its_own_process_group_and_no_console_window(self):
+        self.assertEqual(self.start_on("win32").status, 200)
+        self.assertEqual(self.popen.call_args[1]["creationflags"], 0x200 | 0x08000000)
+
+    def test_elsewhere_there_are_no_creation_flags(self):
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform):
+                self.popen.reset_mock()
+                self.assertEqual(self.start_on(platform).status, 200)
+                self.assertEqual(self.popen.call_args[1]["creationflags"], 0)
+
+    def test_a_stale_stop_file_is_removed_before_the_logger_starts(self):
+        self.write(self.stop_file, "")
+        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.spawned, [{"stdout_closed": False, "stop_file": False}])
+        self.assertFalse(os.path.exists(self.stop_file))
+
+    def test_start_while_the_logger_runs_is_a_409_and_starts_nothing(self):
+        for status in ("logging", "waiting"):
+            with self.subTest(status):
+                self.write(self.status_file, {"state": status, "file": None, "samples": 0, "started": time.time(), "updated": time.time(), "pid": 7})
+                r = self.start_on("linux")
+                self.assertEqual((r.status, r.json), (409, {"error": "the logger already runs"}))
+        self.popen.assert_not_called()
+        self.assertFalse(os.path.exists(self.console))
+
+    def test_start_while_the_logger_runs_leaves_a_stop_file_alone(self):
+        self.running()
+        self.write(self.stop_file, "")
+        self.assertEqual(self.start_on("linux").status, 409)
+        self.assertTrue(os.path.exists(self.stop_file))
+
+    def test_an_old_or_damaged_status_file_does_not_block_a_start(self):
+        for text in (json.dumps({"state": "logging", "file": None, "samples": 0, "started": 1, "updated": time.time() - 30, "pid": 7}), "{not json"):
+            with self.subTest(text):
+                self.write(self.status_file, text)
+                self.assertEqual(self.start_on("linux").status, 200)
+
+    def test_a_failing_spawn_is_a_500_with_the_text(self):
+        self.popen.side_effect = OSError("cannot start the logger")
+        r = self.start_on("linux")
+        self.assertEqual((r.status, r.json), (500, {"error": "cannot start the logger"}))
+        self.assertTrue(self.popen.call_args[1]["stdout"].closed)
+
+    def test_an_unexpandable_folder_is_a_500_and_starts_nothing(self):
+        ts.CONFIG["mods"] = "%ACE_TEST_NO_SUCH_VAR%/m"
+        r = self.start_on("linux")
+        self.assertEqual(r.status, 500)
+        self.assertIn("cannot expand", r.json["error"])
+        self.popen.assert_not_called()
+
+    def test_start_does_not_wait_for_the_logger(self):
+        started = time.monotonic()
+        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(self.proc.method_calls, [])
+
+    def test_stop_asks_the_running_logger_to_stop_and_answers(self):
+        self.running()
+        r = self.post("/api/logger_stop")
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"stopping": True}))
+        self.assertTrue(os.path.isfile(self.stop_file))
+        self.assertEqual(os.path.getsize(self.stop_file), 0)
+        self.popen.assert_not_called()
+
+    def test_stop_while_the_logger_does_not_run_is_a_409_and_writes_nothing(self):
+        for text in (None, json.dumps({"state": "logging", "file": None, "samples": 0, "started": 1, "updated": time.time() - 30, "pid": 7}), "{not json"):
+            with self.subTest(text):
+                if text is not None:
+                    self.write(self.status_file, text)
+                r = self.post("/api/logger_stop")
+                self.assertEqual((r.status, r.json), (409, {"error": "the logger is not running"}))
+                self.assertFalse(os.path.exists(self.stop_file))
+        self.popen.assert_not_called()
+
+    def test_stop_reads_the_logs_option_of_the_server(self):
+        self.running()
+        ts.CONFIG["logs"] = str(self.d / "other_logs")
+        self.assertEqual(self.post("/api/logger_stop").status, 409)
+        self.assertFalse(os.path.exists(self.stop_file))
+
+    def test_bad_bodies_are_the_usual_400_413_and_415(self):
+        self.running()
+        for path in self.ROUTES:
+            with self.subTest(path):
+                self.assertEqual(self.post(path, b"{not json").status, 400)
+                self.assertEqual(self.post(path, b"[1]").status, 400)
+                self.assertEqual(self.request("POST", path, None, headers={"Content-Length": str(ts.MAX_BODY + 1)}).status, 413)
+                r = self.post(path, {}, headers={"Content-Type": "text/plain"})
+                self.assertEqual((r.status, r.json), (415, {"error": "Content-Type must be application/json"}))
+        self.assertFalse(os.path.exists(self.stop_file))
+        self.popen.assert_not_called()
+
+    def test_the_header_rule_of_every_post_route(self):
+        self.running()
+        for path in self.ROUTES:
+            with self.subTest(path):
+                r = self.post(path, headers={"X-Tuner": None})
+                self.assertEqual((r.status, r.json), (403, {"error": "missing header X-Tuner: 1"}))
+                self.assertEqual(self.post(path, headers={"X-Tuner": "0"}).status, 403)
+                self.assertEqual(self.post(path, post_headers=False).status, 403)
+                r = self.post(path, host="evil.example")
+                self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertFalse(os.path.exists(self.stop_file))
+        self.popen.assert_not_called()
+
+    def test_methods_and_paths(self):
+        for path in self.ROUTES:
+            with self.subTest(path):
+                self.assertEqual(self.get(path).status, 404)
+                for method in ("PUT", "DELETE", "PATCH"):
+                    r = self.request(method, path)
+                    self.assertEqual((r.status, r.json, r.headers.get("Allow")), (405, {"error": "method not allowed"}, "GET, POST"))
+        self.popen.assert_not_called()
+
+    def test_they_need_no_base_car_and_no_idle_job_and_the_dispatcher_still_resolves_the_car_and_the_tune(self):
+        self.assertFalse(ts.base_present(self.work, "ks_y"))
+        ts.JOB["state"] = "running"
+        with ts.STATE_LOCK:
+            self.assertEqual(self.post("/api/logger_start", {"car": "ks_y"}).status, 200)
+            self.running()
+            self.assertEqual(self.post("/api/logger_stop", {"car": "ks_y"}).status, 200)
+        self.popen.reset_mock()
+        os.remove(self.stop_file)
+        os.remove(self.status_file)
+        r = self.post("/api/logger_start", {"car": "nope"})
+        self.assertEqual(r.status, 400)
+        self.assertTrue(r.json["error"].startswith("unknown car"), r.json)
+        self.assertEqual(self.post("/api/logger_start", {"tune": "nope"}).status, 400)
+        self.popen.assert_not_called()
 
 
 class TestLogsDir(Env):

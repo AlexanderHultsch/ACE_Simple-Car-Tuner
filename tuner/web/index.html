@@ -180,6 +180,10 @@ button.grouptoggle:hover .gname { color: var(--color-accent); }
 }
 .grouptoggle[aria-expanded="true"] .chev { transform: rotate(45deg); }
 tr.changed td { background: var(--color-accent-tint); }
+tr.off td { color: var(--color-text-muted); font-style: italic; }
+.tablewrap.scroll { overflow-x: auto; }
+table.logtable { table-layout: auto; min-width: 560px; }
+.logtable th:first-child, .logtable td:first-child { width: 1%; }
 .name b { display: block; }
 .name .id { display: block; font-size: 12px; color: var(--color-text-muted); }
 .valuewrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -212,7 +216,6 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 .garage fieldset { min-width: 0; margin: 0 0 8px; padding: 0; border: 0; }
 .garage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 3px 0; }
 .garage-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.garage-row.off label { color: var(--color-text-muted); cursor: default; }
 .garage select {
   font: inherit; max-width: 100%; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
   background: var(--color-bg); color: var(--color-text);
@@ -448,6 +451,10 @@ button.reset { padding: 2px 8px; font-size: 12px; }
       <h2>Session logging</h2>
       <p>Choose what the logger records. Start start_logger.bat, then the game: a session file is written to the logs folder while the game runs. Your choices are saved at once and apply from the next session.</p>
       <p id="log-status"></p>
+      <div class="actions">
+        <button id="btn-log-start" type="button" disabled>Start logger</button>
+        <button id="btn-log-stop" type="button" disabled>Stop logger</button>
+      </div>
     </section>
 
     <div class="toolbar">
@@ -588,7 +595,9 @@ let soundsJobRunning = false;
 // one at a time); logSeq counts the loads and the answers of writes, so that a slow load never replaces a newer answer;
 // logOpen holds the ids of the groups the user opened (every group starts collapsed); logBoxes are the checkboxes of the shown
 // groups; the status of the logger is polled every LOG_POLL_MS while the Logging tab is shown, logFile is the file it named
-// last and logStatusSeq counts the polls, so that a slow answer never replaces a newer one
+// last and logStatusSeq counts the polls, so that a slow answer never replaces a newer one; logRunning is whether the logger runs
+// as the last poll said (null before the first answer and after a failed poll), logBusy is true while a start or stop request
+// is in flight
 let logData = null;
 let logError = "";
 let logSeq = 0;
@@ -601,6 +610,8 @@ let logSessionsError = "";
 let logPollTimer = null;
 let logFile = null;
 let logStatusSeq = 0;
+let logRunning = null;
+let logBusy = false;
 
 function storedSelection() {
   const none = { car: null, tune: DRAFT };
@@ -2317,6 +2328,13 @@ function logStatusText(s) {
   return "Logger: logging " + s.file + ", " + s.samples + " samples, " + fmtDuration(s.seconds);
 }
 
+// Start is on while the logger does not run, Stop while it waits or logs, both are off before the first answer, after a failed
+// poll and while a start or stop request is in flight
+function renderLoggerButtons() {
+  $("btn-log-start").disabled = logRunning !== false || logBusy;
+  $("btn-log-stop").disabled = logRunning !== true || logBusy;
+}
+
 // a failing poll says so in the status line and never shows an error; a new file name (a session started or ended) reads the
 // session list again
 async function pollLogStatus() {
@@ -2325,11 +2343,17 @@ async function pollLogStatus() {
   try {
     s = await api("/api/log_status", undefined, selection);
   } catch (e) {
-    if (seq === logStatusSeq) $("log-status").textContent = "Logger: status unavailable";
+    if (seq === logStatusSeq) {
+      $("log-status").textContent = "Logger: status unavailable";
+      logRunning = null;
+      renderLoggerButtons();
+    }
     return;
   }
   if (seq !== logStatusSeq) return;
   $("log-status").textContent = logStatusText(s);
+  logRunning = s.running;
+  renderLoggerButtons();
   if (s.file !== logFile) {
     logFile = s.file;
     loadLogSessions();
@@ -2345,6 +2369,44 @@ function startLogPoll() {
   stopLogPoll();
   pollLogStatus();
   logPollTimer = setInterval(pollLogStatus, LOG_POLL_MS);
+}
+
+// Start and Stop: one request at a time, a refusal or failure (a 409 too) goes to the error line, the status is read at once
+function beginLogRequest() {
+  logBusy = true;
+  logError = "";
+  renderLoggerButtons();
+  renderLogLines();
+}
+
+async function endLogRequest(message) {
+  logBusy = false;
+  logError = message;
+  renderLogLines();
+  await pollLogStatus();
+  renderLoggerButtons();
+}
+
+async function startLogger() {
+  beginLogRequest();
+  let message = "";
+  try {
+    await api("/api/logger_start", {}, selection);
+  } catch (e) {
+    message = e.message;
+  }
+  await endLogRequest(message);
+}
+
+async function stopLogger() {
+  beginLogRequest();
+  let message = "";
+  try {
+    await api("/api/logger_stop", {}, selection);
+  } catch (e) {
+    message = e.message;
+  }
+  await endLogRequest(message);
 }
 
 function renderLogLines() {
@@ -2378,35 +2440,59 @@ async function loadLogSessions() {
   renderLogSessions();
 }
 
-// "once: a, b | live: c, d": what the logger reads at the start of a session and in every sample
-function logChannelText(r) {
-  const parts = [];
-  if (r.once.length) parts.push("once: " + r.once.join(", "));
-  if (r.live.length) parts.push("live: " + r.live.join(", "));
-  return parts.join(" | ");
+// the Once and Live cells: the channel names the logger reads at the start of a session and in every sample
+function logChannelCell(names) {
+  return el("td", "mono", names.length ? names.join(", ") : "-");
 }
 
-// a row of a setting or of an extra group; a greyed row has no box in logBoxes
+// a row of a setting or of an extra group as a table row; a greyed row has no box (a dash instead) and none in logBoxes
 function buildLogRow(r) {
-  const row = el("div", "garage-row");
-  if (!r.tickable) row.classList.add("off");
-  const label = el("label");
-  const input = el("input");
-  input.type = "checkbox";
-  input.checked = r.ticked;
-  input.disabled = !r.tickable;
-  label.append(input, el("span", "", r.label));
-  row.appendChild(label);
-  if (r.unit) row.appendChild(el("span", "unit", r.unit));
+  const tr = el("tr");
+  if (!r.tickable) tr.classList.add("off");
+  const tick = el("td");
   if (r.tickable) {
+    const input = el("input");
+    input.type = "checkbox";
+    input.checked = r.ticked;
+    input.setAttribute("aria-label", r.label);
+    tick.appendChild(input);
     logBoxes.push({ key: r.id, input: input, rows: [r] });
-    const text = logChannelText(r);
-    if (text) row.appendChild(el("span", "unit", text));
   } else {
-    row.appendChild(el("span", "badge", r.status === "indirect" ? "effect only" : "not published"));
-    if (r.note) row.appendChild(el("span", "unit", r.note));
+    tick.append("-", el("span", "sr-only", "not tickable"));
   }
-  return row;
+  const name = el("td", "name");
+  name.appendChild(el("b", "", r.label));
+  if (r.tickable) {
+    if (r.description) name.appendChild(el("span", "id", r.description));
+  } else {
+    const line = el("span", "id");
+    line.append(el("span", "badge", r.status === "indirect" ? "effect only" : "not published"));
+    if (r.note) line.append(" " + r.note);
+    name.appendChild(line);
+  }
+  tr.append(tick, name, el("td", "unit", r.unit || ""), logChannelCell(r.once), logChannelCell(r.live));
+  return tr;
+}
+
+// the rows of a group in the order the server sends them
+function buildLogTable(g) {
+  const wrap = el("div", "tablewrap scroll");
+  const table = el("table", "logtable");
+  table.appendChild(el("caption", "sr-only", "Logging channels of " + g.name));
+  const head = el("tr");
+  for (const text of ["Tick", "Setting", "Unit", "Once", "Live"]) {
+    const th = el("th");
+    th.scope = "col";
+    if (text === "Tick") th.appendChild(el("span", "sr-only", text));
+    else th.textContent = text;
+    head.appendChild(th);
+  }
+  table.appendChild(el("thead")).appendChild(head);
+  const body = el("tbody");
+  for (const r of g.rows) body.appendChild(buildLogRow(r));
+  table.appendChild(body);
+  wrap.appendChild(table);
+  return wrap;
 }
 
 // the box in the summary is checked when every tickable row is ticked, indeterminate when some are
@@ -2427,10 +2513,10 @@ function buildLogGroup(g) {
   input.setAttribute("aria-label", "Tick all of " + g.name);
   logBoxes.push({ key: "group:" + g.id, input: input, rows: tickable });
   const summary = el("summary");
-  summary.append(input, " ", el("span", "gname", g.name), " ", el("span", "gcount unit", "(" + ticked + " of " + tickable.length + " ticked)"));
+  summary.append(input, " ", el("span", "gname", g.name), " ", el("span", "gcount unit", "(" + ticked + " of " + g.tickable + " ticked)"));
   details.appendChild(summary);
   if (g.description) details.appendChild(el("p", "garage-help", g.description));
-  for (const r of g.rows) details.appendChild(buildLogRow(r));
+  details.appendChild(buildLogTable(g));
   return details;
 }
 
@@ -2606,6 +2692,8 @@ $("sounds-toggle").addEventListener("click", toggleSounds);
 $("sounds").addEventListener("change", soundChanged);
 $("btn-sound-reset").addEventListener("click", resetSounds);
 $("log-rate").addEventListener("change", logRateChanged);
+$("btn-log-start").addEventListener("click", startLogger);
+$("btn-log-stop").addEventListener("click", stopLogger);
 $("btn-log-all").addEventListener("click", () => setAllLog(true));
 $("btn-log-none").addEventListener("click", () => setAllLog(false));
 $("log-groups").addEventListener("change", logChanged);

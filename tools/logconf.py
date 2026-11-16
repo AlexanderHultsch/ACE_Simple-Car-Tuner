@@ -1,11 +1,12 @@
 """Channel table and settings of the session logger: tuner/log_channels.json, the saved choice <work>/log_config.json, the session files and the status of the logger process.
 
 Library module of tools/tuner_server.py and the logger (no command line of its own). tuner/log_channels.json names, for every setting of tuner/catalogue.json, whether the game shows it (status "direct": a once-only reading and live values, tickable; "indirect" and "none": greyed, not tickable, "once" and "live" empty and a note) and which channels of tools/ace_shm.py channels() it logs ("once": read once at the start of a session, "live": in every sample). "extra_groups" are groups of tickable rows that are not tuner settings (behaviour values, car state); the id of such a row in a choice is "<group id>.<row id>". A tickable id is a direct setting id or such a row id.
-The choice (log_config.json) is {"version": 1, "rate_hz": 30 or 60, "ticked": [tickable ids]}. A missing, damaged or invalid file reads as the default choice: the rows of the extra groups whose "default" is true, at 30 Hz.
-Session files are logs/*.jsonl, one JSON object per line: the first line has "type": "header" (with "car" and "track"), the last line of a finished session "type": "end" (with "duration_s" and "samples"). The running logger writes logs/logger_status.json = {"state": "waiting" or "logging", "file": text or null, "samples": int, "started": epoch seconds, "updated": epoch seconds, "pid": int}; it counts as running while "updated" is at most STATUS_MAX_AGE seconds old.
+The choice (log_config.json) is {"version": 1, "rate_hz": 30 or 60, "ticked": [tickable ids]}. A missing, damaged or invalid file reads as the default choice: the extra rows whose "default" is true, at 30 Hz.
+Session files are logs/*.jsonl, one JSON object per line: the first line has "type": "header" (with "car" and "track"), the last line of a finished session "type": "end" (with "duration_s" and "samples"). The running logger writes logs/logger_status.json = {"state": "waiting" or "logging", "file": text or null, "samples": int, "started": epoch seconds, "updated": epoch seconds, "pid": int}; it counts as running while "updated" is at most STATUS_MAX_AGE seconds old. The empty file logs/logger_stop (STOP_FILE) asks the running logger to stop; the logger deletes it.
 
 Stdlib only.
 """
+import contextlib
 import json
 import math
 import os
@@ -25,6 +26,7 @@ STATUSES = ("direct", "indirect", "none")
 CONFIG_FILE = "log_config.json"
 STATUS_FILE = "logger_status.json"
 STATUS_MAX_AGE = 5
+STOP_FILE = "logger_stop"
 SESSION_TAIL = 4096
 
 
@@ -53,7 +55,7 @@ def validate_channels(chan, catalogue):
     """Raises ValueError with a clear message unless the channel table is valid for the catalogue: version 1; settings has exactly
     the catalogue's setting ids; every status is direct, indirect or none; a direct setting names at least one channel, an
     indirect or none setting has no channels and a note; every channel name is one of ace_shm.channels(); the extra groups
-    have unique ids, a bool default, texts as names and labels, and unique row ids within the group."""
+    have unique ids and no group default, texts as names and labels, unique row ids within the group, and a bool default in every row."""
     if not isinstance(chan, dict):
         raise ValueError("log channels: expected an object")
     if type(chan.get("version")) is not int or chan["version"] != VERSION:
@@ -101,8 +103,8 @@ def validate_channels(chan, catalogue):
             raise ValueError("%s: needs a name (text)" % where)
         if not isinstance(g.get("description"), str):
             raise ValueError("%s: description must be text" % where)
-        if type(g.get("default")) is not bool:
-            raise ValueError("%s: default must be true or false" % where)
+        if "default" in g:
+            raise ValueError("%s: default is not allowed (it is set in every row)" % where)
         if not isinstance(g.get("rows"), list):
             raise ValueError("%s: needs rows, a list" % where)
         row_ids = []
@@ -117,6 +119,8 @@ def validate_channels(chan, catalogue):
                 raise ValueError("%s: needs a label (text)" % row_where)
             if not isinstance(r.get("description"), str):
                 raise ValueError("%s: description must be text" % row_where)
+            if type(r.get("default")) is not bool:
+                raise ValueError("%s: default must be true or false" % row_where)
             check_names(row_where, r, known)
 
 
@@ -137,9 +141,9 @@ def tickable_ids(chan):
 
 
 def default_config(chan):
-    """The choice without a file: 30 Hz and the rows of the extra groups whose default is true."""
+    """The choice without a file: 30 Hz and the extra rows whose default is true."""
     return {"version": VERSION, "rate_hz": DEFAULT_RATE,
-            "ticked": ["%s.%s" % (g["id"], r["id"]) for g in chan["extra_groups"] if g["default"] for r in g["rows"]]}
+            "ticked": ["%s.%s" % (g["id"], r["id"]) for g in chan["extra_groups"] for r in g["rows"] if r["default"]]}
 
 
 def config_path(work):
@@ -198,12 +202,14 @@ def save_config(work, config, chan):
 
 
 def tree(chan, catalogue, config):
-    """The groups of the Logging tab: first the catalogue groups in catalogue order (every one, also without a tickable row), then
-    the extra groups. A catalogue row is {"id": setting id, "label", "unit", "status", "note", "tickable", "ticked", "once",
-    "live"}; an extra row {"id": "<group id>.<row id>", "label", "description", "tickable": true, "ticked", "status": "extra",
-    "note": "", "once", "live"}."""
+    """The groups of the Logging tab in display order: the extra groups in the order of the table, then the catalogue groups with
+    at least one tickable row (catalogue order), then the catalogue groups without one (catalogue order). Inside a group the
+    tickable rows come first, the others last, each part in its table order. A group is {"id", "name", "description",
+    "tickable" (the number of its tickable rows), "rows"}. A catalogue row is {"id": setting id, "label", "unit", "status",
+    "note", "tickable", "ticked", "once", "live"}; an extra row {"id": "<group id>.<row id>", "label", "description", "default",
+    "tickable": true, "ticked", "status": "extra", "note": "", "once", "live"}."""
     ticked = set(config["ticked"])
-    groups = []
+    extra, with_rows, without_rows = [], [], []
     for g in catalogue["groups"]:
         rows = []
         for s in catalogue["settings"]:
@@ -213,15 +219,18 @@ def tree(chan, catalogue, config):
             rows.append({"id": s["id"], "label": s["label"], "unit": s["unit"], "status": e["status"], "note": e["note"],
                          "tickable": e["status"] == "direct", "ticked": s["id"] in ticked, "once": list(e["once"]),
                          "live": list(e["live"])})
-        groups.append({"id": "catalogue." + g["name"], "name": g["name"], "description": g["description"], "rows": rows})
+        rows = [r for r in rows if r["tickable"]] + [r for r in rows if not r["tickable"]]
+        count = sum(r["tickable"] for r in rows)
+        (with_rows if count else without_rows).append(
+            {"id": "catalogue." + g["name"], "name": g["name"], "description": g["description"], "tickable": count, "rows": rows})
     for g in chan["extra_groups"]:
         rows = []
         for r in g["rows"]:
             rid = "%s.%s" % (g["id"], r["id"])
-            rows.append({"id": rid, "label": r["label"], "description": r["description"], "tickable": True,
+            rows.append({"id": rid, "label": r["label"], "description": r["description"], "default": r["default"], "tickable": True,
                          "ticked": rid in ticked, "status": "extra", "note": "", "once": list(r["once"]), "live": list(r["live"])})
-        groups.append({"id": g["id"], "name": g["name"], "description": g["description"], "default": g["default"], "rows": rows})
-    return groups
+        extra.append({"id": g["id"], "name": g["name"], "description": g["description"], "tickable": len(rows), "rows": rows})
+    return extra + with_rows + without_rows
 
 
 def selected_channels(chan, config):
@@ -239,6 +248,25 @@ def selected_channels(chan, config):
 
 def default_logs_dir():
     return str(tune.REPO / "logs")
+
+
+def stop_path(logs_dir):
+    return os.path.join(logs_dir, STOP_FILE)
+
+
+def request_stop(logs_dir):
+    """Creates the empty file that asks the running logger to stop; returns its path."""
+    path = stop_path(logs_dir)
+    os.makedirs(logs_dir, exist_ok=True)
+    with open(path, "wb"):
+        pass
+    return path
+
+
+def clear_stop(logs_dir):
+    """Removes the stop file if it is there; errors are ignored."""
+    with contextlib.suppress(OSError):
+        os.remove(stop_path(logs_dir))
 
 
 def number(value):

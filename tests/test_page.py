@@ -2474,26 +2474,70 @@ class TestLogging(unittest.TestCase):
         self.assertIn("logData.rate_hz = Number($(\"log-rate\").value);", function_body("logRateChanged"))
         self.assertEqual(ts.logconf.RATES, (30, 60))
 
-    def test_a_group_is_a_collapsed_details_with_a_summary_of_the_box_the_name_and_the_count(self):
+    def test_a_group_is_a_group_row_with_a_cell_for_the_box_and_a_rowgroup_cell_with_the_toggle_the_name_and_the_count(self):
         body = function_body("buildLogGroup")
-        self.assertIn('const details = el("details", "panel");', body)
-        self.assertIn("details.open = logOpen.has(g.id);", body)
-        self.assertNotIn("open = true", body)
-        self.assertNotRegex(self.PANEL, r"\bopen\b")
+        self.assertIn('const tr = el("tr", "group");', body)
+        self.assertIn('const tick = el("td");', body)
+        self.assertIn("th.colSpan = 4;", body)
+        self.assertIn('th.scope = "rowgroup";', body)
+        self.assertIn('const btn = el("button", "grouptoggle");', body)
+        self.assertIn('btn.type = "button";', body)
+        self.assertIn('chev.setAttribute("aria-hidden", "true");', body)
+        self.assertIn('btn.append(chev, el("span", "gname", g.name), el("span", "gcount", "(" + ticked + " of " + g.tickable + " ticked)"));', body)
+        self.assertIn("th.appendChild(btn);", body)
+        self.assertIn("tr.append(tick, th);", body)
+        self.assertIn("return [tr, ...rows];", body)
+        self.assertNotIn("details", body)
+        self.assertNotIn("summary", body)
         self.assertNotIn("<details", MARKUP)
-        self.assertIn('summary.append(input, " ", el("span", "gname", g.name), " ", '
-                      'el("span", "gcount unit", "(" + ticked + " of " + g.tickable + " ticked)"));', body)
-        self.assertIn("details.appendChild(summary);", body)
-        self.assertLess(body.index("details.appendChild(summary);"), body.index("details.appendChild(buildLogTable(g));"))
-        self.assertIn('if (g.description) details.appendChild(el("p", "garage-help", g.description));', body)
+        self.assertNotRegex(self.PANEL, r"\bopen\b")
         self.assertRegex(CODE, r"(?m)^const logOpen = new Set\(\);")
 
-    def test_the_open_groups_are_remembered_by_id_across_the_redraw(self):
+    def test_the_group_box_sits_in_its_own_cell_and_never_inside_the_toggle_button(self):
         body = function_body("buildLogGroup")
-        self.assertIn('details.addEventListener("toggle", () => {', body)
-        self.assertRegex(body, r"if \(details\.open\) logOpen\.add\(g\.id\);\s*else logOpen\.delete\(g\.id\);")
+        self.assertIn("tick.appendChild(input);", body)
+        self.assertNotRegex(body, r"\b(?:btn|th)\.(?:append|appendChild)\([^;]*\binput\b")
+        self.assertNotIn("btn.appendChild", body)
+        self.assertLess(body.index("tick.appendChild(input);"), body.index("tr.append(tick, th);"))
+        self.assertRegex(STYLE, r"tr\.group td \{[^}]*background: var\(--color-bg-elevated\);")
+
+    def test_the_description_of_a_group_is_shown_under_the_toggle_only_while_the_group_is_open(self):
+        body = function_body("buildLogGroup")
+        self.assertIn("if (g.description) {", body)
+        self.assertIn('desc = el("div", "gdesc", g.description);', body)
+        self.assertIn('desc.id = "logdesc-" + n;', body)
+        self.assertIn('btn.setAttribute("aria-describedby", desc.id);', body)
+        self.assertIn("th.appendChild(desc);", body)
+        self.assertLess(body.index("th.appendChild(btn);"), body.index("th.appendChild(desc);"))
+        self.assertIn("if (desc) desc.hidden = !open;", body)
+        self.assertNotIn("garage-help", body)
+
+    def test_every_group_starts_closed_and_the_rows_of_a_closed_group_are_hidden_not_removed(self):
+        body = function_body("buildLogGroup")
+        self.assertRegex(CODE, r"(?m)^const logOpen = new Set\(\);")
+        self.assertNotRegex(CODE, r"logOpen = new Set\([^)]")
+        self.assertIn("const open = logOpen.has(g.id);", body)
+        self.assertIn("for (const row of rows) row.hidden = !open;", body)
+        self.assertNotIn("remove(", body)
+        self.assertNotIn("open = true", body)
+        self.assertRegex(body, r"\n  show\(\);\n  return \[tr, \.\.\.rows\];")
+
+    def test_the_toggle_names_its_rows_and_says_whether_they_are_shown(self):
+        body = function_body("buildLogGroup")
+        self.assertIn('row.id = "logrow-" + n + "-" + i;', body)
+        self.assertIn('btn.setAttribute("aria-controls", rows.map((row) => row.id).join(" "));', body)
+        self.assertIn('btn.setAttribute("aria-expanded", open ? "true" : "false");', body)
+        self.assertIn("const n = logData.groups.indexOf(g);", body)
+        self.assertNotRegex(body, r"id = \"[^\"]*\" \+ g\.id")
+        self.assertNotIn("aria-live", body)
+        self.assertNotIn("role", body)
+
+    def test_the_open_groups_are_remembered_by_id_and_a_click_applies_the_state_without_a_redraw(self):
+        body = function_body("buildLogGroup")
+        self.assertRegex(body, r'btn\.addEventListener\("click", \(\) => \{\s*if \(!logOpen\.delete\(g\.id\)\) logOpen\.add\(g\.id\);\s*show\(\);\s*\}\);')
+        self.assertNotIn("renderLog", body)
         self.assertNotIn("logOpen.clear", CODE)
-        self.assertNotIn("expanded", body)
+        self.assertNotRegex(body, r"\bexpanded\.")
         self.assertEqual(len(re.findall(r"expanded\.clear\(\)", CODE)), 2)
 
     def test_the_group_box_is_checked_when_all_rows_are_ticked_indeterminate_when_some_are_and_off_without_a_tickable_row(self):
@@ -2504,8 +2548,20 @@ class TestLogging(unittest.TestCase):
         self.assertIn("input.checked = tickable.length > 0 && ticked === tickable.length;", body)
         self.assertIn("input.indeterminate = ticked > 0 && ticked < tickable.length;", body)
         self.assertIn("input.disabled = tickable.length === 0;", body)
-        self.assertIn('input.setAttribute("aria-label", "Tick all of " + g.name);', body)
+        self.assertIn('input.setAttribute("aria-label", "Tick all rows of " + g.name);', body)
         self.assertIn('logBoxes.push({ key: "group:" + g.id, input: input, rows: tickable });', body)
+
+    def test_a_click_on_the_group_box_ticks_or_clears_all_its_tickable_rows_with_one_save_and_a_click_on_the_toggle_saves_nothing(self):
+        body = function_body("logChanged")
+        self.assertIn("for (const r of box.rows) r.ticked = box.input.checked;", body)
+        self.assertEqual(body.count("saveLog();"), 1)
+        group = function_body("buildLogGroup")
+        self.assertIn("rows: tickable });", group)
+        self.assertNotIn("saveLog", group)
+        self.assertNotIn("dispatchEvent", group)
+        self.assertEqual(len(re.findall(r'addEventListener\("change"', function_body("buildLogGroup"))), 0)
+        self.assertIn('$("log-groups").addEventListener("change", logChanged);', CODE)
+        self.assertEqual(len(re.findall(r"\bsaveLog\(\)", CODE)), 4)
 
     def test_a_change_of_a_box_sets_all_its_rows_in_the_data_and_saves_once(self):
         body = function_body("logChanged")
@@ -2562,27 +2618,74 @@ class TestLogging(unittest.TestCase):
         self.assertNotIn("once:", CODE)
         self.assertNotIn("logChannelText", CODE)
 
-    def test_every_group_is_a_table_in_the_scroll_wrapper_with_the_five_columns_in_order(self):
+    def test_all_groups_are_rows_of_one_table_in_one_plain_wrapper_with_the_five_columns_in_order(self):
         body = function_body("buildLogTable")
-        self.assertIn('const wrap = el("div", "tablewrap scroll");', body)
-        self.assertIn('const table = el("table", "logtable");', body)
+        self.assertIn('const wrap = el("div", "tablewrap");', body)
+        self.assertIn('const table = el("table");', body)
+        self.assertEqual(body.count('el("table"'), 1)
+        self.assertEqual(body.count('el("thead")'), 1)
+        self.assertEqual(body.count('el("tbody")'), 1)
+        self.assertEqual(body.count('el("div"'), 1)
         self.assertIn('for (const text of ["Tick", "Setting", "Unit", "Once", "Live"]) {', body)
         self.assertIn('th.scope = "col";', body)
         self.assertIn('if (text === "Tick") th.appendChild(el("span", "sr-only", text));', body)
         self.assertIn("else th.textContent = text;", body)
-        self.assertIn('el("caption", "sr-only", "Logging channels of " + g.name)', body)
-        self.assertIn("for (const r of g.rows) body.appendChild(buildLogRow(r));", body)
+        self.assertIn('el("caption", "sr-only", "Logging channels")', body)
+        self.assertIn('table.appendChild(el("thead")).appendChild(head);', body)
+        self.assertIn("for (const g of logData.groups) body.append(...buildLogGroup(g));", body)
         self.assertIn("wrap.appendChild(table);", body)
-        self.assertRegex(STYLE, r"\.tablewrap\.scroll \{[^}]*overflow-x: auto;")
-        self.assertRegex(STYLE, r"table\.logtable \{[^}]*min-width: \d+px;")
-        self.assertRegex(STYLE, r"\.logtable th:first-child, \.logtable td:first-child \{[^}]*width: 1%;")
+        self.assertEqual(len(re.findall(r"\bbuildLogGroup\(", CODE)), 2)
+        self.assertEqual(len(re.findall(r"\bbuildLogTable\(", CODE)), 2)
+        self.assertIn("if (logData) box.appendChild(buildLogTable());", function_body("renderLog"))
+        self.assertIn('<div id="log-groups"></div>', self.PANEL)
+        self.assertEqual(self.PANEL.count("<table>"), 1)
+
+    def test_the_log_table_has_the_colgroup_with_the_tick_column_and_the_widths_of_the_columns(self):
+        body = function_body("buildLogTable")
+        self.assertIn('cols.append(el("col", "c-tick"), el("col", "c-name"), el("col", "c-unit"), el("col", "c-once"), el("col"));', body)
+        self.assertLess(body.index("table.appendChild(cols);"), body.index('table.appendChild(el("thead"))'))
+        self.assertIn("col.c-tick { width: 44px; }", STYLE)
+        widths = {"#panel-logging col.c-name": 32, "col.c-unit": 9, "col.c-once": 25}
+        for selector, width in widths.items():
+            self.assertIn("\n%s { width: %d%%; }" % (selector, width), STYLE)
+        self.assertLess(sum(widths.values()), 100)
+        self.assertRegex(STYLE, r"\ntable \{[^}]*table-layout: fixed;")
+        self.assertRegex(STYLE, r"\ntd \{[^}]*overflow-wrap: anywhere;")
+        self.assertNotIn("logtable", STYLE)
+        self.assertNotRegex(STYLE, r"table[^{}]*\{[^}]*min-width")
+
+    def test_the_unit_cells_and_header_of_the_log_table_never_break_inside_a_word_and_the_car_table_is_not_touched(self):
+        self.assertIn("\n#log-groups thead th:nth-child(3), #log-groups td.unit { white-space: nowrap; }", STYLE)
+        self.assertEqual(STYLE.count("white-space: nowrap"), 2)
+        self.assertEqual(re.findall(r'"Unit"', function_body("buildLogTable")), ['"Unit"'])
+        self.assertIn('["Tick", "Setting", "Unit", "Once", "Live"]', function_body("buildLogTable"))
+        self.assertIn('el("td", "unit", r.unit || "")', function_body("buildLogRow"))
+        self.assertNotRegex(STYLE, r"\n(?:td|thead th|\.unit)[^{}]*\{[^}]*white-space")
+
+    def test_on_narrow_screens_the_unit_column_of_the_log_table_is_wider_and_the_others_give_way(self):
+        media = re.search(r"@media \(max-width: 600px\) \{(.*?)\n\}", STYLE, re.S).group(1)
+        self.assertEqual(sorted(re.findall(r"(\S+ )?(col\.c-\w+) \{ width: (\d+)%; \}", media)),
+                         [("", "col.c-once", "22"), ("", "col.c-unit", "15"), ("#panel-logging ", "col.c-name", "28")])
+        self.assertLess(28 + 15 + 22, 100)
+        self.assertNotIn("c-tick", media)
+        self.assertNotIn("c-live", media)
+        self.assertLess(STYLE.index("col.c-unit { width: 9%; }"), STYLE.index("@media (max-width: 600px)"))
+        self.assertLess(STYLE.index("#panel-logging col.c-name { width: 32%; }"), STYLE.index("@media (max-width: 600px)"))
+
+    def test_the_header_of_the_log_table_is_the_sticky_one_of_the_car_table_and_no_wrapper_scrolls(self):
+        self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
+        self.assertEqual(STYLE.count("position: sticky"), 1)
+        self.assertNotIn("overflow-x", STYLE)
+        self.assertNotRegex(STYLE, r"\.tablewrap[^{}]*\{[^}]*overflow(?!-wrap)")
+        self.assertNotIn(".scroll", STYLE)
+        self.assertNotIn("scroll", function_body("buildLogTable"))
 
     def test_the_groups_are_drawn_in_the_order_the_server_sends_nothing_is_sorted(self):
         for name in self.FUNCTIONS:
             with self.subTest(name):
                 self.assertNotRegex(function_body(name), r"\.sort\(|\.reverse\(|localeCompare")
-        self.assertIn("for (const g of logData ? logData.groups : []) box.appendChild(buildLogGroup(g));", function_body("renderLog"))
-        self.assertIn("for (const r of g.rows) body.appendChild(buildLogRow(r));", function_body("buildLogTable"))
+        self.assertIn("for (const g of logData.groups) body.append(...buildLogGroup(g));", function_body("buildLogTable"))
+        self.assertIn("const rows = g.rows.map((r, i) => {", function_body("buildLogGroup"))
         self.assertEqual(ts.logconf.tree.__doc__.count("tickable rows come first"), 1)
 
     def test_the_start_and_stop_buttons_sit_in_the_first_panel_after_the_status_line_and_start_disabled(self):
@@ -2724,15 +2827,19 @@ class TestLogging(unittest.TestCase):
         self.PANEL.encode("ascii")
         "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
 
-    def test_the_panel_reuses_the_existing_styles_and_adds_the_ones_for_greyed_rows_and_the_scrolling_group_tables(self):
+    def test_the_panel_reuses_the_styles_of_the_car_table_and_adds_the_ones_for_greyed_rows_the_box_cell_and_the_log_columns(self):
         for cls in ("panel", "toolbar", "carpick", "msg", "err", "empty", "tablewrap", "sr-only", "garage-help", "gname",
-                    "gcount", "unit", "badge", "name", "id", "mono", "actions", "off", "scroll", "logtable"):
+                    "gcount", "gdesc", "grouptoggle", "chev", "group", "unit", "badge", "name", "id", "mono", "actions", "off",
+                    "c-tick", "c-name", "c-unit", "c-once"):
             with self.subTest(cls):
                 self.assertIn(cls, css_classes())
                 self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
         self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
                          {"panel", "actions", "toolbar", "carpick", "msg err", "garage-help", "tablewrap", "sr-only", "empty"})
-        self.assertIn(".panel summary { cursor: pointer; }", STYLE)
+        for cls in ("scroll", "logtable"):
+            with self.subTest(cls):
+                self.assertNotIn(cls, css_classes())
+                self.assertNotIn(cls, used_classes())
 
 
 class TestLoggingCopy(unittest.TestCase):

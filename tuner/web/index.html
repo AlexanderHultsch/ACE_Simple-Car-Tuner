@@ -155,6 +155,10 @@ col.c-desc { width: 38%; }
 #panel-car col.c-default { width: 14%; }
 col.c-range { width: 13%; }
 #panel-car col.c-desc { width: 34%; }
+col.c-tick { width: 44px; }
+col.c-unit { width: 9%; }
+col.c-once { width: 25%; }
+#panel-logging col.c-name { width: 32%; }
 td { padding: 9px 12px; vertical-align: top; border-bottom: 1px solid var(--color-border); overflow-wrap: anywhere; }
 tr.group th {
   padding: 0; text-align: left; font-size: 13px; letter-spacing: 0.03em; text-transform: uppercase;
@@ -166,6 +170,7 @@ button.grouptoggle {
 }
 button.grouptoggle:focus-visible { outline-offset: -2px; }
 tr.group th.plain { padding: 8px 12px; }
+tr.group td { padding-top: 8px; padding-bottom: 8px; background: var(--color-bg-elevated); }
 button.grouptoggle:hover .gname { color: var(--color-accent); }
 .gname { color: var(--color-text); }
 .gcount { text-transform: none; letter-spacing: 0; }
@@ -181,10 +186,8 @@ button.grouptoggle:hover .gname { color: var(--color-accent); }
 .grouptoggle[aria-expanded="true"] .chev { transform: rotate(45deg); }
 tr.changed td { background: var(--color-accent-tint); }
 tr.off td { color: var(--color-text-muted); font-style: italic; }
-.tablewrap.scroll { overflow-x: auto; }
-table.logtable { table-layout: auto; min-width: 560px; }
 #log-copy-msg + .tablewrap { margin-top: 10px; }
-.logtable th:first-child, .logtable td:first-child { width: 1%; }
+#log-groups thead th:nth-child(3), #log-groups td.unit { white-space: nowrap; }
 .name b { display: block; }
 .name .id { display: block; font-size: 12px; color: var(--color-text-muted); }
 .valuewrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -235,6 +238,11 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   .gdesc { padding-left: 31px; padding-right: 8px; }
   .valuewrap input { width: 7em; }
   .toolbar input[type="search"] { min-width: 180px; }
+}
+@media (max-width: 600px) {
+  #panel-logging col.c-name { width: 28%; }
+  col.c-unit { width: 15%; }
+  col.c-once { width: 22%; }
 }
 </style>
 </head>
@@ -2584,11 +2592,15 @@ function buildLogRow(r) {
   return tr;
 }
 
-// the rows of a group in the order the server sends them
-function buildLogTable(g) {
-  const wrap = el("div", "tablewrap scroll");
-  const table = el("table", "logtable");
-  table.appendChild(el("caption", "sr-only", "Logging channels of " + g.name));
+// one table for all groups, like the one of the Car Tuner tab: its header stays in view while the page scrolls, every group is a
+// row of it followed by its rows, all in the order the server sends them; the Live column takes what the other columns leave
+function buildLogTable() {
+  const wrap = el("div", "tablewrap");
+  const table = el("table");
+  table.appendChild(el("caption", "sr-only", "Logging channels"));
+  const cols = el("colgroup");
+  cols.append(el("col", "c-tick"), el("col", "c-name"), el("col", "c-unit"), el("col", "c-once"), el("col"));
+  table.appendChild(cols);
   const head = el("tr");
   for (const text of ["Tick", "Setting", "Unit", "Once", "Live"]) {
     const th = el("th");
@@ -2599,35 +2611,63 @@ function buildLogTable(g) {
   }
   table.appendChild(el("thead")).appendChild(head);
   const body = el("tbody");
-  for (const r of g.rows) body.appendChild(buildLogRow(r));
+  for (const g of logData.groups) body.append(...buildLogGroup(g));
   table.appendChild(body);
   wrap.appendChild(table);
   return wrap;
 }
 
-// the box in the summary is checked when every tickable row is ticked, indeterminate when some are
+// the rows of a group: its group row (the box is checked when every tickable row is ticked, indeterminate when some are; the
+// toggle opens and closes the group without a redraw) followed by its rows, which are hidden while the group is closed
 function buildLogGroup(g) {
-  const details = el("details", "panel");
-  details.open = logOpen.has(g.id);
-  details.addEventListener("toggle", () => {
-    if (details.open) logOpen.add(g.id);
-    else logOpen.delete(g.id);
-  });
+  const n = logData.groups.indexOf(g);
   const tickable = g.rows.filter((r) => r.tickable);
   const ticked = tickable.filter((r) => r.ticked).length;
+  const tr = el("tr", "group");
+  const tick = el("td");
   const input = el("input");
   input.type = "checkbox";
   input.checked = tickable.length > 0 && ticked === tickable.length;
   input.indeterminate = ticked > 0 && ticked < tickable.length;
   input.disabled = tickable.length === 0;
-  input.setAttribute("aria-label", "Tick all of " + g.name);
+  input.setAttribute("aria-label", "Tick all rows of " + g.name);
   logBoxes.push({ key: "group:" + g.id, input: input, rows: tickable });
-  const summary = el("summary");
-  summary.append(input, " ", el("span", "gname", g.name), " ", el("span", "gcount unit", "(" + ticked + " of " + g.tickable + " ticked)"));
-  details.appendChild(summary);
-  if (g.description) details.appendChild(el("p", "garage-help", g.description));
-  details.appendChild(buildLogTable(g));
-  return details;
+  tick.appendChild(input);
+  const th = el("th");
+  th.colSpan = 4;
+  th.scope = "rowgroup";
+  const btn = el("button", "grouptoggle");
+  btn.type = "button";
+  const chev = el("span", "chev");
+  chev.setAttribute("aria-hidden", "true");
+  btn.append(chev, el("span", "gname", g.name), el("span", "gcount", "(" + ticked + " of " + g.tickable + " ticked)"));
+  th.appendChild(btn);
+  let desc = null;
+  if (g.description) {
+    desc = el("div", "gdesc", g.description);
+    desc.id = "logdesc-" + n;
+    btn.setAttribute("aria-describedby", desc.id);
+    th.appendChild(desc);
+  }
+  tr.append(tick, th);
+  const rows = g.rows.map((r, i) => {
+    const row = buildLogRow(r);
+    row.id = "logrow-" + n + "-" + i;
+    return row;
+  });
+  btn.setAttribute("aria-controls", rows.map((row) => row.id).join(" "));
+  const show = () => {
+    const open = logOpen.has(g.id);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (desc) desc.hidden = !open;
+    for (const row of rows) row.hidden = !open;
+  };
+  btn.addEventListener("click", () => {
+    if (!logOpen.delete(g.id)) logOpen.add(g.id);
+    show();
+  });
+  show();
+  return [tr, ...rows];
 }
 
 function renderLogControls() {
@@ -2650,7 +2690,7 @@ function renderLog() {
   const box = $("log-groups");
   box.replaceChildren();
   logBoxes = [];
-  for (const g of logData ? logData.groups : []) box.appendChild(buildLogGroup(g));
+  if (logData) box.appendChild(buildLogTable());
   renderLogControls();
   renderLogLines();
   const back = focused && logBoxes.find((b) => b.key === focused.key);

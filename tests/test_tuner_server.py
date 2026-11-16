@@ -278,7 +278,7 @@ class TestRoutes(ServerCase):
                                                  "/api/log_sessions", "/api/log_status",
                                                  "/api/settings", "/api/sounds", "/api/state", "/api/turbo", "/api/tyre", "/api/tyres"])
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
-                                                  "/api/log_config_set", "/api/log_copy", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
+                                                  "/api/log_config_reset", "/api/log_config_set", "/api/log_copy", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
                                                   "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
@@ -2229,6 +2229,119 @@ class TestLogConfigRoute(LogCase):
             r = self.post("/api/log_config_set", self.valid())
             self.assertEqual((r.status, r.json), (500, {"error": "log channels: broken"}))
         self.assertFalse(os.path.exists(self.config_file))
+
+
+class TestLogConfigResetRoute(LogCase):
+    """POST /api/log_config_reset: removes <work>/log_config.json, so the default choice of the channel table applies again."""
+
+    DEFAULT = ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"]
+
+    def everything(self):
+        return {"ticked": logconf.tickable_ids(logconf.load_channels()), "rate_hz": 60}
+
+    def test_the_saved_file_is_removed_and_the_answer_is_the_default_choice(self):
+        self.post("/api/log_config_set", self.everything())
+        self.assertTrue(os.path.exists(self.config_file))
+        r = self.post("/api/log_config_reset", {})
+        self.assertEqual((r.status, r.headers.get("Content-Type"), r.headers.get("Cache-Control")),
+                         (200, "application/json; charset=utf-8", "no-store"))
+        self.assertEqual(set(r.json), {"rate_hz", "rates", "groups"})
+        self.assertEqual((r.json["rate_hz"], r.json["rates"]), (30, [30, 60]))
+        self.assertEqual(self.ticked(r), self.DEFAULT)
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_the_answer_is_the_answer_of_get_and_a_later_get_returns_the_default(self):
+        self.post("/api/log_config_set", self.everything())
+        r = self.post("/api/log_config_reset", {})
+        self.assertEqual(r.json, self.get("/api/log_config").json)
+        chan = logconf.load_channels()
+        self.assertEqual(r.json["groups"], logconf.tree(chan, REAL_CATALOGUE, logconf.default_config(chan)))
+        self.assertEqual(self.ticked(self.get("/api/log_config")), self.DEFAULT)
+
+    def test_a_missing_file_is_fine(self):
+        self.assertFalse(os.path.exists(self.config_file))
+        r = self.post("/api/log_config_reset", {})
+        self.assertEqual((r.status, r.json["rate_hz"], self.ticked(r)), (200, 30, self.DEFAULT))
+        self.assertFalse(os.path.exists(self.config_file))
+
+    def test_a_second_reset_and_a_save_after_a_reset_are_fine(self):
+        self.post("/api/log_config_set", self.everything())
+        self.assertEqual(self.post("/api/log_config_reset", {}).status, 200)
+        self.assertEqual(self.post("/api/log_config_reset", {}).status, 200)
+        r = self.post("/api/log_config_set", {"ticked": ["limiter"], "rate_hz": 60})
+        self.assertEqual((r.status, r.json["rate_hz"], self.ticked(r)), (200, 60, ["limiter"]))
+        self.assertEqual(self.ticked(self.get("/api/log_config")), ["limiter"])
+
+    def test_the_body_is_not_read_for_fields(self):
+        self.post("/api/log_config_set", self.everything())
+        r = self.post("/api/log_config_reset", {"ticked": ["limiter"], "rate_hz": 60})
+        self.assertEqual((r.status, r.json["rate_hz"], self.ticked(r)), (200, 30, self.DEFAULT))
+
+    def test_a_file_that_cannot_be_removed_is_a_500_and_stays(self):
+        os.makedirs(self.config_file)
+        r = self.post("/api/log_config_reset", {})
+        self.assertEqual((r.status, set(r.json)), (500, {"error"}))
+        self.assertTrue(os.path.isdir(self.config_file))
+
+    def test_malformed_bodies_are_the_usual_400_413_and_415_and_remove_nothing(self):
+        self.post("/api/log_config_set", self.everything())
+        self.assertEqual(self.post("/api/log_config_reset", b"{not json").status, 400)
+        self.assertEqual(self.post("/api/log_config_reset", b"[1]").status, 400)
+        self.assertEqual(self.request("POST", "/api/log_config_reset", None, headers={"Content-Length": str(ts.MAX_BODY + 1)}).status, 413)
+        r = self.post("/api/log_config_reset", {}, headers={"Content-Type": "text/plain"})
+        self.assertEqual((r.status, r.json), (415, {"error": "Content-Type must be application/json"}))
+        self.assertTrue(os.path.exists(self.config_file))
+
+    def test_the_header_rule_of_every_post_route(self):
+        self.post("/api/log_config_set", self.everything())
+        r = self.post("/api/log_config_reset", {}, headers={"X-Tuner": None})
+        self.assertEqual((r.status, r.json), (403, {"error": "missing header X-Tuner: 1"}))
+        r = self.post("/api/log_config_reset", {}, headers={"X-Tuner": "0"})
+        self.assertEqual(r.status, 403)
+        r = self.post("/api/log_config_reset", {}, post_headers=False)
+        self.assertEqual(r.status, 403)
+        r = self.post("/api/log_config_reset", {}, host="evil.example")
+        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertTrue(os.path.exists(self.config_file))
+
+    def test_methods_and_paths(self):
+        self.post("/api/log_config_set", self.everything())
+        self.assertEqual(self.get("/api/log_config_reset").status, 404)
+        for method in ("PUT", "DELETE", "PATCH"):
+            with self.subTest(method):
+                r = self.request(method, "/api/log_config_reset")
+                self.assertEqual((r.status, r.json, r.headers.get("Allow")), (405, {"error": "method not allowed"}, "GET, POST"))
+        self.assertTrue(os.path.exists(self.config_file))
+
+    def test_it_needs_no_base_car_and_the_dispatcher_still_resolves_the_car_and_the_tune(self):
+        self.assertFalse(ts.base_present(self.work, "ks_y"))
+        self.assertEqual(self.post("/api/log_config_reset", {"car": "ks_y"}).status, 200)
+        self.post("/api/log_config_set", self.everything())
+        r = self.post("/api/log_config_reset", {"car": "nope"})
+        self.assertEqual(r.status, 400)
+        self.assertTrue(r.json["error"].startswith("unknown car"), r.json)
+        self.assertTrue(os.path.exists(self.config_file))
+        r = self.post("/api/log_config_reset", {"tune": "nope"})
+        self.assertEqual((r.status, r.json), (400, {"error": "unknown modded car nope of ks_x"}))
+        self.assertTrue(os.path.exists(self.config_file))
+
+    def test_it_needs_neither_the_state_lock_nor_an_idle_job(self):
+        with ts.STATE_LOCK:
+            self.assertEqual(self.post("/api/log_config_reset", {}).status, 200)
+        ts.JOB["state"] = "running"
+        self.assertEqual(self.post("/api/log_config_reset", {}).status, 200)
+
+    def test_it_is_no_job_and_no_query_route(self):
+        self.assertNotIn("/api/log_config_reset", ts.ACCEPTED)
+        self.assertNotIn("/api/log_config_reset", ts.QUERY_ROUTES)
+        self.assertNotIn("/api/log_config_reset", ts.LOCAL_ROUTES)
+
+    def test_a_damaged_channel_table_is_a_500_with_the_text_and_removes_nothing(self):
+        self.post("/api/log_config_set", self.everything())
+        with mock.patch.object(logconf, "load_channels", side_effect=ValueError("log channels: broken")):
+            r = self.post("/api/log_config_reset", {})
+            self.assertEqual((r.status, r.json), (500, {"error": "log channels: broken"}))
+        self.assertTrue(os.path.exists(self.config_file))
 
 
 class TestLogSessionsRoute(LogCase):

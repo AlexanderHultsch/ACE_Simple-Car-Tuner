@@ -188,6 +188,16 @@ tr.changed td { background: var(--color-accent-tint); }
 tr.off td { color: var(--color-text-muted); font-style: italic; }
 #log-copy-msg + .tablewrap { margin-top: 10px; }
 #log-groups thead th:nth-child(3), #log-groups td.unit { white-space: nowrap; }
+#log-groups tr.group th { font-size: 14px; }
+#log-groups button.grouptoggle { padding-top: 10px; padding-bottom: 10px; }
+#log-groups .gname { font-weight: 700; }
+#log-groups .gcount, #log-groups .gdesc { font-size: 13px; }
+#log-groups tbody tr:not(.group) { background: var(--color-bg); }
+#log-groups tbody tr:not(.group) td { font-size: 13px; }
+#log-groups tbody tr:not(.group) td.unit, #log-groups tbody tr:not(.group) td.mono { font-size: 12px; }
+#log-groups tbody tr:not(.group) td:first-child { border-left: 3px solid var(--color-border); }
+#log-groups tbody tr:not(.group) td.name { padding-left: 28px; }
+#log-groups tbody tr:not(.group) td.name b { font-weight: 500; }
 .name b { display: block; }
 .name .id { display: block; font-size: 12px; color: var(--color-text-muted); }
 .valuewrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
@@ -243,6 +253,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   #panel-logging col.c-name { width: 28%; }
   col.c-unit { width: 15%; }
   col.c-once { width: 22%; }
+  #log-groups tbody tr:not(.group) td.name { padding-left: 16px; }
 }
 </style>
 </head>
@@ -472,6 +483,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
       </label>
       <button id="btn-log-all" type="button" disabled>Tick all</button>
       <button id="btn-log-none" type="button" disabled>Clear all</button>
+      <button id="btn-log-reset" type="button" title="Back to the standard set: Speed, Engine rpm, Throttle and Brake at 30 Hz" disabled>Reset to default</button>
     </div>
 
     <p id="log-error" class="msg err" role="alert" hidden></p>
@@ -2682,6 +2694,7 @@ function renderLogControls() {
   select.disabled = !logData;
   $("btn-log-all").disabled = !logData;
   $("btn-log-none").disabled = !logData;
+  $("btn-log-reset").disabled = !logData;
 }
 
 // the groups are drawn from logData; the focus stays on the box the user changed
@@ -2747,6 +2760,28 @@ function saveLog() {
   logSeq += 1;
   logPending += 1;
   logQueue = logQueue.then(() => sendLogSet(ticked, rate));
+}
+
+async function sendLogReset() {
+  try {
+    const res = await api("/api/log_config_reset", {}, selection);
+    logPending -= 1;
+    if (logPending === 0) showLog(res);
+  } catch (e) {
+    logPending -= 1;
+    await logFailed(e);
+  }
+}
+
+// back to the default choice of the repository: the server removes the saved choice and answers the default, one request after
+// the saves still in flight
+function resetLog() {
+  if (!logData) return;
+  logError = "";
+  renderLog();
+  logSeq += 1;
+  logPending += 1;
+  logQueue = logQueue.then(sendLogReset);
 }
 
 function logChanged(ev) {
@@ -2847,6 +2882,7 @@ $("btn-log-stop").addEventListener("click", stopLogger);
 $("btn-log-ai").addEventListener("click", copyAiCommand);
 $("btn-log-all").addEventListener("click", () => setAllLog(true));
 $("btn-log-none").addEventListener("click", () => setAllLog(false));
+$("btn-log-reset").addEventListener("click", resetLog);
 $("log-groups").addEventListener("change", logChanged);
 $("search").addEventListener("input", applyFilter);
 $("changed-only").addEventListener("change", applyFilter);

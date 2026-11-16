@@ -18,6 +18,7 @@ import time
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import ace_shm  # noqa: E402
+import kspkg  # noqa: E402
 import tune  # noqa: E402
 
 CHANNELS = tune.REPO / "tuner" / "log_channels.json"
@@ -206,6 +207,13 @@ def save_config(work, config, chan):
     saved = normalised(config, chan)
     tune.save_json(config_path(work), saved)
     return saved
+
+
+def reset_config(work, chan):
+    """Removes <work>/log_config.json (a missing file is fine; any other OSError propagates); returns default_config(chan)."""
+    with contextlib.suppress(FileNotFoundError):
+        os.remove(kspkg.long_path(config_path(work)))
+    return default_config(chan)
 
 
 def tree(chan, catalogue, config):

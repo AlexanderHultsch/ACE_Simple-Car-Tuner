@@ -97,6 +97,8 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         <work>/log_config.json, the default choice when it is missing or invalid
   POST /api/log_config_set  {"ticked": [ids], "rate_hz": 30 | 60}   saves the choice (400, nothing written, for an unknown, greyed
                         or doubled id or another rate); answers like GET /api/log_config
+  POST /api/log_config_reset  {}                          removes <work>/log_config.json (a missing file is fine), so the default
+                        choice applies again; answers like GET /api/log_config
   GET  /api/log_sessions  "sessions": the newest 20 session files of the logs folder (file, size, modified, car, track, duration_s,
                         samples; the last four are null for a file without header or end line), newest first
   GET  /api/log_status  whether the logger runs: running, state ("not running", "waiting" or "logging"), file, samples, started,
@@ -116,7 +118,7 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         Set-Clipboard: pasting attaches the file); answers {"copied": true, "file": name, "how": "file"}; 403 for
                         a client that is not loopback (127.0.0.1 or ::1), 400 for a bad name or when the PC is not Windows, 404 for a
                         missing file, 500 with the PowerShell error text when the copy fails
-The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the nine
+The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the ten
 log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes and the three
 file routes do not wait for and are not refused by a running job.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
@@ -803,6 +805,11 @@ def api_log_config_set(car, body):
     return log_config_json(chan, config)
 
 
+def api_log_config_reset(car, body):
+    chan = logconf.load_channels()
+    return log_config_json(chan, logconf.reset_config(CONFIG["work"], chan))
+
+
 def api_log_sessions(car, tune_id):
     return {"sessions": logconf.list_sessions(logs_dir())}
 
@@ -922,7 +929,7 @@ POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": a
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
                "/api/garage_reset": api_garage_reset, "/api/turbo_set": api_turbo_set, "/api/turbo_reset": api_turbo_reset,
                "/api/sound_set": api_sound_set, "/api/sound_reset": api_sound_reset, "/api/log_config_set": api_log_config_set,
-               "/api/logger_start": api_logger_start, "/api/logger_stop": api_logger_stop, "/api/log_copy": api_log_copy}
+               "/api/log_config_reset": api_log_config_reset, "/api/logger_start": api_logger_start, "/api/logger_stop": api_logger_stop, "/api/log_copy": api_log_copy}
 
 
 def private_ip(text):

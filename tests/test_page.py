@@ -258,7 +258,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 36, calls)
+        self.assertEqual(len(calls), 37, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -2324,7 +2324,7 @@ class TestLogging(unittest.TestCase):
     PANEL = MARKUP[MARKUP.index('id="panel-logging"'):]
     FUNCTIONS = ("fmtDuration", "logStatusText", "pollLogStatus", "stopLogPoll", "startLogPoll", "renderLogLines", "renderLogSessions",
                  "loadLogSessions", "logChannelCell", "buildLogRow", "buildLogTable", "buildLogGroup", "renderLogControls", "renderLog",
-                 "loadLog", "showLog", "logFailed", "sendLogSet", "saveLog", "logChanged", "setAllLog", "logRateChanged",
+                 "loadLog", "showLog", "logFailed", "sendLogSet", "saveLog", "sendLogReset", "resetLog", "logChanged", "setAllLog", "logRateChanged",
                  "renderLoggerButtons", "beginLogRequest", "endLogRequest", "startLogger", "stopLogger", "copyText", "kiloBytes",
                  "showCopyMsg", "beginCopy", "endCopy", "copyAiCommand", "copyFileAsText", "copyFileOnPc", "onThisPc", "copySessionFile")
 
@@ -2462,6 +2462,54 @@ class TestLogging(unittest.TestCase):
         body = function_body("setAllLog")
         self.assertIn("if (r.tickable) r.ticked = on;", body)
         self.assertEqual(body.count("saveLog();"), 1)
+
+    def test_the_reset_button_follows_clear_all_in_the_toolbar_with_the_label_and_the_title_of_the_standard_set(self):
+        bar = re.search(r'<div class="toolbar">.*?</div>', self.PANEL, re.S).group(0)
+        self.assertIn('<button id="btn-log-reset" type="button" title="Back to the standard set: Speed, Engine rpm, Throttle and '
+                      'Brake at 30 Hz" disabled>Reset to default</button>', bar)
+        self.assertEqual(self.PANEL.count('id="btn-log-reset"'), 1)
+        self.assertLess(bar.index('id="btn-log-all"'), bar.index('id="btn-log-none"'))
+        self.assertLess(bar.index('id="btn-log-none"'), bar.index('id="btn-log-reset"'))
+        self.assertIn('$("btn-log-reset").addEventListener("click", resetLog);', CODE)
+        self.assertEqual(len(re.findall(r'\$\("btn-log-reset"\)\.addEventListener', CODE)), 1)
+
+    def test_the_reset_title_names_the_default_rows_and_the_rate_of_the_server(self):
+        chan = ts.logconf.load_channels()
+        default = ts.logconf.default_config(chan)
+        labels = [r["label"] for g in chan["extra_groups"] for r in g["rows"] if "%s.%s" % (g["id"], r["id"]) in default["ticked"]]
+        self.assertEqual(labels, ["Speed", "Engine rpm", "Throttle", "Brake"])
+        self.assertIn('title="Back to the standard set: %s and %s at %d Hz"' % (", ".join(labels[:-1]), labels[-1], default["rate_hz"]), self.PANEL)
+
+    def test_the_reset_posts_an_empty_body_with_the_selection_through_the_queue_like_a_save(self):
+        self.assertIn("/api/log_config_reset", ts.POST_ROUTES)
+        self.assertEqual(len(re.findall(r'await api\("/api/log_config_reset", \{\}, selection\);', CODE)), 1)
+        self.assertEqual(len(re.findall(r'\bapi\("/api/log_config_reset"', CODE)), 1)
+        self.assertIn('await api("/api/log_config_reset", {}, selection);', function_body("sendLogReset"))
+        body = function_body("resetLog")
+        self.assertIn("if (!logData) return;", body)
+        self.assertIn("logPending += 1;", body)
+        self.assertIn("logQueue = logQueue.then(sendLogReset);", body)
+        self.assertLess(body.index("logPending += 1;"), body.index("logQueue = logQueue.then(sendLogReset);"))
+        self.assertIn("logSeq += 1;", body)
+        self.assertNotIn("api(", body)
+        self.assertNotIn("saveLog(", body)
+
+    def test_the_answer_of_a_reset_is_shown_when_it_was_the_last_one_and_a_failed_reset_reads_the_choice_again_and_shows_the_message(self):
+        send = function_body("sendLogReset")
+        self.assertRegex(send, r"logPending -= 1;\s*if \(logPending === 0\) showLog\(res\);")
+        self.assertRegex(send, r"catch \(e\) \{\s*logPending -= 1;\s*await logFailed\(e\);")
+        self.assertEqual(send.count("logPending -= 1;"), 2)
+        self.assertEqual(function_body("sendLogSet").count("logPending -= 1;"), 2)
+        self.assertIn('logError = "";', function_body("resetLog"))
+        self.assertLess(function_body("resetLog").index('logError = "";'), function_body("resetLog").index("renderLog();"))
+
+    def test_the_reset_button_is_off_while_there_is_no_choice_like_the_other_two_buttons(self):
+        body = function_body("renderLogControls")
+        self.assertIn('$("btn-log-all").disabled = !logData;', body)
+        self.assertIn('$("btn-log-none").disabled = !logData;', body)
+        self.assertIn('$("btn-log-reset").disabled = !logData;', body)
+        self.assertNotIn("logBusy", body)
+        self.assertNotIn("btn-log-reset", function_body("renderLoggerButtons"))
 
     def test_the_rate_options_come_from_the_rates_of_the_server_and_are_shown_as_hz(self):
         body = function_body("renderLogControls")
@@ -2661,6 +2709,43 @@ class TestLogging(unittest.TestCase):
         self.assertIn('["Tick", "Setting", "Unit", "Once", "Live"]', function_body("buildLogTable"))
         self.assertIn('el("td", "unit", r.unit || "")', function_body("buildLogRow"))
         self.assertNotRegex(STYLE, r"\n(?:td|thead th|\.unit)[^{}]*\{[^}]*white-space")
+
+    def test_the_group_rows_of_the_log_table_are_bigger_and_stronger_than_their_rows_which_are_smaller_indented_and_guided(self):
+        item = "#log-groups tbody tr:not(.group)"
+        for rule in ("#log-groups tr.group th { font-size: 14px; }",
+                     "#log-groups button.grouptoggle { padding-top: 10px; padding-bottom: 10px; }",
+                     "#log-groups .gname { font-weight: 700; }",
+                     "#log-groups .gcount, #log-groups .gdesc { font-size: 13px; }",
+                     item + " { background: var(--color-bg); }",
+                     item + " td { font-size: 13px; }",
+                     "%s td.unit, %s td.mono { font-size: 12px; }" % (item, item),
+                     item + " td:first-child { border-left: 3px solid var(--color-border); }",
+                     item + " td.name { padding-left: 28px; }",
+                     item + " td.name b { font-weight: 500; }"):
+            with self.subTest(rule):
+                self.assertEqual(STYLE.count("\n" + rule + "\n"), 1)
+        media = re.search(r"@media \(max-width: 600px\) \{(.*?)\n\}", STYLE, re.S).group(1)
+        self.assertIn("\n  " + item + " td.name { padding-left: 16px; }", media)
+        self.assertLess(STYLE.index("\n" + item + " td.name { padding-left: 28px; }"), STYLE.index("@media (max-width: 600px)"))
+        self.assertNotIn("td.name", re.search(r"@media \(max-width: 1000px\) \{(.*?)\n\}", STYLE, re.S).group(1))
+        self.assertIn('el("td", "name")', function_body("buildLogRow"))
+        self.assertIn('el("td", "unit", r.unit || "")', function_body("buildLogRow"))
+        self.assertIn('el("td", "mono"', function_body("logChannelCell"))
+        self.assertIn('el("tr", "group")', function_body("buildLogGroup"))
+
+    def test_the_new_rules_of_the_log_table_are_all_scoped_to_it_and_the_shared_group_rules_of_the_car_table_keep_their_values(self):
+        for rule in re.findall(r"\n(#log-groups[^{}]*)\{[^}]*\}", STYLE):
+            with self.subTest(rule):
+                for selector in rule.split(","):
+                    self.assertTrue(selector.strip().startswith("#log-groups"), selector)
+        self.assertRegex(STYLE, r"\ntr\.group th \{\s*padding: 0; text-align: left; font-size: 13px; letter-spacing: 0\.03em; text-transform: uppercase;")
+        self.assertRegex(STYLE, r"\nbutton\.grouptoggle \{\s*display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 12px; border: 0;")
+        self.assertIn("\n.gname { color: var(--color-text); }\n", STYLE)
+        self.assertIn("\n.gcount { text-transform: none; letter-spacing: 0; }\n", STYLE)
+        self.assertRegex(STYLE, r"\n\.gdesc \{\s*max-width: 80ch; margin: 0; padding: 0 12px 9px 35px;")
+        self.assertIn("\ntr.off td { color: var(--color-text-muted); font-style: italic; }\n", STYLE)
+        self.assertIn("\ntr.changed td { background: var(--color-accent-tint); }\n", STYLE)
+        self.assertNotIn("font-weight", re.search(r"\n\.gname \{[^}]*\}", STYLE).group(0))
 
     def test_on_narrow_screens_the_unit_column_of_the_log_table_is_wider_and_the_others_give_way(self):
         media = re.search(r"@media \(max-width: 600px\) \{(.*?)\n\}", STYLE, re.S).group(1)

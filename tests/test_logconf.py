@@ -547,6 +547,46 @@ class TestConfigFile(unittest.TestCase):
         self.assertEqual(logconf.load_config(self.work, CHAN), {"version": 1, "rate_hz": 60, "ticked": ["limiter"]})
         self.assertEqual(os.listdir(self.work), ["log_config.json"])
 
+    def test_reset_removes_the_file_returns_the_default_and_leaves_the_rest(self):
+        logconf.save_config(self.work, {"version": 1, "rate_hz": 60, "ticked": ["limiter"]}, CHAN)
+        write(os.path.join(self.work, "other.json"), "x")
+        self.assertEqual(logconf.reset_config(self.work, CHAN), logconf.default_config(CHAN))
+        self.assertFalse(os.path.exists(logconf.config_path(self.work)))
+        self.assertEqual(os.listdir(self.work), ["other.json"])
+
+    def test_reset_returns_the_default_of_the_channel_table(self):
+        default = logconf.reset_config(self.work, CHAN)
+        self.assertEqual(default, {"version": 1, "rate_hz": 30,
+                                   "ticked": ["behaviour.speed", "behaviour.rpm", "behaviour.gas", "behaviour.brake"]})
+
+    def test_reset_with_a_missing_file_or_work_folder_is_fine_and_writes_nothing(self):
+        self.assertEqual(logconf.reset_config(self.work, CHAN), logconf.default_config(CHAN))
+        self.assertFalse(os.path.exists(self.work))
+        os.makedirs(self.work)
+        self.assertEqual(logconf.reset_config(self.work, CHAN), logconf.default_config(CHAN))
+        self.assertEqual(os.listdir(self.work), [])
+
+    def test_a_saved_choice_with_everything_ticked_is_gone_after_a_reset_and_load_gives_the_default(self):
+        everything = {"version": 1, "rate_hz": 60, "ticked": logconf.tickable_ids(CHAN)}
+        logconf.save_config(self.work, everything, CHAN)
+        self.assertEqual(logconf.load_config(self.work, CHAN), everything)
+        logconf.reset_config(self.work, CHAN)
+        self.assertFalse(os.path.exists(logconf.config_path(self.work)))
+        self.assertEqual(logconf.load_config(self.work, CHAN), logconf.default_config(CHAN))
+
+    def test_reset_twice_and_a_save_after_a_reset_work(self):
+        logconf.save_config(self.work, {"version": 1, "rate_hz": 60, "ticked": ["limiter"]}, CHAN)
+        logconf.reset_config(self.work, CHAN)
+        logconf.reset_config(self.work, CHAN)
+        logconf.save_config(self.work, {"version": 1, "rate_hz": 30, "ticked": ["fuel_start"]}, CHAN)
+        self.assertEqual(logconf.load_config(self.work, CHAN), {"version": 1, "rate_hz": 30, "ticked": ["fuel_start"]})
+
+    def test_reset_does_not_hide_an_error_other_than_a_missing_file(self):
+        os.makedirs(logconf.config_path(self.work))
+        with self.assertRaises(OSError):
+            logconf.reset_config(self.work, CHAN)
+        self.assertTrue(os.path.isdir(logconf.config_path(self.work)))
+
 
 class TestTree(unittest.TestCase):
     def setUp(self):

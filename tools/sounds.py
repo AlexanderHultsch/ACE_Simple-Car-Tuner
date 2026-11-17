@@ -7,10 +7,6 @@ Slots: turbo = entries of type TurboEvent, backfire = entries of type Backfire.
 Stdlib only.
 """
 import copy
-import pathlib
-import sys
-
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
 SLOTS = {"turbo": "TurboEvent", "backfire": "Backfire"}
 
@@ -49,7 +45,14 @@ def option_of(entry):
     return {"key": "%s#%s" % (event, optional) if optional else event, "event": event, "bank": entry.get("bank"), "optional": optional}
 
 
+def own_key(obj, slot):
+    """The option key of the first entry of the slot, None when the car has no entry of the slot's type."""
+    found = slot_entries(obj, slot)
+    return option_of(found[0][1])["key"] if found else None
+
+
 def option_order(option):
+    """Sort key of an option: the silent (none) sound first, then the event text ignoring case, then optionalParam (none = 0), then the key."""
     return (not is_none(option["event"]), option["event"].lower(), option["optional"] or 0, option["key"])
 
 

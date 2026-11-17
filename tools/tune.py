@@ -1777,7 +1777,7 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     out_dir = os.path.join(build_dir(work, car_id), new_id)
     part, meta, notes = build_partial(work, car_id, new_id, out_dir, plan, cat, game)
     if plan["kit"]:
-        notes += kit_notes(plan["kit"], car_id)
+        notes += kit_notes(plan["kit"])
     car_root = car_root_of(part, new_id)
     edits, tyre_edits, applied = collect_edits(car_id, new_id, plan["changed"], part, car_root)
     write_edits(car_root, edits)
@@ -2597,14 +2597,14 @@ def car_file_rels(root, car_id):
     return [rel_of(root, car_id, os.path.join(data, n)) for n in sorted(os.listdir(kspkg.long_path(data))) if n.lower().endswith(".car")]
 
 
-def kit_stamp(work, car_id, donor, listed):
+def kit_stamp(work, car_id, donor, extra_files):
     """[side, path below the car folder, size, mtime_ns] (size and time null for a missing file) of what a kit depends on: the
     .car files of the car (side "car") and of the donor (side "donor") in their base folders, and the (side, path) pairs of
-    listed (the engine files of both and the turbo files of the donor)."""
+    extra_files (the engine files of both and the turbo files of the donor)."""
     stamp = []
     for side, cid in (("car", car_id), ("donor", donor)):
         root = base_dir(work, cid)
-        for rel in car_file_rels(root, cid) + [r for s, r in listed if s == side]:
+        for rel in car_file_rels(root, cid) + [r for s, r in extra_files if s == side]:
             st = stat_or_none(os.path.join(car_root_of(root, cid), *rel.split("/")))
             stamp.append([side, rel, st.st_size if st else None, st.st_mtime_ns if st else None])
     return stamp
@@ -2681,14 +2681,14 @@ def set_field(obj, key, value, packed=False):
         obj.pop("_packed", None)
 
 
-def copy_turbo_fields(dst, src, listing):
+def copy_turbo_fields(dst, src, turbo_entries):
     """Copy every top-level field of src whose name has "turbo", "boost" or "bov" in it into dst (deep copies, replacing or adding
-    the field); the list listing takes the place of turbos_to_load. Returns the names of the fields copied."""
+    the field); the list turbo_entries takes the place of turbos_to_load. Returns the names of the fields copied."""
     names = []
     for key, value in src.items():
         if key.startswith("_") or not any(w in key.lower() for w in KIT_WORDS):
             continue
-        set_field(dst, key, list(listing) if key == "turbos_to_load" else copy.deepcopy(value), key in src.get("_packed", []))
+        set_field(dst, key, list(turbo_entries) if key == "turbos_to_load" else copy.deepcopy(value), key in src.get("_packed", []))
         names.append(key)
     return names
 
@@ -2721,8 +2721,8 @@ def kit_inline(path, donor, donor_inline, texts, new_texts):
     inline = car.get("engine")
     if not isinstance(inline, dict):
         return []
-    listing = inline_listing(donor, donor_inline, texts, new_texts) if "turbos_to_load" in donor_inline else None
-    fields = copy_turbo_fields(inline, donor_inline, listing)
+    entries = inline_listing(donor, donor_inline, texts, new_texts) if "turbos_to_load" in donor_inline else None
+    fields = copy_turbo_fields(inline, donor_inline, entries)
     if fields:
         save_fresh(path, name, car)
     return fields
@@ -2763,9 +2763,9 @@ def patch_kit(work, car_id, donor, part):
     save_fresh(path, name, engine)
     donor_inline = read_file(donor_car, resolve_file("@car", droot, donor, dcache), dcache).get("engine")
     inline = kit_inline(car_path(car_root, resolve_file("@car", part, car_id, cache)), donor, donor_inline, listing["texts"], new_texts)
-    listed = [("car", engine_rel), ("donor", donor_engine_rel)] + [("donor", f) for f in listing["files"]]
+    extra_files = [("car", engine_rel), ("donor", donor_engine_rel)] + [("donor", f) for f in listing["files"]]
     return {"donor": donor, "kind": turbo_kind(len(rels)), "count": len(rels), "files": ["content/cars/%s/%s" % (car_id, r) for r in rels],
-            "fields": fields, "inline_fields": inline, "stamp": kit_stamp(work, car_id, donor, listed)}
+            "fields": fields, "inline_fields": inline, "stamp": kit_stamp(work, car_id, donor, extra_files)}
 
 
 def kit_root(work, car_id, donor):
@@ -2803,7 +2803,7 @@ def root_for(work, car_id, tune=None):
     return base_dir(work, car_id) if donor is None else kit_root(work, car_id, donor)
 
 
-def kit_notes(info, car_id):
+def kit_notes(info):
     """The notes of apply for a build from a kit root with this kit.json."""
     notes = ["note: turbo kit: donor %s (%s): files %s, engine fields %s" % (
         info["donor"], info["kind"], ", ".join(f.split("/", 3)[3] for f in info["files"]), ", ".join(info["fields"]))]
@@ -3068,8 +3068,7 @@ def sound_own(work, car_id):
     actor = load_actor(work, car_id)
     own = {}
     for slot in sounds.SLOTS:
-        found = sounds.slot_entries(actor, slot)
-        own[slot] = sounds.option_of(found[0][1])["key"] if found else None
+        own[slot] = sounds.own_key(actor, slot)
     return own
 
 
@@ -3191,8 +3190,7 @@ def write_sounds(car_root, new_id, plan):
     actor, name = load_msg(path)
     changed = []
     for step in plan:
-        found = sounds.slot_entries(actor, step["slot"])
-        before = sounds.option_of(found[0][1])["key"] if found else None
+        before = sounds.own_key(actor, step["slot"])
         sounds.set_choice(actor, step["slot"], step["option"], step["template"], set_field)
         changed.append({"slot": step["slot"], "from": before, "to": step["option"]["key"], "added": before is None})
     save_msg(path, name, actor)
@@ -3324,9 +3322,9 @@ def note_untested(car_id):
 
 def start(opts):
     """Work folder and chosen car of a command; moves the old single-car layout first and says so."""
-    work = work_dir(opts.get("work"))
+    work = work_arg(opts)
     cars = load_cars()
-    car_id = pick_car(cars, opts.get("car"), load_cars_index(work, os.path.expandvars(opts.get("game", DEFAULT_GAME))))
+    car_id = pick_car(cars, opts.get("car"), load_cars_index(work, game_arg(opts)))
     moved = migrate_old_layout(work, cars["default"])
     if moved:
         print("moved the old single-car layout of %s into %s: %s" % (work, car_work(work, cars["default"]),
@@ -3341,13 +3339,20 @@ def usage():
 
 def cli_args(flags, switches=()):
     try:
-        return parse_args(sys.argv[2:], flags, switches)
+        pos, opts = parse_args(sys.argv[2:], flags, switches)
     except ValueError:
         usage()
+    if "tune" in opts and "draft" in opts:
+        usage()
+    return pos, opts
 
 
 def work_arg(opts):
     return work_dir(opts.get("work"))
+
+
+def game_arg(opts):
+    return os.path.expandvars(opts.get("game", DEFAULT_GAME))
 
 
 def mods_arg(opts):
@@ -3355,7 +3360,9 @@ def mods_arg(opts):
 
 
 def tune_arg(work, car_id, opts):
-    """The tune chosen with --tune: None when not given, the default id as given, else the id of an existing modded car."""
+    """The tune chosen with --tune: DRAFT for --draft, None when not given, the default id as given, else the id of an existing modded car."""
+    if "draft" in opts:
+        return DRAFT
     tune_id = opts.get("tune")
     if tune_id is None or tune_id == new_id_for(car_id):
         return tune_id
@@ -3369,7 +3376,7 @@ def cmd_cars():
     if pos or ("tested" in opts and "modded" in opts):
         usage()
     work, _ = start(opts)
-    game = os.path.expandvars(opts.get("game", DEFAULT_GAME))
+    game = game_arg(opts)
     if "modded" in opts:
         print(table(["id", "stock", "label", "suffix", "installed", "built"],
                     [[r["id"], r["stock"], r["label"], r["name_suffix"], "yes" if r["installed"] else "no",
@@ -3391,7 +3398,7 @@ def cmd_init():
         usage()
     work, car_id = start(opts)
     note_untested(car_id)
-    res = init(work, car_id, os.path.expandvars(opts.get("game", DEFAULT_GAME)))
+    res = init(work, car_id, game_arg(opts))
     print("base already present" if res["present"] else "extracted the stock car")
     print("%s: %d files, %d folders, %d bytes" % (res["dir"], res["files"], res["dirs"], res["bytes"]))
     print("stock localization %s" % res["stock_loc"])
@@ -3476,10 +3483,10 @@ def cmd_apply():
 
 def cmd_duplicate():
     pos, opts = cli_args(("car", "tune", "new-id", "suffix", "mods", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    src = DRAFT if "draft" in opts else tune_arg(work, car_id, opts)
+    src = tune_arg(work, car_id, opts)
     res = duplicate_tune(work, car_id, src, opts.get("new-id"), opts.get("suffix"), mods_arg(opts))
     print("car: %s, new id: %s" % (car_id, res["id"]))
     print("name suffix: %s" % res["name_suffix"])
@@ -3559,10 +3566,10 @@ def cmd_tyre_delete():
 
 def cmd_garage():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    res = garage_choices(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = garage_choices(work, car_id, tune_arg(work, car_id, opts))
     print("garage of %s: %s" % (car_id, "saved selection" if res["custom"] else "default (all stock tyres, the car is not touched)"))
     if res["choices"]:
         print(table(["ticked", "start", "key", "label"],
@@ -3575,20 +3582,20 @@ def cmd_garage():
 
 def cmd_garage_set():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if not pos or ("tune" in opts and "draft" in opts):
+    if not pos:
         usage()
     work, car_id = start(opts)
-    res = set_garage(work, car_id, pos, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = set_garage(work, car_id, pos, tune_arg(work, car_id, opts))
     print("garage: %d tyre(s), starting on %s%s" % (len(res["keys"]), res["start"],
                                                    " (the default selection, nothing is stored)" if res.get("default") else ""))
 
 
 def cmd_garage_reset():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    res = reset_garage(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = reset_garage(work, car_id, tune_arg(work, car_id, opts))
     print("garage selection %s" % ("removed from the state" if res["removed"] else "was not set"))
 
 
@@ -3616,28 +3623,28 @@ def cmd_turbo_donors():
 
 def cmd_turbo_add():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if len(pos) != 1 or ("tune" in opts and "draft" in opts):
+    if len(pos) != 1:
         usage()
     work, car_id = start(opts)
-    res = set_turbo(work, car_id, pos[0], DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = set_turbo(work, car_id, pos[0], tune_arg(work, car_id, opts))
     print("%s: %s, boost %s bar" % (res["donor"], res["kind"], boost_text(res["boost"])))
 
 
 def cmd_turbo_remove():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    res = reset_turbo(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = reset_turbo(work, car_id, tune_arg(work, car_id, opts))
     print("turbo kit %s" % ("removed from the state" if res["removed"] else "was not set"))
 
 
 def cmd_turbo_kit():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    tune_id = DRAFT if "draft" in opts else tune_arg(work, car_id, opts)
+    tune_id = tune_arg(work, car_id, opts)
     donor = saved_turbo(load_state(work, car_id, tune_id))
     if donor is None:
         raise ValueError("no turbo kit chosen for %s, turbo-add chooses one" % (tune_id or new_id_for(car_id)))
@@ -3656,10 +3663,10 @@ def cars_text(cars):
 
 def cmd_sounds():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if pos or ("tune" in opts and "draft" in opts):
+    if pos:
         usage()
     work, car_id = start(opts)
-    res = sound_choices(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = sound_choices(work, car_id, tune_arg(work, car_id, opts))
     for s in res["skipped"]:
         print("skipped %s: %s" % (s["car"], s["reason"]), file=sys.stderr)
     for slot, info in res["slots"].items():
@@ -3672,19 +3679,19 @@ def cmd_sounds():
 
 def cmd_sound_set():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if len(pos) != 2 or ("tune" in opts and "draft" in opts):
+    if len(pos) != 2:
         usage()
     work, car_id = start(opts)
-    res = set_sound(work, car_id, pos[0], pos[1], DRAFT if "draft" in opts else tune_arg(work, car_id, opts))
+    res = set_sound(work, car_id, pos[0], pos[1], tune_arg(work, car_id, opts))
     print("%s sound: %s%s" % (pos[0], pos[1], "" if res["slots"][pos[0]]["selected"] else " (the own sound of the car, nothing is stored)"))
 
 
 def cmd_sound_reset():
     pos, opts = cli_args(("car", "tune", "work"), ("draft",))
-    if len(pos) > 1 or ("tune" in opts and "draft" in opts):
+    if len(pos) > 1:
         usage()
     work, car_id = start(opts)
-    res = reset_sounds(work, car_id, DRAFT if "draft" in opts else tune_arg(work, car_id, opts), pos[0] if pos else None)
+    res = reset_sounds(work, car_id, tune_arg(work, car_id, opts), pos[0] if pos else None)
     print("%ssound selection %s" % (pos[0] + " " if pos else "", "removed from the state" if res["removed"] else "was not set"))
 
 

@@ -113,7 +113,13 @@ def usage():
     sys.exit(2)
 
 
-def main():
+def skip(label, e):
+    print("skipped %s: %s" % (safe(label), safe(getattr(e, "strerror", None) or str(e))), file=sys.stderr)
+
+
+def parse_options():
+    """The command line as (the path argument, its long path, the --min value, the --grep pattern or None, the options); exits with the usage
+    or an error message when it is wrong."""
     try:
         pos, opts = kspkg.parse_args(sys.argv[1:], ("min", "grep"), ("utf16", "count"))
         n = int(opts.get("min", 4))
@@ -134,12 +140,11 @@ def main():
         re.compile(ASCII_RUN % n)
     except (re.error, OverflowError) as e:
         sys.exit("error: invalid --min: %s" % e)
+    return pos[0], target, n, rx, opts
 
-    def skip(label, e):
-        print("skipped %s: %s" % (safe(label), safe(getattr(e, "strerror", None) or str(e))), file=sys.stderr)
 
-    folder = os.path.isdir(target)
-    files = walk(target, [], skip) if folder else [(pos[0], target)]
+def report(files, n, opts, rx, folder):
+    """Print the strings (or with --count the counts and the total) of the (label, path) files."""
     total = 0
     for label, path in files:
         count = 0
@@ -156,6 +161,13 @@ def main():
             print("%s: %d" % (safe(label), count))
     if "count" in opts:
         print("total: %d" % total)
+
+
+def main():
+    arg, target, n, rx, opts = parse_options()
+    folder = os.path.isdir(target)
+    files = walk(target, [], skip) if folder else [(arg, target)]
+    report(files, n, opts, rx, folder)
 
 
 if __name__ == "__main__":

@@ -102,7 +102,7 @@ def load_schema(path=DESC):
     """Parsed schema of a descriptor set, cached per file (path, size, mtime); callers must not modify it."""
     path = pathlib.Path(path)
     if not path.is_file():
-        raise ValueError("missing schema file %s (run tools/extract_protos.py)" % path)
+        raise ValueError("missing schema file %s: run once  python tools/extract_protos.py <path of AssettoCorsaEVOEditor.exe in the Assetto Corsa EVO SDK folder> schemas  (see docs/USER_GUIDE.md)" % path)
     st = path.stat()
     key = (str(path), st.st_size, st.st_mtime_ns)
     if key not in _SCHEMAS:
@@ -143,33 +143,15 @@ def type_name(f):
     return f["type_name"].lstrip(".")
 
 
-def wire_fields(b):
-    out = []
-    i = 0
-    while i < len(b):
-        key, i = ep.varint(b, i)
-        fn, wt = key >> 3, key & 7
-        if fn == 0:
-            raise ValueError("field number 0")
-        if wt == 0:
-            v, i = ep.varint(b, i)
-        elif wt in (1, 5):
-            n = 8 if wt == 1 else 4
-            if i + n > len(b):
-                raise ValueError("truncated")
-            v = int.from_bytes(b[i:i + n], "little"); i += n
-        elif wt == 2:
-            n, i = ep.varint(b, i)
-            if i + n > len(b):
-                raise ValueError("truncated")
-            v = b[i:i + n]; i += n
-        else:
-            raise ValueError("wire type %d (groups are not supported)" % wt)
-        out.append((fn, wt, v))
-    return out
+def msg_fields(sch, name):
+    """(by number, by name) of a message; a clear error when the schema file lacks it (wrong or old exe)."""
+    try:
+        return sch["msgs"][name]
+    except KeyError:
+        raise ValueError("message type %s is not in the schema file, extract it again from the SDK editor exe (tools/extract_protos.py)" % name) from None
 
 
-def sgn(v, bits):
+def to_signed(v, bits):
     return v - (1 << bits) if v >> (bits - 1) else v
 
 
@@ -202,7 +184,7 @@ def dec_scalar(sch, f, raw):
     if t in (5, 14):
         if raw >= 1 << 32 and raw < (1 << 64) - (1 << 31):
             raise ValueError("int32 value out of range")
-        v = sgn(raw & 0xFFFFFFFF, 32)
+        v = to_signed(raw & 0xFFFFFFFF, 32)
         if t == 5:
             return v
         return sch["enums"][type_name(f)][1].get(v, v)
@@ -211,7 +193,7 @@ def dec_scalar(sch, f, raw):
     bits, signed = INTS[t]
     if t in (17, 18):
         return (raw >> 1) ^ -(raw & 1)
-    return sgn(raw, bits) if signed else raw
+    return to_signed(raw, bits) if signed else raw
 
 
 def dec_value(sch, f, raw):
@@ -241,20 +223,25 @@ def packed_is_valid(f, raw):
     return True
 
 
+def is_packed(f, wt):
+    """True when this occurrence is the packed form of a repeated scalar field."""
+    return f["label"] == 3 and f["type"] not in (9, 11, 12) and wt == 2
+
+
 def wire_conflict(f, wt, raw):
     """True when this occurrence cannot be a value of the schema field's type."""
     t = f["type"]
     if wt == WIRE.get(t):
         return False
-    if f["label"] == 3 and t not in (9, 11, 12) and wt == 2:
+    if is_packed(f, wt):
         return not packed_is_valid(f, raw)
     return True
 
 
 def decode_msg(sch, name, b):
-    by_num = sch["msgs"][name][0]
+    by_num = msg_fields(sch, name)[0]
     out, order, nums, unknown, packed = {}, [], [], [], []
-    for fn, wt, raw in wire_fields(b):
+    for fn, wt, raw in ep.fields(b):
         nums.append(fn)
         f = by_num.get(fn)
         if f is None or wire_conflict(f, wt, raw):
@@ -264,10 +251,10 @@ def decode_msg(sch, name, b):
             unknown.append(entry)
             order.append("?%d" % fn)
             continue
-        key, t = f["name"], f["type"]
+        key = f["name"]
         order.append(key)
         try:
-            if f["label"] == 3 and t not in (9, 11, 12) and wt == 2:
+            if is_packed(f, wt):
                 if key in out:
                     raise ValueError("repeated field split into several chunks or mixed packed/unpacked")
                 out[key] = packed_values(sch, f, raw)
@@ -306,7 +293,7 @@ def packed_values(sch, f, raw):
     return vals
 
 
-def flt(v):
+def to_float(v):
     if type(v) is bool or not isinstance(v, (int, float, str)):
         raise ValueError("expected a number, got %r" % (v,))
     try:
@@ -318,10 +305,10 @@ def flt(v):
 def enc_scalar(sch, f, v):
     t = f["type"]
     if t == 1:
-        return struct.pack("<d", flt(v))
+        return struct.pack("<d", to_float(v))
     if t == 2:
         try:
-            return struct.pack("<f", flt(v))
+            return struct.pack("<f", to_float(v))
         except OverflowError:
             raise ValueError("float out of range: %r" % (v,)) from None
     if t == 8:
@@ -355,10 +342,14 @@ def enc_value(sch, f, v):
             raise ValueError("expected a string, got %r" % (v,))
         return v.encode("utf-8")
     if t == 12:
-        if not (isinstance(v, str) and v.startswith("hex:")):
-            raise ValueError("expected \"hex:..\", got %r" % (v,))
-        return bytes.fromhex(v[4:])
+        return hex_bytes(v, "expected \"hex:..\"")
     return enc_scalar(sch, f, v)
+
+
+def hex_bytes(v, what):
+    if not (isinstance(v, str) and v.startswith("hex:")):
+        raise ValueError("%s, got %r" % (what, v))
+    return bytes.fromhex(v[4:])
 
 
 def tag(fn, wt):
@@ -371,10 +362,8 @@ def occurrence(f, wt, body):
     return tag(f["number"], wt) + body
 
 
-def encode_msg(sch, name, obj):
-    if not isinstance(obj, dict):
-        raise ValueError("%s: expected an object" % name)
-    by_name = sch["msgs"][name][1]
+def reserved_keys(name, obj, by_name):
+    """Checks the keys of a message object; returns its (_packed, _order, _unknown) values."""
     for k in obj:
         if k not in by_name and k not in RESERVED:
             raise ValueError("%s: unknown field %r" % (name, k))
@@ -388,6 +377,11 @@ def encode_msg(sch, name, obj):
     if not (isinstance(unknown, list) and all(isinstance(e, list) and len(e) >= 3 and type(e[0]) is int and e[0] > 0
                                               and type(e[1]) is int for e in unknown)):
         raise ValueError("%s: _unknown: expected [[field_number, wire_type, value], ...]" % name)
+    return packed, order, unknown
+
+
+def encode_known(sch, obj, by_name, packed):
+    """{field name: [(field number, encoded occurrence)]} of the schema fields of a message object."""
     occ = {}
     for key, val in obj.items():
         if key in RESERVED:
@@ -407,24 +401,36 @@ def encode_msg(sch, name, obj):
                 occ[key] = [(f["number"], occurrence(f, wt, enc_value(sch, f, val)))]
         except ValueError as e:
             raise ValueError("%s: %s" % (key, e)) from None
+    return occ
+
+
+def unknown_body(name, wt, v):
+    if wt == 0:
+        if type(v) is not int or v < 0:
+            raise ValueError("%s: _unknown: bad value %r for wire type 0" % (name, v))
+        return ep.varint_bytes(v)
+    if wt in (1, 5):
+        n = 8 if wt == 1 else 4
+        if type(v) is not int or not 0 <= v < 1 << (8 * n):
+            raise ValueError("%s: _unknown: bad value %r for wire type %d" % (name, v, wt))
+        return v.to_bytes(n, "little")
+    if wt == 2:
+        body = hex_bytes(v, "%s: _unknown: expected \"hex:..\" for wire type 2" % name)
+        return ep.varint_bytes(len(body)) + body
+    raise ValueError("_unknown: wire type %d" % wt)
+
+
+def encode_unknown(name, unknown):
+    """[(field number, encoded occurrence)] of the _unknown entries of a message object."""
+    out = []
     for fn, wt, v, *_ in unknown:
-        if wt == 0:
-            if type(v) is not int or v < 0:
-                raise ValueError("%s: _unknown: bad value %r for wire type 0" % (name, v))
-            body = ep.varint_bytes(v)
-        elif wt in (1, 5):
-            n = 8 if wt == 1 else 4
-            if type(v) is not int or not 0 <= v < 1 << (8 * n):
-                raise ValueError("%s: _unknown: bad value %r for wire type %d" % (name, v, wt))
-            body = v.to_bytes(n, "little")
-        elif wt == 2:
-            if not (isinstance(v, str) and v.startswith("hex:")):
-                raise ValueError("%s: _unknown: expected \"hex:..\" for wire type 2, got %r" % (name, v))
-            body = bytes.fromhex(v[4:])
-            body = ep.varint_bytes(len(body)) + body
-        else:
-            raise ValueError("_unknown: wire type %d" % wt)
-        occ.setdefault("?%d" % fn, []).append((fn, tag(fn, wt) + body))
+        body = unknown_body(name, wt, v)
+        out.append((fn, tag(fn, wt) + body))
+    return out
+
+
+def join_occurrences(occ, order):
+    """The occurrences in field number order, or in the order of the _order names when given."""
     if order is None:
         return b"".join(b for _, b in sorted((x for xs in occ.values() for x in xs), key=lambda x: x[0]))
     pos = dict.fromkeys(occ, 0)
@@ -437,6 +443,17 @@ def encode_msg(sch, name, obj):
     if any(pos[k] != len(occ[k]) for k in occ):
         raise ValueError("_order does not cover every field occurrence")
     return b"".join(out)
+
+
+def encode_msg(sch, name, obj):
+    if not isinstance(obj, dict):
+        raise ValueError("%s: expected an object" % name)
+    by_name = msg_fields(sch, name)[1]
+    packed, order, unknown = reserved_keys(name, obj, by_name)
+    occ = encode_known(sch, obj, by_name, packed)
+    for fn, b in encode_unknown(name, unknown):
+        occ.setdefault("?%d" % fn, []).append((fn, b))
+    return join_occurrences(occ, order)
 
 
 def count_unknown(obj, mismatch=False):

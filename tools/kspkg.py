@@ -28,7 +28,7 @@ import os
 import struct
 import sys
 
-TBL = 64 << 20          # 64 MiB file table (0.7+ packages; pre-0.7 game package used 32 MiB)
+TABLE_SIZE = 64 << 20          # 64 MiB file table (0.7+ packages; pre-0.7 game package used 32 MiB)
 HEADER = 1 << 20
 ENTRY = 0x100
 FLAG_DIR, FLAG_XOR = 1, 1 << 8
@@ -89,13 +89,13 @@ def read_table(f):
         return hit[1]
     f.seek(0, 2)
     size = f.tell()
-    if size < HEADER + TBL:
+    if size < HEADER + TABLE_SIZE:
         raise ValueError("%s is not a .kspkg package (smaller than header + 64 MiB table)" % f.name)
-    f.seek(size - TBL)
-    raw = f.read(TBL)
+    f.seek(size - TABLE_SIZE)
+    raw = f.read(TABLE_SIZE)
     key = raw[-8:]           # tail is zero padding; 0 ^ key = key, and the length (64 MiB) is a multiple of 8, so the phase matches
     entries = []
-    for i in range(0, TBL, ENTRY):
+    for i in range(0, TABLE_SIZE, ENTRY):
         e = xor(raw[i:i + ENTRY], key)
         flags, plen = struct.unpack_from("<hh", e, 0xE4)
         h, fsize, foff = struct.unpack_from("<Qqq", e, 0xE8)
@@ -196,14 +196,14 @@ def cmd_pack(indir, pkg):
         out.write(b"\0" * pad)
         entries += [(d, FLAG_DIR, 0, 0) for d in dirs]
         entries.sort(key=lambda e: path_hash(e[0]))
-        table = bytearray(min(len(entries) * ENTRY, TBL))
+        table = bytearray(min(len(entries) * ENTRY, TABLE_SIZE))
         for i, (rel, flags, size, o) in enumerate(entries):
             pb = rel.encode()
             base = i * ENTRY
             table[base:base + len(pb)] = pb
             struct.pack_into("<ihhQqq", table, base + 0xE0, 0, flags, len(pb), path_hash(rel), size, o)
         out.write(xor(bytes(table), KEY))
-        out.write(KEY * ((TBL - len(table)) // 8))
+        out.write(KEY * ((TABLE_SIZE - len(table)) // 8))
     print(f"packed {len(files)} files + {len(dirs)} dirs -> {pkg}")
 
 

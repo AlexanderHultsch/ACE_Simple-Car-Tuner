@@ -137,6 +137,24 @@ class Schema(SchemaCase):
         with tmp() as d, self.assertRaises(ValueError) as cm:
             cj.load_schema(d / "nope.desc")
         self.assertIn("missing schema file", str(cm.exception))
+        self.assertIn("python tools/extract_protos.py <path of AssettoCorsaEVOEditor.exe", str(cm.exception))
+
+    def test_a_message_type_missing_from_the_schema_is_a_clear_value_error_in_both_directions(self):
+        want = "message type CarData is not in the schema file, extract it again from the SDK editor exe (tools/extract_protos.py)"
+        for call in (lambda: cj.decode_msg(self.sch, "CarData", b""), lambda: cj.encode_msg(self.sch, "CarData", {})):
+            with self.assertRaises(ValueError) as cm:
+                call()
+            self.assertEqual(str(cm.exception), want)
+            self.assertIsNone(cm.exception.__cause__)
+        self.assertEqual(cj.roundtrip(self.sch, "CarData", b""), (None, "ValueError: " + want))
+
+    def test_a_nested_message_type_missing_from_the_schema_names_the_field(self):
+        sch = copy.copy(self.sch)
+        sch["msgs"] = {k: v for k, v in self.sch["msgs"].items() if k != "CurveDataEx.Inner"}
+        with self.assertRaisesRegex(ValueError, r"^inner: message type CurveDataEx\.Inner is not in the schema file"):
+            cj.decode_msg(sch, NAME, pb_bytes(FN["inner"], b""))
+        with self.assertRaisesRegex(ValueError, r"^inner: message type CurveDataEx\.Inner is not in the schema file"):
+            cj.encode_msg(sch, NAME, {"inner": {}})
 
 
 class Scalars(SchemaCase):
@@ -805,6 +823,22 @@ class Cli(unittest.TestCase):
         r = self.run_cli("decode", self.work / "good.curve", root=self.bare)
         self.assertEqual(r.returncode, 1)
         self.assertTrue(r.stderr.startswith("error: missing schema file "), r.stderr)
+
+    def test_encode_with_a_message_type_missing_from_the_schema_prints_error_not_a_traceback(self):
+        d = self.scratch()
+        (d / "in.json").write_text("{}", encoding="utf-8")
+        r = self.run_cli("encode", d / "in.json", d / "out.car")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertTrue(r.stderr.startswith("error: message type CarData is not in the schema file"), r.stderr)
+        self.assertNotIn("Traceback", r.stderr)
+        self.assertFalse((d / "out.car").exists())
+
+    def test_decode_with_a_message_type_missing_from_the_schema_prints_error_not_a_keyerror(self):
+        d = self.scratch()
+        (d / "in.car").write_bytes(b"")
+        r = self.run_cli("decode", d / "in.car")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertTrue(r.stderr.startswith("error: ValueError: message type CarData is not in the schema file"), r.stderr)
 
     def test_encode_of_an_invalid_value_prints_error_exits_1_and_writes_nothing(self):
         d = self.scratch()

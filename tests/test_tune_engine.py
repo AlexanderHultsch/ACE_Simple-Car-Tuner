@@ -1357,6 +1357,16 @@ class TuneCase(Base):
 
 
 class TestTuneStatePaths(TuneCase):
+    def test_check_tune_id_checks_the_id_only_and_never_looks_at_the_disk(self):
+        with mock.patch.object(os.path, "exists", side_effect=AssertionError("looked at the disk")):
+            tune.check_tune_id(self.work, "ks_alpha", "ax_alpha")
+            for bad in ("AX_ALPHA", "ax_alph", "ks_alpha", "", None, 5):
+                with self.subTest(bad=bad), self.assertRaises(ValueError):
+                    tune.check_tune_id(self.work, "ks_alpha", bad)
+
+    def test_clone_defaults_are_the_ones_of_clone_car(self):
+        self.assertEqual((tune.CLONE_YEAR, tune.CLONE_BRAND), (clone_car.DEFAULT_YEAR, clone_car.DEFAULT_BRAND))
+
     def test_old_calls_keep_the_legacy_path(self):
         self.assertEqual(tune.state_path(self.work, "ks_alpha"), os.path.join(self.work, "ks_alpha", "tune_state.json"))
         tune.save_state(self.work, "ks_alpha", {"limiter": 1})

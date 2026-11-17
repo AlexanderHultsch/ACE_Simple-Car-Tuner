@@ -111,7 +111,7 @@ FILES = {name: data for name, flags, data in ITEMS if not flags & DIR}
 
 class Primitives(unittest.TestCase):
     def test_format_constants(self):
-        self.assertEqual((kspkg.HEADER, kspkg.TBL, kspkg.ENTRY), (HEADER_SIZE, TABLE_SIZE, ENTRY_SIZE))
+        self.assertEqual((kspkg.HEADER, kspkg.TABLE_SIZE, kspkg.ENTRY), (HEADER_SIZE, TABLE_SIZE, ENTRY_SIZE))
         self.assertEqual((kspkg.FLAG_DIR, kspkg.FLAG_XOR), (DIR, XOR))
         self.assertEqual(kspkg.KEY, KEY)
 

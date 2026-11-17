@@ -305,20 +305,21 @@ class ExitCodes(unittest.TestCase):
         self.assertEqual(r.stdout.strip(), USAGE.strip())
         self.assertEqual(r.stderr, "")
 
-    def test_a_file_instead_of_a_directory_prints_usage_and_exits_2(self):
+    def test_a_file_instead_of_a_directory_is_an_error_line_on_stderr_and_exit_1(self):
         with tmp() as d:
             f = d / "file.bin"
             f.write_bytes(b"")
             r = run_tool("refgraph.py", f)
-        self.assertEqual(r.returncode, 2)
-        self.assertEqual(r.stdout.strip(), USAGE.strip())
-        self.assertEqual(r.stderr, "")
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(r.stderr.strip(), "error: %s is not a folder" % f)
 
-    def test_a_missing_folder_prints_usage_and_exits_2(self):
+    def test_a_missing_folder_is_an_error_line_on_stderr_and_exit_1(self):
         with tmp() as d:
             r = run_tool("refgraph.py", d / "does-not-exist")
-        self.assertEqual(r.returncode, 2)
-        self.assertEqual(r.stdout.strip(), USAGE.strip())
+        self.assertEqual(r.returncode, 1)
+        self.assertEqual(r.stdout, "")
+        self.assertEqual(r.stderr.strip(), "error: %s is not a folder" % (d / "does-not-exist"))
 
     def test_unreadable_root_is_an_error_line_on_stderr_and_exit_1(self):
         with tmp() as d, mock.patch.object(pathlib.Path, "rglob", side_effect=PermissionError(13, "Permission denied")):
@@ -340,7 +341,8 @@ class ExitCodes(unittest.TestCase):
             write_tree(d, FILES)
             code, out, _ = run_main(d)
             self.assertEqual((code, out), (1, EXPECTED))
-            self.assertEqual(run_main(d / "nope")[0], 2)
+            self.assertEqual(run_main(d / "nope")[0], "error: %s is not a folder" % (d / "nope"))
+            self.assertEqual(run_main()[0], 2)
 
 
 if __name__ == "__main__":

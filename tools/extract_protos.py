@@ -11,14 +11,13 @@ Then re-reads acevo.desc and prints a self-check. Does not run or modify the exe
 """
 import pathlib
 import re
-import struct
 import sys
 
 NAME_RE = re.compile(rb"\x0a[\x07-\x7f][A-Za-z_]")
 FILE_FIELDS = {1: 2, 2: 2, 3: 2, 4: 2, 5: 2, 6: 2, 7: 2, 8: 2, 9: 2, 10: 0, 11: 0, 12: 2}
-TYPES = {1: "double", 2: "float", 3: "int64", 4: "uint64", 5: "int32", 6: "fixed64",
-         7: "fixed32", 8: "bool", 9: "string", 12: "bytes", 13: "uint32", 15: "sfixed32",
-         16: "sfixed64", 17: "sint32", 18: "sint64"}
+SCALAR_TYPE_NAMES = {1: "double", 2: "float", 3: "int64", 4: "uint64", 5: "int32", 6: "fixed64",
+                     7: "fixed32", 8: "bool", 9: "string", 12: "bytes", 13: "uint32", 15: "sfixed32",
+                     16: "sfixed64", 17: "sint32", 18: "sint64"}
 LABELS = {1: "optional", 2: "required", 3: "repeated"}
 
 
@@ -34,31 +33,28 @@ def varint(b, i):
 
 
 def fields(b):
-    """Strict parse of one message level into [(field_number, wire_type, value)]."""
+    """Strict parse of one message level into [(field_number, wire_type, value)]; fixed-width values are the raw little-endian integers."""
     out = []
     i = 0
     while i < len(b):
         key, i = varint(b, i)
         fn, wt = key >> 3, key & 7
         if fn == 0:
-            raise ValueError("field 0")
+            raise ValueError("field number 0")
         if wt == 0:
             v, i = varint(b, i)
-        elif wt == 1:
-            if i + 8 > len(b):
+        elif wt in (1, 5):
+            n = 8 if wt == 1 else 4
+            if i + n > len(b):
                 raise ValueError("truncated")
-            v = struct.unpack_from("<d", b, i)[0]; i += 8
-        elif wt == 5:
-            if i + 4 > len(b):
-                raise ValueError("truncated")
-            v = struct.unpack_from("<f", b, i)[0]; i += 4
+            v = int.from_bytes(b[i:i + n], "little"); i += n
         elif wt == 2:
             n, i = varint(b, i)
             if i + n > len(b):
                 raise ValueError("truncated")
             v = b[i:i + n]; i += n
         else:
-            raise ValueError(f"wire type {wt}")
+            raise ValueError("wire type %d (groups are not supported)" % wt)
         out.append((fn, wt, v))
     return out
 
@@ -244,7 +240,7 @@ def render_field(f, pkg, proto3, entries, ind, lines):
         typ = f"map<{k}, {v}>"
         label = ""
     else:
-        typ = tn if f["type"] in (11, 14) else "group" if f["type"] == 10 else TYPES[f["type"]]
+        typ = tn if f["type"] in (11, 14) else "group" if f["type"] == 10 else SCALAR_TYPE_NAMES[f["type"]]
         label = LABELS.get(f["label"], "") + " " if f["label"] != 1 or not proto3 else ""
         if proto3 and f["proto3_optional"]:
             label = "optional "
@@ -263,7 +259,7 @@ def render_message(m, pkg, proto3, ind, lines):
     for n in m["nested"]:
         if n["map_entry"]:
             kv = {f["number"]: f for f in n["fields"]}
-            ft = lambda f: tname(f["type_name"], pkg) if f["type"] in (11, 14) else TYPES.get(f["type"], "?")
+            ft = lambda f: tname(f["type_name"], pkg) if f["type"] in (11, 14) else SCALAR_TYPE_NAMES.get(f["type"], "?")
             entries[n["name"]] = (ft(kv[1]), ft(kv[2]))
     lines.append(f"{ind}message {m['name']} {{")
     inner = ind + "  "
@@ -279,7 +275,7 @@ def render_message(m, pkg, proto3, ind, lines):
         lines.append(f"{inner}oneof {o} {{")
         for f in m["fields"]:
             if f["oneof"] == i:
-                lines.append(f"{inner}  {tname(f['type_name'], pkg) if f['type'] in (11, 14) else TYPES.get(f['type'], 'group')} {f['name']} = {f['number']};")
+                lines.append(f"{inner}  {tname(f['type_name'], pkg) if f['type'] in (11, 14) else SCALAR_TYPE_NAMES.get(f['type'], 'group')} {f['name']} = {f['number']};")
         lines.append(f"{inner}}}")
     if m["exts"]:
         for ex in m["exts"]:
@@ -348,6 +344,13 @@ def split_set(data):
     return recs
 
 
+def check_names(order):
+    for n in order:
+        win = pathlib.PureWindowsPath(n)
+        if win.drive or win.root or ".." in win.parts:
+            sys.exit("error: unsafe descriptor name %r" % n)
+
+
 def main():
     if len(sys.argv) != 3:
         print(__doc__.split("\n\n")[1])
@@ -369,10 +372,10 @@ def main():
     print(f"{exe}: {len(blobs)} descriptors found, {len(dups)} duplicates skipped")
     for name, off, same in dups:
         print(f"  duplicate {name} at 0x{off:08x} ({'identical' if same else 'DIFFERENT'})")
+    if not blobs:
+        sys.exit("error: no protobuf descriptors found in %s; use AssettoCorsaEVOEditor.exe from the Assetto Corsa EVO SDK" % exe)
     order = sort_deps(blobs)
-    for n in order:
-        if pathlib.PurePosixPath(n).is_absolute() or ".." in pathlib.PurePosixPath(n).parts:
-            sys.exit("error: unsafe descriptor name %r" % n)
+    check_names(order)
     out.mkdir(parents=True, exist_ok=True)
     desc = bytearray()
     written = set()

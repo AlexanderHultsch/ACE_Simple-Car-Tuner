@@ -88,11 +88,18 @@ def classify(ref, car_ids, exists):
     return "external"
 
 
-def main():
-    if len(sys.argv) != 2 or not pathlib.Path(kspkg.long_path(sys.argv[1])).is_dir():
+def root_from_args():
+    if len(sys.argv) != 2:
         print(__doc__.split("\n\n")[1])
         sys.exit(2)
     root = pathlib.Path(kspkg.long_path(sys.argv[1]))
+    if not root.is_dir():
+        sys.exit("error: %s is not a folder" % sys.argv[1])
+    return root
+
+
+def main():
+    root = root_from_args()
     try:
         cars = root / "content" / "cars"
         car_ids = {p.name.lower() for p in cars.iterdir() if p.is_dir()} if cars.is_dir() else set()

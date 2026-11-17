@@ -93,6 +93,28 @@ class TestValidateAndArgs(Base):
                 with self.assertRaisesRegex(ValueError, message):
                     clone_car.validate("ks_x", new, str(self.d))
 
+    def test_check_id_is_the_id_part_of_validate_and_does_not_look_at_the_disk(self):
+        clone_car.check_id("ks_x", "ax_x")
+        os.makedirs(self.d / "content" / "cars" / "ax_x")
+        clone_car.check_id("ks_x", "ax_x")
+        for new, message in (("AX_X", "may only contain lowercase"), ("ax_xy", "must have exactly 4"), ("ks_x", "equals the old id")):
+            with self.subTest(new), self.assertRaisesRegex(ValueError, message):
+                clone_car.check_id("ks_x", new)
+
+    def test_defaults_for_year_and_brand(self):
+        self.assertEqual((clone_car.DEFAULT_YEAR, clone_car.DEFAULT_BRAND), (2003, "BMW"))
+
+    def test_expand_keeps_a_literal_percent_sign_and_refuses_an_unexpanded_variable(self):
+        for ok in ("100%/mods", "a%b", "50%", "%", "x\\100%\\y", "a%b/c%d"):
+            with self.subTest(ok):
+                self.assertEqual(clone_car.expand(ok), os.path.abspath(ok))
+        for bad in ("%ACE_TEST_NO_SUCH_VAR%/x", "%ACE_TEST_NO_SUCH_VAR%\\x", "a/%ACE_TEST_NO_SUCH_VAR%"):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, "cannot expand the path"):
+                clone_car.expand(bad)
+        with mock.patch.dict(os.environ, {"ACE_TEST_SET_VAR": "set"}):
+            self.assertEqual(clone_car.expand("%ACE_TEST_SET_VAR%/x" if os.name == "nt" else "$ACE_TEST_SET_VAR/x"),
+                             os.path.abspath("set/x"))
+
     def test_existing_target_folder_is_refused(self):
         os.makedirs(self.d / "content" / "cars" / "ax_x")
         with self.assertRaisesRegex(ValueError, "already exists, refusing to overwrite"):
@@ -286,6 +308,9 @@ class TestModdedContentAndLocalization(Base):
         self.assertEqual(clone_car.stock_lines(self.loc(), "ks_x"),
                          ["ks_x_name=Car X", "ks_x_preset_base=Stock Variant", "ks_x_desc=D = é ü", "KS_X_upper=U"])
         self.assertEqual(clone_car.stock_lines(self.loc(b"ks_x_a=1\nks_x_b=2\n"), "ks_x"), ["ks_x_a=1", "ks_x_b=2"])
+
+    def test_stock_lines_of_a_file_with_a_utf8_bom_keep_the_first_car(self):
+        self.assertEqual(clone_car.stock_lines(self.loc(BOM + b"ks_x_a=1\r\nks_x_b=2\r\n"), "ks_x"), ["ks_x_a=1", "ks_x_b=2"])
 
     def test_stock_lines_of_a_car_that_is_not_there(self):
         self.assertEqual(clone_car.stock_lines(self.loc(), "ks_q"), [])
@@ -591,6 +616,16 @@ class TestInstall(Base):
         self.patch(shutil, "copyfile", short_copy)
         with self.assertRaisesRegex(ValueError, "installed size mismatch"):
             self.install()
+
+    def test_package_in_use_by_another_program_is_a_clear_error_and_keeps_the_old_package(self):
+        self.write(self.mods / "ax_x.kspkg", b"G" * 1000)
+        self.patch(os, "replace", mock.Mock(side_effect=PermissionError(13, "Access is denied")))
+        target = str(self.mods / "ax_x.kspkg")
+        with self.assertRaises(ValueError) as cm:
+            self.install()
+        self.assertEqual(str(cm.exception), "cannot replace %s: another program is using it, close the game and try again" % target)
+        self.assertEqual(self.read(target), b"G" * 1000)
+        self.assertEqual(os.listdir(self.mods), ["ax_x.kspkg"])
 
     def test_failure_half_way_keeps_the_old_package(self):
         self.write(self.mods / "ax_x.kspkg", b"G" * 1000)

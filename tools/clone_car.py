@@ -42,6 +42,7 @@ from kspkg import parse_args  # noqa: E402
 
 DEFAULT_MODS = "%USERPROFILE%\\Saved Games\\ACE\\mods"
 DEFAULT_BACKUPS = "%USERPROFILE%\\ace_modded_cars_work\\backups"
+DEFAULT_YEAR, DEFAULT_BRAND = 2003, "BMW"
 MODDED_TYPE = "moddedcarcontent"
 DEFAULT_PROPERTIES = {"property_1": "Property1_Road", "property_2": "Property2_YoungTimer",
                       "property_3": "Property3_ICE"}
@@ -72,12 +73,12 @@ def replacer(new_id):
 def expand(path):
     """Absolute path with environment variables expanded; a %VAR% that cannot be expanded is an error."""
     full = os.path.abspath(os.path.expandvars(path))
-    if "%" in full:
+    if re.search(r"%[^%\\/]+%", full):
         raise ValueError("cannot expand the path %r" % path)
     return full
 
 
-def validate(old_id, new_id, out_dir):
+def check_id(old_id, new_id):
     if not re.fullmatch(r"[a-z0-9_]+", new_id):
         raise ValueError("new id %r may only contain lowercase a-z, 0-9 and underscore" % new_id)
     if len(new_id) != len(old_id):
@@ -85,6 +86,10 @@ def validate(old_id, new_id, out_dir):
                          % (new_id, len(new_id), len(old_id), old_id))
     if new_id == old_id:
         raise ValueError("new id equals the old id %r" % old_id)
+
+
+def validate(old_id, new_id, out_dir):
+    check_id(old_id, new_id)
     if os.path.exists(kspkg.long_path(os.path.join(out_dir, "content", "cars", new_id))):
         raise ValueError("%s already exists, refusing to overwrite"
                          % os.path.join(out_dir, "content", "cars", new_id))
@@ -140,17 +145,17 @@ def write_modded_content(car_root, new_id, name, brand, year, properties=None):
     fields = {"display_name": name, "year": year, "brand": brand}
     fields.update({k: (properties or {}).get(k) or v for k, v in DEFAULT_PROPERTIES.items()})
     path = os.path.join(car_root, new_id + "." + MODDED_TYPE)
-    msg = car_json.message_for(path)
+    msg_name = car_json.message_for(path)
     sch = car_json.load_schema()
     with open(kspkg.long_path(path), "wb") as f:
-        f.write(car_json.encode_msg(sch, msg, fields))
-    return path, sch, msg, fields
+        f.write(car_json.encode_msg(sch, msg_name, fields))
+    return path, sch, msg_name, fields
 
 
 def stock_lines(stock_loc, old_id):
     """The 'key=value' lines of the stock en.cars.loc whose key starts with <old_id>_ (case-insensitive)."""
     with open(kspkg.long_path(stock_loc), "rb") as f:
-        text = f.read().decode("utf-8")
+        text = f.read().decode("utf-8-sig")
     prefix = old_id.lower() + "_"
     return [line for line in re.split(r"\r?\n", text) if line.lower().startswith(prefix) and "=" in line]
 
@@ -182,7 +187,7 @@ def write_localization(car_root, old_id, new_id, stock_loc, variant):
 
 
 def self_check(out_dir, old_id, modded):
-    path, sch, msg, fields = modded
+    path, sch, msg_name, fields = modded
     new_id = os.path.basename(path)[:-len("." + MODDED_TYPE)]
     pat = re.compile(re.escape(old_id.encode()), re.IGNORECASE)
     content_pat, audio_pat = content_pattern(old_id), audio_pattern(new_id)
@@ -201,7 +206,7 @@ def self_check(out_dir, old_id, modded):
             if new_low in low and audio_pat.search(data):
                 bad_audio.append(kspkg.plain_path(os.path.join(root, n)))
     with open(kspkg.long_path(path), "rb") as f:
-        decoded = car_json.decode_msg(sch, msg, f.read())
+        decoded = car_json.decode_msg(sch, msg_name, f.read())
     ok_modded = decoded == fields
     print("self-check (a) old id in names: %s" % ("none" if not bad_names else "%d FOUND" % len(bad_names)))
     print("self-check (a) old id in contents: %s" % ("none" if not bad_content else "%d FOUND" % len(bad_content)))
@@ -272,7 +277,10 @@ def install(pkg, mods_dir, backups):
         shutil.copyfile(pkg, part)
         if os.path.getsize(part) != os.path.getsize(pkg):
             raise ValueError("installed size mismatch for %s" % target)
-        os.replace(part, target)
+        try:
+            os.replace(part, target)
+        except PermissionError:
+            raise ValueError("cannot replace %s: another program is using it, close the game and try again" % target) from None
     except BaseException:
         with contextlib.suppress(OSError):
             os.remove(part)
@@ -299,12 +307,12 @@ def main():
             if len(pos) != 3:
                 usage()
             try:
-                year = int(opts.get("year", 2003))
+                year = int(opts.get("year", DEFAULT_YEAR))
             except ValueError:
                 raise ValueError("--year must be an integer") from None
             props = {"property_%d" % i: opts.get("property%d" % i) for i in (1, 2, 3)}
             build(pos[0], pos[1], pos[2], opts.get("name", pos[1] + " MY"), year,
-                  opts.get("brand", "BMW"), opts.get("variant"), opts.get("loc"), props, "no-pack" not in opts)
+                  opts.get("brand", DEFAULT_BRAND), opts.get("variant"), opts.get("loc"), props, "no-pack" not in opts)
         elif cmd == "install":
             try:
                 pos, opts = parse_args(sys.argv[2:], ("mods", "backups"))

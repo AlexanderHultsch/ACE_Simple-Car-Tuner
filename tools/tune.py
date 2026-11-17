@@ -266,7 +266,7 @@ CARS_TABLE = "system\\cars.table"
 STOCK_LOC = "\\".join(clone_car.LOC_PATH)
 STOCK_PROPERTIES = ("property_1", "property_2", "property_3")
 # apply fallback for the default car when stock_info.json is missing and the game is not reachable: the values of the BMW M3 E46 CSL
-CLONE_YEAR, CLONE_BRAND = 2003, "BMW"
+CLONE_YEAR, CLONE_BRAND = clone_car.DEFAULT_YEAR, clone_car.DEFAULT_BRAND
 NAME_SUFFIX_MAX = 30
 LEGACY_SUFFIX = re.compile(r"_MY(\d*)")
 PATH_STEP = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)((?:\[[^\]]*\])*)")
@@ -574,8 +574,7 @@ def find_setting(cat, setting_id):
 def check_tune_id(work, car_id, tune):
     if not isinstance(tune, str):
         raise ValueError("tune id must be text, got %r" % (tune,))
-    # ids only: the "unused" folder never exists (as in apply)
-    clone_car.validate(car_id, tune, os.path.join(build_dir(work, car_id), "unused"))
+    clone_car.check_id(car_id, tune)
 
 
 def is_default_tune(car_id, tune):

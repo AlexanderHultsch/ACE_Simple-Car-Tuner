@@ -173,7 +173,7 @@ class Fields(unittest.TestCase):
 
     def test_every_supported_wire_type_in_order(self):
         data = pb_int(1, 150) + pb_f64(2, 1.5) + pb_str(3, "hi") + pb_f32(4, -2.5) + pb_int(1, 7)
-        self.assertEqual(ep.fields(data), [(1, 0, 150), (2, 1, 1.5), (3, 2, b"hi"), (4, 5, -2.5), (1, 0, 7)])
+        self.assertEqual(ep.fields(data), [(1, 0, 150), (2, 1, 0x3FF8000000000000), (3, 2, b"hi"), (4, 5, 0xC0200000), (1, 0, 7)])
 
     def test_multi_byte_field_key_and_empty_length_delimited_value(self):
         self.assertEqual(ep.fields(pb_int(300, 5) + pb_bytes(2000, b"")), [(300, 0, 5), (2000, 2, b"")])
@@ -476,13 +476,23 @@ class Main(unittest.TestCase):
         lines = r.stdout.splitlines()
         self.assertEqual(lines[-2:], [self_check_line(1, 1, 1, 1, 0), "  missing: gone.proto"])
 
-    def test_exe_without_descriptors_writes_an_empty_set(self):
+    def test_exe_without_descriptors_is_an_error_and_writes_nothing(self):
         with tmp() as d:
             (d / "x.exe").write_bytes(random.Random(1).randbytes(3000))
             r = run_tool("extract_protos.py", d / "x.exe", d / "out")
-            self.assertEqual(r.returncode, 0, r.stderr)
-            self.assertIn("0 descriptors found, 0 duplicates skipped", r.stdout)
-            self.assertEqual(tree(d / "out"), {"acevo.desc": b""})
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(r.stderr.strip(), "error: no protobuf descriptors found in %s; use AssettoCorsaEVOEditor.exe "
+                                               "from the Assetto Corsa EVO SDK" % (d / "x.exe"))
+            self.assertFalse((d / "out").exists())
+
+    def test_exe_without_descriptors_keeps_an_existing_set(self):
+        with tmp() as d:
+            (d / "out").mkdir()
+            (d / "out" / "acevo.desc").write_bytes(b"good")
+            (d / "x.exe").write_bytes(b"")
+            r = run_tool("extract_protos.py", d / "x.exe", d / "out")
+            self.assertEqual(r.returncode, 1, r.stdout)
+            self.assertEqual(tree(d / "out"), {"acevo.desc": b"good"})
 
     def test_output_folder_is_created_with_its_parents(self):
         with tmp() as d:
@@ -520,6 +530,15 @@ class Main(unittest.TestCase):
             self.assertTrue(r.stderr.startswith("error:"), r.stderr)
             self.assertLessEqual({p.name for p in work.iterdir()}, {"out", "x.exe"})
             self.assertFalse((d / "esc_out.proto").exists())
+
+    def test_descriptor_names_with_backslash_parents_or_a_drive_are_refused_and_nothing_is_written(self):
+        for name in ("sub\\..\\esc_out.proto", "a/../esc_out.proto", "C:esc_out.proto", "C:\\esc_out.proto"):
+            with self.subTest(name=name), tmp() as d:
+                (d / "x.exe").write_bytes(build_exe([simple_file(name)], seed=6)[0])
+                r = run_tool("extract_protos.py", d / "x.exe", d / "out")
+                self.assertEqual(r.returncode, 1, r.stdout)
+                self.assertEqual(r.stderr.strip(), "error: unsafe descriptor name %r" % name)
+                self.assertEqual({p.name for p in d.iterdir()}, {"x.exe"})
 
     # every descriptor used to be parsed 5 times per run (scan, dedupe, sort_deps, render, self-check)
     def test_each_descriptor_blob_is_parsed_once_per_run(self):

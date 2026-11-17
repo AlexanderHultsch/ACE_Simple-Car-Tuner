@@ -102,6 +102,10 @@ def actor_of(*entries):
     return {"car": {"cameras": ["c1"], "audio_events": list(entries), "_order": ["cameras"] + ["audio_events"] * len(entries)}}
 
 
+def forbidden_host(port):
+    return "forbidden host: open the tuner with the address the console prints (http://<address of the PC>:%d/ACESCT/)" % port
+
+
 def gated(test, fn):
     """A job body for tune.init / tune.apply: records the call, waits for test.gate when one is set, then returns or raises."""
     def stub(*args, **kw):
@@ -440,7 +444,7 @@ class TestBasePath(ServerCase):
         for path in ("/", "/ACESCT"):
             with self.subTest(path):
                 r = self.raw(path, host="evil.example")
-                self.assertEqual((r.status, r.json, r.headers.get("Location")), (403, {"error": "forbidden host"}, None))
+                self.assertEqual((r.status, r.json, r.headers.get("Location")), (403, {"error": forbidden_host(self.port)}, None))
 
     def test_the_api_lives_below_the_base_path_only(self):
         r = self.raw("/ACESCT/api/state")
@@ -520,7 +524,7 @@ class TestStaticFiles(ServerCase):
         for name in STATIC:
             with self.subTest(name):
                 r = self.get("/" + name, host="evil.example")
-                self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+                self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
                 self.assertEqual(self.get("/" + name, host=False).status, 403)
         self.assertEqual(self.get("/icon-192.png", host="localhost:%d" % self.port).status, 200)
 
@@ -637,7 +641,7 @@ class TestHostAndHeaders(ServerCase):
                      ""):
             with self.subTest(host):
                 r = self.get("/api/state", host=host)
-                self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+                self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
 
     def test_private_hosts_with_the_port_and_the_machine_name_are_accepted(self):
         with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"):
@@ -654,7 +658,7 @@ class TestHostAndHeaders(ServerCase):
                          "MyPC.local:%d" % self.port, "other-pc:%d" % self.port, "0.0.0.0:%d" % self.port, ":%d" % self.port):
                 with self.subTest(host):
                     r = self.get("/api/state", host=host)
-                    self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+                    self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
 
     def test_a_missing_host_header_is_403(self):
         self.assertEqual(self.get("/api/state", host=False).status, 403)
@@ -1448,7 +1452,7 @@ class TestApplyRoute(TuneCase):
     def test_an_unexpandable_mods_folder_is_a_409_and_starts_no_job_and_creates_no_modded_car(self):
         ts.CONFIG["mods"] = "%ACE_TEST_NO_SUCH_VAR%/m"
         r = self.post("/api/apply", {"tune": "draft"})
-        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m'"}))
+        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m' (pass --mods <folder>)"}))
         self.assertEqual((self.calls, ts.job_snapshot()["state"], self.tune_ids()), ([], "idle", []))
 
     def test_a_running_job_refuses_the_draft_before_a_modded_car_is_created(self):
@@ -2011,7 +2015,7 @@ class TestDuplicateRoute(TuneCase):
     def test_an_unexpandable_mods_folder_is_409(self):
         ts.CONFIG["mods"] = "%ACE_TEST_NO_SUCH_VAR%/m"
         r = self.post("/api/duplicate", {})
-        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m'"}))
+        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m' (pass --mods <folder>)"}))
         self.assertEqual(self.tune_ids(), [])
 
     def test_a_duplicate_shows_up_in_the_state_and_starts_no_job(self):
@@ -2100,7 +2104,7 @@ class TestGroupsRoute(TuneCase):
 
     def test_it_checks_the_host_and_is_405_for_other_methods_and_404_for_a_post(self):
         r = self.get("/api/groups", host="evil.example")
-        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         for method in ("PUT", "DELETE", "PATCH"):
             with self.subTest(method):
                 r = self.request(method, "/api/groups")
@@ -2254,7 +2258,7 @@ class TestLogConfigRoute(LogCase):
         r = self.post("/api/log_config_set", self.valid(), post_headers=False)
         self.assertEqual(r.status, 403)
         r = self.post("/api/log_config_set", self.valid(), host="evil.example")
-        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         self.assertFalse(os.path.exists(self.config_file))
 
     def test_methods_and_paths(self):
@@ -2382,7 +2386,7 @@ class TestLogConfigResetRoute(LogCase):
         r = self.post("/api/log_config_reset", {}, post_headers=False)
         self.assertEqual(r.status, 403)
         r = self.post("/api/log_config_reset", {}, host="evil.example")
-        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         self.assertTrue(os.path.exists(self.config_file))
 
     def test_methods_and_paths(self):
@@ -2753,7 +2757,7 @@ class TestLoggerRoutes(LogCase):
                 self.assertEqual(self.post(path, headers={"X-Tuner": "0"}).status, 403)
                 self.assertEqual(self.post(path, post_headers=False).status, 403)
                 r = self.post(path, host="evil.example")
-                self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+                self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         self.assertFalse(os.path.exists(self.stop_file))
         self.popen.assert_not_called()
 
@@ -3173,7 +3177,7 @@ class TestLogCopyFromTheNetwork(CopyCase):
     def test_the_other_checks_of_the_server_still_come_first(self):
         self.put()
         self.assertEqual(self.copy_on("win32", host="evil.example").status, 403)
-        self.assertEqual(self.copy_on("win32", host="evil.example").json, {"error": "forbidden host"})
+        self.assertEqual(self.copy_on("win32", host="evil.example").json, {"error": forbidden_host(self.port)})
         self.assertEqual(self.copy_on("win32", post_headers=False).json, {"error": "missing header X-Tuner: 1"})
 
     def test_the_other_routes_still_answer_such_a_client(self):
@@ -3640,7 +3644,7 @@ class TestTyreWriteRoutes(TyreCase):
         r = self.post("/api/tyre_new", body, headers={"Content-Type": "text/plain"})
         self.assertEqual((r.status, r.json), (415, {"error": "Content-Type must be application/json"}))
         r = self.post("/api/tyre_new", body, host="evil.example")
-        self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+        self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         r = self.post("/api/garage_set", {"keys": [ST_AB]}, headers={"X-Tuner": None})
         self.assertEqual(r.status, 403)
         self.assertEqual(tune.list_tyres(self.work), [])
@@ -3660,7 +3664,7 @@ class TestTyreWriteRoutes(TyreCase):
         for path in ("/api/tyre?id=soft", "/api/tyres", "/api/garage"):
             with self.subTest(path):
                 r = self.get(path, host="evil.example")
-                self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
+                self.assertEqual((r.status, r.json), (403, {"error": forbidden_host(self.port)}))
         for method in ("PUT", "DELETE", "PATCH"):
             with self.subTest(method):
                 r = self.request(method, "/api/tyre?id=soft")
@@ -4896,7 +4900,7 @@ class TestStatePollCost(ServerCase):
     def test_an_unexpandable_mods_folder_is_a_409_for_the_state(self):
         ts.CONFIG["mods"] = "%ACE_TEST_NO_SUCH_VAR%/m"
         r = self.get("/api/state")
-        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m'"}))
+        self.assertEqual((r.status, r.json), (409, {"error": "cannot expand the mods folder '%ACE_TEST_NO_SUCH_VAR%/m' (pass --mods <folder>)"}))
 
     def test_apply_always_checks_the_game_itself(self):
         run = mock.Mock(return_value=tune.subprocess.CompletedProcess(GAME_ARGV, 0, stdout=b"INFO: No tasks", stderr=b""))
@@ -4922,7 +4926,7 @@ class TestHelpers(Env):
         for host in (None, "", "127.0.0.1", "localhost", "127.0.0.1:80", "127.0.0.1:8765x", "evil:8765", "[::1]:8765", "x127.0.0.1:8765"):
             with self.subTest(host), self.assertRaises(ts.ApiError) as cm:
                 ts.check_host(host)
-            self.assertEqual((cm.exception.status, cm.exception.message), (403, "forbidden host"))
+            self.assertEqual((cm.exception.status, cm.exception.message), (403, forbidden_host(8765)))
 
     def test_check_host_follows_the_configured_port(self):
         ts.CONFIG["port"] = 9000
@@ -4945,7 +4949,7 @@ class TestHelpers(Env):
                          "100.64.0.1:8080", "0.0.0.0:8080", ":8080", "1:8080"):
                 with self.subTest(host), self.assertRaises(ts.ApiError) as cm:
                     ts.check_host(host)
-                self.assertEqual((cm.exception.status, cm.exception.message), (403, "forbidden host"))
+                self.assertEqual((cm.exception.status, cm.exception.message), (403, forbidden_host(8080)))
 
     def test_check_host_needs_no_dns_lookup(self):
         ts.CONFIG["port"] = 8080
@@ -4963,6 +4967,29 @@ class TestHelpers(Env):
                         "[::1]", None, "1"):
             with self.subTest(address):
                 self.assertFalse(ts.private_ip(address))
+
+    def test_private_ip_at_the_edges_of_the_documented_ranges(self):
+        for address in ("10.0.0.0", "10.255.255.255", "127.0.0.0", "127.255.255.255", "172.16.0.0", "192.168.0.0", "192.168.255.255"):
+            with self.subTest(address):
+                self.assertTrue(ts.private_ip(address))
+        for address in ("9.255.255.255", "11.0.0.0", "126.255.255.255", "128.0.0.0", "172.15.255.255", "192.167.255.255", "192.169.0.0",
+                        "100.127.255.255", "::ffff:192.168.1.1", "fc00::1"):
+            with self.subTest(address):
+                self.assertFalse(ts.private_ip(address))
+
+    def test_bad_input_turns_a_value_error_into_a_400_without_context(self):
+        with self.assertRaises(ts.ApiError) as cm, ts.bad_input():
+            raise ValueError("nope")
+        self.assertEqual((cm.exception.status, cm.exception.message, cm.exception.__suppress_context__), (400, "nope", True))
+
+    def test_bad_input_leaves_other_errors_and_normal_exits_alone(self):
+        with self.assertRaises(ts.ApiError) as cm, ts.bad_input():
+            raise ts.ApiError(409, "busy")
+        self.assertEqual((cm.exception.status, cm.exception.message), (409, "busy"))
+        with self.assertRaises(KeyError), ts.bad_input():
+            raise KeyError("k")
+        with ts.bad_input():
+            pass
 
     def test_check_client_accepts_loopback_and_private_addresses(self):
         for address in ("192.168.1.5", "10.1.2.3", "127.0.0.1"):
@@ -5415,7 +5442,7 @@ class TestMain(Env):
 
     def test_a_bind_address_that_cannot_be_used_is_an_error_line(self):
         StubServer.bind_error = OSError(10049, "address not valid in its context")
-        self.assertEqual(self.run_main(*self.argv, "--bind", "203.0.113.9"), "error: [Errno 10049] address not valid in its context")
+        self.assertEqual(self.run_main(*self.argv, "--bind", "203.0.113.9"), "error: cannot listen on 203.0.113.9:8765 ([Errno 10049] address not valid in its context); is the tuner already running? use --port N")
         self.assertEqual(self.out.getvalue(), "")
 
     def test_start_sets_config_from_the_options(self):
@@ -5449,7 +5476,7 @@ class TestMain(Env):
 
     def test_a_port_that_cannot_be_bound_is_an_error_line(self):
         StubServer.bind_error = OSError(98, "Address already in use")
-        self.assertEqual(self.run_main(*self.argv), "error: [Errno 98] Address already in use")
+        self.assertEqual(self.run_main(*self.argv), "error: cannot listen on 0.0.0.0:8765 ([Errno 98] Address already in use); is the tuner already running? use --port N")
         self.assertEqual(self.out.getvalue(), "")
 
     def test_the_old_single_car_layout_is_moved_into_the_default_car_folder(self):

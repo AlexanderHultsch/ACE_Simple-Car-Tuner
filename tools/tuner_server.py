@@ -135,7 +135,11 @@ The job state (GET /api/state "job") is global, there is one background job at a
 also lists the car ("car", "cars") and the installed package of the selected modded car; the old single-car layout of the work folder
 is moved into the default car's folder when the server starts.
 No PIN or login: only private networks may connect. A request is refused with 403 when the address of the client is not
-loopback or private (192.168.x.x, 10.x.x.x, 172.16-31.x.x), and when the Host header is not <name>:<port> with the
+loopback or private (IPv4 only: 127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12 and 192.168.0.0/16, and also what the ipaddress module of Python
+treats as private and not global, here Python 3.13, so the list depends on the Python version: 169.254.0.0/16 link-local, 0.0.0.0/8 except
+0.0.0.0, 192.0.0.0/24 except 192.0.0.9 and 192.0.0.10, 192.0.2.0/24, 198.51.100.0/24 and 203.0.113.0/24 documentation, 198.18.0.0/15
+benchmarking, 240.0.0.0/4 reserved with 255.255.255.255; refused: 0.0.0.0, 100.64.0.0/10 (carrier-grade NAT, Tailscale), every public
+address and every IPv6 address), and when the Host header is not <name>:<port> with the
 configured port and a name that is localhost, a loopback or private IPv4 address, or the host name of this PC. Every POST
 needs the header X-Tuner: 1 and Content-Type application/json. One background job at a time; its state is kept until the
 next job starts. Apply refuses to run while AssettoCorsaEVO.exe is running.
@@ -147,6 +151,7 @@ Ctrl+C while a job runs waits for it; a second Ctrl+C aborts it.
 
 Stdlib only.
 """
+import contextlib
 import datetime
 import http.server
 import ipaddress
@@ -210,6 +215,14 @@ class ApiError(Exception):
         self.message = message
 
 
+@contextlib.contextmanager
+def bad_input():
+    try:
+        yield
+    except ValueError as e:
+        raise ApiError(400, str(e)) from None
+
+
 def mods_dir():
     return clone_car.expand(CONFIG["mods"] or clone_car.DEFAULT_MODS)
 
@@ -218,11 +231,11 @@ def require_mods():
     try:
         return mods_dir()
     except ValueError:
-        raise ApiError(409, "cannot expand the mods folder %r" % (CONFIG["mods"] or clone_car.DEFAULT_MODS)) from None
+        raise ApiError(409, "cannot expand the mods folder %r (pass --mods <folder>)" % (CONFIG["mods"] or clone_car.DEFAULT_MODS)) from None
 
 
-def base_present(work, car):
-    car_root = kspkg.long_path(tune.car_root_of(tune.base_dir(work, car), car))
+def base_present(work, car_id):
+    car_root = kspkg.long_path(tune.car_root_of(tune.base_dir(work, car_id), car_id))
     return os.path.isdir(car_root) and bool(os.listdir(car_root))
 
 
@@ -230,11 +243,11 @@ def logs_dir():
     try:
         return clone_car.expand(CONFIG["logs"] or logconf.default_logs_dir())
     except ValueError:
-        raise ValueError("cannot expand the logs directory %r" % (CONFIG["logs"] or logconf.default_logs_dir())) from None
+        raise ValueError("cannot expand the logs directory %r (pass --logs <folder>)" % (CONFIG["logs"] or logconf.default_logs_dir())) from None
 
 
-def require_base(work, car):
-    if not base_present(work, car):
+def require_base(work, car_id):
+    if not base_present(work, car_id):
         raise ApiError(409, "base car missing, run init")
 
 
@@ -248,8 +261,8 @@ def game_running_cached():
     return GAME_CHECK[1]
 
 
-def installed_info(car, tune_id=None):
-    path = os.path.join(mods_dir(), (tune.new_id_for(car) if tune_id in (None, tune.DRAFT) else tune_id) + ".kspkg")
+def installed_info(car_id, tune_id=None):
+    path = os.path.join(mods_dir(), (tune.new_id_for(car_id) if tune_id in (None, tune.DRAFT) else tune_id) + ".kspkg")
     info = {"path": path, "exists": os.path.isfile(path), "bytes": None, "modified": None}
     if info["exists"]:
         st = os.stat(path)
@@ -322,10 +335,10 @@ def refuse_while_job_runs():
         raise ApiError(409, "a job is running, wait until it has finished")
 
 
-def init_task(car):
+def init_task(car_id):
     def task():
         log_line("extracting the stock car from the game package (about 20 s) ...")
-        res = tune.init(CONFIG["work"], car, CONFIG["game"])
+        res = tune.init(CONFIG["work"], car_id, CONFIG["game"])
         log_line("base already present" if res["present"] else "extracted the stock car")
         log_line("%s: %d files, %d folders, %d bytes" % (res["dir"], res["files"], res["dirs"], res["bytes"]))
         return res
@@ -341,23 +354,23 @@ def apply_lines(res):
     return lines
 
 
-def apply_task(car, new_id, created):
+def apply_task(car_id, new_id, created):
     def task():
         log_line("building %s, this takes a while ..." % new_id)
-        res = tune.apply(CONFIG["work"], car, new_id, True, CONFIG["mods"], game=CONFIG["game"])
+        res = tune.apply(CONFIG["work"], car_id, new_id, True, CONFIG["mods"], game=CONFIG["game"])
         for line in apply_lines(res):
             log_line(line)
         if created:
             with STATE_LOCK:
-                tune.save_state(CONFIG["work"], car, {}, tune.DRAFT)
+                tune.save_state(CONFIG["work"], car_id, {}, tune.DRAFT)
         return dict(res, created=created)
     return task
 
 
-def row_json(row, s, base_range=None):
+def row_json(row, setting, base_range=None):
     out = {k: row[k] for k in ("id", "group", "label", "kind", "type", "unit", "description", "verified",
                                "default", "value", "changed", "absent", "copies_differ")}
-    out.update({k: s[k] for k in ("min", "max", "choices", "ui", "advanced") if k in s})
+    out.update({k: setting[k] for k in ("min", "max", "choices", "ui", "advanced") if k in setting})
     if row["copies_differ"]:
         out["copy_values"] = row["copy_values"]
     if base_range:
@@ -365,24 +378,24 @@ def row_json(row, s, base_range=None):
     return out
 
 
-def rows_json(work, car, cat, tune_id=None):
-    require_base(work, car)
+def rows_json(work, car_id, cat, tune_id=None):
+    require_base(work, car_id)
     ranges = tune.load_ranges(work)
     return [row_json(r, tune.find_setting(cat, r["id"]), ranges.get(r["id"]))
-            for r in tune.effective_rows(work, car, cat, tune=tune_id)]
+            for r in tune.effective_rows(work, car_id, cat, tune=tune_id)]
 
 
-def row_of(work, car, cat, setting_id, tune_id=None):
-    require_base(work, car)
-    return row_json(tune.effective_row(work, car, setting_id, cat, tune=tune_id), tune.find_setting(cat, setting_id),
+def row_of(work, car_id, cat, setting_id, tune_id=None):
+    require_base(work, car_id)
+    return row_json(tune.effective_row(work, car_id, setting_id, cat, tune=tune_id), tune.find_setting(cat, setting_id),
                     tune.load_ranges(work).get(setting_id))
 
 
-def settings_counts(work, car):
+def settings_counts(work, car_id):
     job = job_snapshot()
-    if not base_present(work, car) or (job["kind"] == "init" and job["state"] == "running"):
+    if not base_present(work, car_id) or (job["kind"] == "init" and job["state"] == "running"):
         return None, None
-    rows = tune.resolve_defaults(work, car, hidden=True)
+    rows = tune.resolve_defaults(work, car_id, hidden=True)
     applicable = sum(1 for r in rows if r["applicable"])
     return applicable, len(rows) - applicable
 
@@ -394,14 +407,14 @@ def or_none(fn, *args):
         return None
 
 
-def tune_proposals(work, car):
+def tune_proposals(work, car_id):
     try:
-        taken = any(t["default"] for t in tune.list_tunes(work, car))
+        taken = any(t["default"] for t in tune.list_tunes(work, car_id))
     except ValueError:
         return {"default_tune_taken": False, "proposed_new_id": None, "proposed_suffix": None}
-    new_id = or_none(tune.free_tune_id, work, car, mods_dir()) if taken else tune.new_id_for(car)
+    new_id = or_none(tune.free_tune_id, work, car_id, mods_dir()) if taken else tune.new_id_for(car_id)
     return {"default_tune_taken": taken, "proposed_new_id": new_id,
-            "proposed_suffix": or_none(tune.free_suffix, work, car, tune.name_suffix_setting()["default"])}
+            "proposed_suffix": or_none(tune.free_suffix, work, car_id, tune.name_suffix_setting()["default"])}
 
 
 def modded_cars(work):
@@ -411,78 +424,75 @@ def modded_cars(work):
         return {"modded": [], "modded_error": str(e)}
 
 
-def api_state(car, tune_id):
+def api_state(car_id, tune_id):
     require_mods()
     work, cars = CONFIG["work"], tune.load_cars()
-    applicable, hidden = settings_counts(work, car)
-    return dict({"work": work, "car": car, "tune": tune_id, "default_car": cars["default"],
+    applicable, hidden = settings_counts(work, car_id)
+    return dict({"work": work, "car": car_id, "tune": tune_id, "default_car": cars["default"],
                  "cars": [{k: c[k] for k in ("id", "label", "display_name", "extracted", "tested", "new_id", "installed")}
                           for c in tune.list_cars(work, CONFIG["mods"], game=CONFIG["game"], sizes=False)],
-                 "base_present": base_present(work, car), "game_running": game_running_cached(),
-                 "installed": installed_info(car, tune_id), "stock_id_length": len(car),
-                 "default_new_id": tune.new_id_for(car), "settings_applicable": applicable, "settings_hidden": hidden,
-                 "job": job_snapshot()}, **modded_cars(work), **tune_proposals(work, car))
+                 "base_present": base_present(work, car_id), "game_running": game_running_cached(),
+                 "installed": installed_info(car_id, tune_id), "stock_id_length": len(car_id),
+                 "default_new_id": tune.new_id_for(car_id), "settings_applicable": applicable, "settings_hidden": hidden,
+                 "job": job_snapshot()}, **modded_cars(work), **tune_proposals(work, car_id))
 
 
-def api_settings(car, tune_id):
-    with STATE_LOCK:
-        try:
-            return rows_json(CONFIG["work"], car, tune.load_catalogue(), tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+def api_settings(car_id, tune_id):
+    with STATE_LOCK, bad_input():
+        return rows_json(CONFIG["work"], car_id, tune.load_catalogue(), tune_id)
 
 
-def api_groups(car, tune_id):
+def api_groups(car_id, tune_id):
     return {"groups": tune.group_list()}
 
 
-def api_set(car, body):
+def api_set(car_id, body):
     work, cat, tune_id = CONFIG["work"], tune.load_catalogue(), body.get("tune")
     setting_id, value = body.get("id"), body.get("value")
     if not isinstance(setting_id, str) or type(value) not in (str, int, float, bool):
         raise ApiError(400, "need id (text) and value (text, number or true/false)")
     refuse_while_job_runs()
-    require_base(work, car)
+    require_base(work, car_id)
     with STATE_LOCK:
         try:
-            res = tune.set_value(work, car, setting_id, value, cat, tune=tune_id)
+            res = tune.set_value(work, car_id, setting_id, value, cat, tune=tune_id)
         except ValueError as e:
             raise ApiError(400, str(e)) from None
-        return {"row": row_of(work, car, cat, setting_id, tune_id), "warnings": res["warnings"]}
+        return {"row": row_of(work, car_id, cat, setting_id, tune_id), "warnings": res["warnings"]}
 
 
-def api_unset(car, body):
+def api_unset(car_id, body):
     work, cat, tune_id = CONFIG["work"], tune.load_catalogue(), body.get("tune")
     setting_id = body.get("id")
     if not isinstance(setting_id, str):
         raise ApiError(400, "need id (text)")
     refuse_while_job_runs()
-    require_base(work, car)
+    require_base(work, car_id)
     with STATE_LOCK:
         try:
-            tune.unset_value(work, car, setting_id, cat, tune=tune_id)
+            tune.unset_value(work, car_id, setting_id, cat, tune=tune_id)
         except ValueError as e:
             raise ApiError(400, str(e)) from None
-        return {"row": row_of(work, car, cat, setting_id, tune_id)}
+        return {"row": row_of(work, car_id, cat, setting_id, tune_id)}
 
 
-def api_reset_all(car, body):
+def api_reset_all(car_id, body):
     work, tune_id = CONFIG["work"], body.get("tune")
     refuse_while_job_runs()
-    require_base(work, car)
+    require_base(work, car_id)
     with STATE_LOCK:
         state = {}
-        if not (tune.is_default_tune(car, tune_id) or tune_id == tune.DRAFT):
+        if tune.is_extra_tune(car_id, tune_id):
             suffix_id = tune.name_suffix_setting()["id"]
-            kept = tune.load_state(work, car, tune_id)
+            kept = tune.load_state(work, car_id, tune_id)
             if suffix_id in kept:
                 state[suffix_id] = tune.legacy_suffix(kept[suffix_id])
-        tune.save_state(work, car, state, tune_id)
+        tune.save_state(work, car_id, state, tune_id)
     return {"ok": True}
 
 
-def api_init(car, body):
-    run_job("init", init_task(car))
+def api_init(car_id, body):
+    run_job("init", init_task(car_id))
     return {"job": "started"}
 
 
@@ -493,45 +503,39 @@ def optional_text(body, field):
     return value
 
 
-def api_duplicate(car, body):
+def api_duplicate(car_id, body):
     work, tune_id = CONFIG["work"], body.get("tune")
     new_id, suffix = optional_text(body, "new_id"), optional_text(body, "suffix")
     refuse_while_job_runs()
-    require_base(work, car)
+    require_base(work, car_id)
     mods = require_mods()
-    with STATE_LOCK:
-        try:
-            return tune.duplicate_tune(work, car, tune_id, new_id, suffix, mods)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        return tune.duplicate_tune(work, car_id, tune_id, new_id, suffix, mods)
 
 
-def update_target(work, car, tune_id):
+def update_target(work, car_id, tune_id):
     if tune_id is None:
-        tune_id = tune.new_id_for(car)
-        if not any(t["default"] for t in tune.list_tunes(work, car)):
+        tune_id = tune.new_id_for(car_id)
+        if not any(t["default"] for t in tune.list_tunes(work, car_id)):
             raise ApiError(400, "no modded car selected, pick one or use the draft of the car to create it")
     with STATE_LOCK:
-        suffix = tune.state_suffix(tune.load_state(work, car, tune_id), tune.name_suffix_setting())
-        owner = tune.suffix_owner(work, car, suffix, exclude=tune_id)
+        suffix = tune.state_suffix(tune.load_state(work, car_id, tune_id), tune.name_suffix_setting())
+        owner = tune.suffix_owner(work, car_id, suffix, exclude=tune_id)
     if owner:
         raise ApiError(400, "name suffix %s is already used by %s" % (suffix, owner))
     return tune_id
 
 
-def new_target(work, car, new_id, suffix):
-    with STATE_LOCK:
-        try:
-            return tune.new_tune_from_draft(work, car, suffix, new_id, mods_dir())["id"]
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+def new_target(work, car_id, new_id, suffix):
+    with STATE_LOCK, bad_input():
+        return tune.new_tune_from_draft(work, car_id, suffix, new_id, mods_dir())["id"]
 
 
-def api_apply(car, body):
+def api_apply(car_id, body):
     work, tune_id = CONFIG["work"], body.get("tune")
     draft = tune_id == tune.DRAFT
     new_id, suffix = (optional_text(body, "new_id"), optional_text(body, "suffix")) if draft else (None, None)
-    require_base(work, car)
+    require_base(work, car_id)
     require_mods()
     if game_running():
         raise ApiError(409, "close the game first, %s is running" % tune.GAME_EXE)
@@ -539,11 +543,11 @@ def api_apply(car, body):
         refuse_while_job_runs()
     previous = claim_job("apply")
     try:
-        target = new_target(work, car, new_id, suffix) if draft else update_target(work, car, tune_id)
+        target = new_target(work, car_id, new_id, suffix) if draft else update_target(work, car_id, tune_id)
     except Exception:
         release_job(previous)
         raise
-    start_job(apply_task(car, target, draft))
+    start_job(apply_task(car_id, target, draft))
     return {"job": "started"}
 
 
@@ -557,103 +561,82 @@ def tyre_row(work, tyre_id, cat, setting_id):
     return next(r for r in tune.tyre_rows(work, tyre_id, cat) if r["id"] == setting_id)
 
 
-def api_tyres(car, tune_id):
+def api_tyres(car_id, tune_id):
     work = CONFIG["work"]
     return {"tyres": tune.list_tyres(work), "sources": tune.list_source_tyres(work)}
 
 
-def api_tyre(car, tune_id, query):
+def api_tyre(car_id, tune_id, query):
     work, cat = CONFIG["work"], tune.load_catalogue()
     tyre_id = (urllib.parse.parse_qs(query).get("id") or [None])[0]
     if tyre_id is None:
         raise ApiError(400, "need id (text)")
-    with STATE_LOCK:
-        try:
-            return {"tyre": tyre_json(work, tyre_id), "rows": tune.tyre_rows(work, tyre_id, cat)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        return {"tyre": tyre_json(work, tyre_id), "rows": tune.tyre_rows(work, tyre_id, cat)}
 
 
-def api_tyre_new(car, body):
+def api_tyre_new(car_id, body):
     work, name, source = CONFIG["work"], body.get("name"), body.get("source")
     refuse_while_job_runs()
     if not isinstance(name, str) or not isinstance(source, str):
         raise ApiError(400, "need name (text) and source (text)")
-    with STATE_LOCK:
-        try:
-            return {"tyre": tune.create_tyre(work, name, source)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        return {"tyre": tune.create_tyre(work, name, source)}
 
 
-def api_tyre_rename(car, body):
+def api_tyre_rename(car_id, body):
     work, tyre_id, name = CONFIG["work"], body.get("id"), body.get("name")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str) or not isinstance(name, str):
         raise ApiError(400, "need id (text) and name (text)")
-    with STATE_LOCK:
-        try:
-            tune.rename_tyre(work, tyre_id, name)
-            return {"tyre": tyre_json(work, tyre_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        tune.rename_tyre(work, tyre_id, name)
+        return {"tyre": tyre_json(work, tyre_id)}
 
 
-def api_tyre_source(car, body):
+def api_tyre_source(car_id, body):
     work, tyre_id, source = CONFIG["work"], body.get("id"), body.get("source")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str) or not isinstance(source, str):
         raise ApiError(400, "need id (text) and source (text)")
-    with STATE_LOCK:
-        try:
-            tune.set_tyre_source(work, tyre_id, source)
-            return {"tyre": tyre_json(work, tyre_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        tune.set_tyre_source(work, tyre_id, source)
+        return {"tyre": tyre_json(work, tyre_id)}
 
 
-def api_tyre_set(car, body):
+def api_tyre_set(car_id, body):
     work, cat = CONFIG["work"], tune.load_catalogue()
     tyre_id, setting_id, value = body.get("id"), body.get("setting"), body.get("value")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str) or not isinstance(setting_id, str) or type(value) not in (str, int, float, bool):
         raise ApiError(400, "need id (text), setting (text) and value (text, number or true/false)")
-    with STATE_LOCK:
-        try:
-            res = tune.set_tyre_value(work, tyre_id, setting_id, value, cat)
-            return {"row": tyre_row(work, tyre_id, cat, setting_id), "warnings": res["warnings"]}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        res = tune.set_tyre_value(work, tyre_id, setting_id, value, cat)
+        return {"row": tyre_row(work, tyre_id, cat, setting_id), "warnings": res["warnings"]}
 
 
-def api_tyre_unset(car, body):
+def api_tyre_unset(car_id, body):
     work, cat = CONFIG["work"], tune.load_catalogue()
     tyre_id, setting_id = body.get("id"), body.get("setting")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str) or not isinstance(setting_id, str):
         raise ApiError(400, "need id (text) and setting (text)")
-    with STATE_LOCK:
-        try:
-            tune.unset_tyre_value(work, tyre_id, setting_id, cat)
-            return {"row": tyre_row(work, tyre_id, cat, setting_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        tune.unset_tyre_value(work, tyre_id, setting_id, cat)
+        return {"row": tyre_row(work, tyre_id, cat, setting_id)}
 
 
-def api_tyre_reset(car, body):
+def api_tyre_reset(car_id, body):
     work, tyre_id = CONFIG["work"], body.get("id")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str):
         raise ApiError(400, "need id (text)")
-    with STATE_LOCK:
-        try:
-            tune.reset_tyre(work, tyre_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    with STATE_LOCK, bad_input():
+        tune.reset_tyre(work, tyre_id)
     return {"ok": True}
 
 
-def api_tyre_delete(car, body):
+def api_tyre_delete(car_id, body):
     work, tyre_id = CONFIG["work"], body.get("id")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str):
@@ -668,174 +651,145 @@ def api_tyre_delete(car, body):
     return {"ok": True}
 
 
-def garage_json(work, car, tune_id):
-    return dict(tune.garage_choices(work, car, tune_id), car=car, tune=tune_id)
+def garage_json(work, car_id, tune_id):
+    return dict(tune.garage_choices(work, car_id, tune_id), car=car_id, tune=tune_id)
 
 
-def api_garage(car, tune_id):
+def api_garage(car_id, tune_id):
     work = CONFIG["work"]
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            return garage_json(work, car, tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return garage_json(work, car_id, tune_id)
 
 
-def api_garage_set(car, body):
+def api_garage_set(car_id, body):
     work, tune_id, keys = CONFIG["work"], body.get("tune"), body.get("keys")
     refuse_while_job_runs()
     if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
         raise ApiError(400, "need keys (a list of text)")
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            result = tune.set_garage(work, car, keys, tune_id)
-            return {"result": result, "garage": garage_json(work, car, tune_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        result = tune.set_garage(work, car_id, keys, tune_id)
+        return {"result": result, "garage": garage_json(work, car_id, tune_id)}
 
 
-def api_garage_reset(car, body):
+def api_garage_reset(car_id, body):
     work, tune_id = CONFIG["work"], body.get("tune")
     refuse_while_job_runs()
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            res = tune.reset_garage(work, car, tune_id)
-            return {"removed": res["removed"], "garage": garage_json(work, car, tune_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        res = tune.reset_garage(work, car_id, tune_id)
+        return {"removed": res["removed"], "garage": garage_json(work, car_id, tune_id)}
 
 
-def turbo_json(work, car, tune_id):
-    return dict(tune.turbo_choice(work, car, tune_id), car=car, tune=tune_id)
+def turbo_json(work, car_id, tune_id):
+    return dict(tune.turbo_choice(work, car_id, tune_id), car=car_id, tune=tune_id)
 
 
-def api_turbo(car, tune_id):
+def api_turbo(car_id, tune_id):
     work = CONFIG["work"]
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            return turbo_json(work, car, tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return turbo_json(work, car_id, tune_id)
 
 
-def api_turbo_set(car, body):
+def api_turbo_set(car_id, body):
     work, tune_id, donor = CONFIG["work"], body.get("tune"), body.get("donor")
     refuse_while_job_runs()
     if not isinstance(donor, str):
         raise ApiError(400, "need donor (text)")
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            result = tune.set_turbo(work, car, donor, tune_id)
-            sounds, sound_link = turbo_sound_link(work, car, donor, tune_id)
-            return {"result": result, "turbo": turbo_json(work, car, tune_id), "sounds": sounds, "sound_link": sound_link}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        result = tune.set_turbo(work, car_id, donor, tune_id)
+        sounds, sound_link = turbo_sound_link(work, car_id, donor, tune_id)
+        return {"result": result, "turbo": turbo_json(work, car_id, tune_id), "sounds": sounds, "sound_link": sound_link}
 
 
-def turbo_sound_link(work, car, donor, tune_id):
+def turbo_sound_link(work, car_id, donor, tune_id):
     try:
         key = tune.sound_own(work, donor)["turbo"]
         if key is None:
             return None, None
-        view = tune.set_sound(work, car, "turbo", key, tune_id)
+        view = tune.set_sound(work, car_id, "turbo", key, tune_id)
     except ValueError as e:
         return None, {"error": str(e)}
-    return dict(view, car=car, tune=tune_id), {"slot": "turbo", "key": key}
+    return dict(view, car=car_id, tune=tune_id), {"slot": "turbo", "key": key}
 
 
-def api_turbo_reset(car, body):
+def api_turbo_reset(car_id, body):
     work, tune_id = CONFIG["work"], body.get("tune")
     refuse_while_job_runs()
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            res = tune.reset_turbo(work, car, tune_id)
-            return {"removed": res["removed"], "turbo": turbo_json(work, car, tune_id)}
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        res = tune.reset_turbo(work, car_id, tune_id)
+        return {"removed": res["removed"], "turbo": turbo_json(work, car_id, tune_id)}
 
 
-def sounds_json(work, car, tune_id):
-    return dict(tune.sound_choices(work, car, tune_id), car=car, tune=tune_id)
+def sounds_json(work, car_id, tune_id):
+    return dict(tune.sound_choices(work, car_id, tune_id), car=car_id, tune=tune_id)
 
 
-def api_sounds(car, tune_id):
+def api_sounds(car_id, tune_id):
     work = CONFIG["work"]
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            return sounds_json(work, car, tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return sounds_json(work, car_id, tune_id)
 
 
-def api_sound_set(car, body):
+def api_sound_set(car_id, body):
     work, tune_id, slot, key = CONFIG["work"], body.get("tune"), body.get("slot"), body.get("key")
     refuse_while_job_runs()
     if not isinstance(slot, str) or not slot.strip() or not (key is None or isinstance(key, str)):
         raise ApiError(400, "need slot (text) and key (text or null)")
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            return dict(tune.set_sound(work, car, slot, key, tune_id), car=car, tune=tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return dict(tune.set_sound(work, car_id, slot, key, tune_id), car=car_id, tune=tune_id)
 
 
-def api_sound_reset(car, body):
+def api_sound_reset(car_id, body):
     work, tune_id, slot = CONFIG["work"], body.get("tune"), body.get("slot")
     refuse_while_job_runs()
     if slot is not None and not isinstance(slot, str):
         raise ApiError(400, "slot must be text")
-    require_base(work, car)
-    with STATE_LOCK:
-        try:
-            tune.reset_sounds(work, car, tune_id, slot)
-            return sounds_json(work, car, tune_id)
-        except ValueError as e:
-            raise ApiError(400, str(e)) from None
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        tune.reset_sounds(work, car_id, tune_id, slot)
+        return sounds_json(work, car_id, tune_id)
 
 
 def log_config_json(chan, config):
     return {"rate_hz": config["rate_hz"], "rates": list(logconf.RATES), "groups": logconf.tree(chan, tune.load_catalogue(), config)}
 
 
-def api_log_config(car, tune_id):
+def api_log_config(car_id, tune_id):
     chan = logconf.load_channels()
     return log_config_json(chan, logconf.load_config(CONFIG["work"], chan))
 
 
-def api_log_config_set(car, body):
+def api_log_config_set(car_id, body):
     work, ticked, rate = CONFIG["work"], body.get("ticked"), body.get("rate_hz")
     if not isinstance(ticked, list) or not all(isinstance(i, str) for i in ticked) or type(rate) is not int:
         raise ApiError(400, "need ticked (a list of text) and rate_hz (a number)")
     chan = logconf.load_channels()
-    try:
+    with bad_input():
         config = logconf.save_config(work, {"version": logconf.VERSION, "rate_hz": rate, "ticked": ticked}, chan)
-    except ValueError as e:
-        raise ApiError(400, str(e)) from None
     return log_config_json(chan, config)
 
 
-def api_log_config_reset(car, body):
+def api_log_config_reset(car_id, body):
     chan = logconf.load_channels()
     return log_config_json(chan, logconf.reset_config(CONFIG["work"], chan))
 
 
-def api_log_sessions(car, tune_id):
+def api_log_sessions(car_id, tune_id):
     return {"sessions": logconf.list_sessions(logs_dir())}
 
 
-def api_log_status(car, tune_id):
+def api_log_status(car_id, tune_id):
     return logconf.logger_status(logs_dir())
 
 
-def api_log_ai_command(car, tune_id):
+def api_log_ai_command(car_id, tune_id):
     text = logconf.ai_command(logconf.load_channels(), tune.load_catalogue(), logconf.load_glossary(), logconf.load_ai_template())
     return {"text": text, "size": len(text.encode("utf-8"))}
 
@@ -853,7 +807,7 @@ def log_file_path(name):
     return path
 
 
-def api_log_file(car, tune_id, query):
+def api_log_file(car_id, tune_id, query):
     name = (urllib.parse.parse_qs(query).get("file") or [None])[0]
     if name is None:
         raise ApiError(400, "need file (text)")
@@ -880,7 +834,7 @@ def copy_file_to_clipboard(path):
         raise ApiError(500, (res.stderr or "").strip() or "PowerShell failed with exit code %d" % res.returncode)
 
 
-def api_log_copy(car, body):
+def api_log_copy(car_id, body):
     name = body.get("file")
     path = log_file_path(name)
     if sys.platform != "win32":
@@ -902,7 +856,7 @@ def spawn_logger(work, mods, logs):
     return proc.pid
 
 
-def api_logger_start(car, body):
+def api_logger_start(car_id, body):
     if sys.platform != "win32":
         raise ApiError(400, "the logger needs Windows")
     logs = logs_dir()
@@ -913,7 +867,7 @@ def api_logger_start(car, body):
         return {"started": True, "pid": spawn_logger(CONFIG["work"], mods_dir(), logs)}
 
 
-def api_logger_stop(car, body):
+def api_logger_stop(car_id, body):
     logs = logs_dir()
     if not logconf.logger_status(logs)["running"]:
         raise ApiError(409, "the logger is not running")
@@ -926,19 +880,17 @@ def request_car(value, query):
         value = (urllib.parse.parse_qs(query).get("car") or [None])[0]
     if value is not None and not isinstance(value, str):
         raise ApiError(400, "car must be text")
-    try:
+    with bad_input():
         return tune.pick_car(tune.load_cars(), value, tune.load_cars_index(CONFIG["work"], CONFIG["game"]))
-    except ValueError as e:
-        raise ApiError(400, str(e)) from None
 
 
-def request_tune(value, query, car):
+def request_tune(value, query, car_id):
     if value is None:
         value = (urllib.parse.parse_qs(query).get("tune") or [None])[0]
     if value is not None and not isinstance(value, str):
         raise ApiError(400, "tune must be text")
-    if value is not None and value != tune.DRAFT and value not in [t["id"] for t in tune.list_tunes(CONFIG["work"], car)]:
-        raise ApiError(400, "unknown modded car %s of %s" % (value, car))
+    if value is not None and value != tune.DRAFT and value not in [t["id"] for t in tune.list_tunes(CONFIG["work"], car_id)]:
+        raise ApiError(400, "unknown modded car %s of %s" % (value, car_id))
     return value
 
 
@@ -969,7 +921,7 @@ def private_ip(text):
 def check_host(host):
     name, colon, port = (host or "").lower().rpartition(":")
     if not colon or port != str(CONFIG["port"]) or not (name == "localhost" or private_ip(name) or name == socket.gethostname().lower()):
-        raise ApiError(403, "forbidden host")
+        raise ApiError(403, "forbidden host: open the tuner with the address the console prints (http://<address of the PC>:%d%s/)" % (CONFIG["port"], BASE_PATH))
 
 
 # only private networks may connect, even though the server listens on every address of the PC
@@ -1092,13 +1044,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
             raise ApiError(403, "the file can only be copied on the PC where the tuner runs")
         if method == "POST":
             body = self.read_body()
-            car = request_car(body.get("car"), query)
-            body["tune"] = request_tune(body.get("tune"), query, car)
-            payload = route(car, body)
+            car_id = request_car(body.get("car"), query)
+            body["tune"] = request_tune(body.get("tune"), query, car_id)
+            payload = route(car_id, body)
         else:
-            car = request_car(None, query)
-            tune_id = request_tune(None, query, car)
-            payload = route(car, tune_id, query) if path in QUERY_ROUTES else route(car, tune_id)
+            car_id = request_car(None, query)
+            tune_id = request_tune(None, query, car_id)
+            payload = route(car_id, tune_id, query) if path in QUERY_ROUTES else route(car_id, tune_id)
         return (202 if path in ACCEPTED else 200), payload
 
     def handle_request(self, method):
@@ -1194,6 +1146,13 @@ def print_urls(bind, port):
             print("reachable in the home network: http://%s:%d%s/" % (address, port, BASE_PATH), flush=True)
 
 
+def listen(bind, port):
+    try:
+        return Server((bind, port), Handler)
+    except OSError as e:
+        sys.exit("error: cannot listen on %s:%d (%s); is the tuner already running? use --port N" % (bind, port, e))
+
+
 def main():
     try:
         pos, opts = kspkg.parse_args(sys.argv[1:], ("port", "bind", "work", "mods", "logs", "game"))
@@ -1213,7 +1172,7 @@ def main():
             print("moved the old single-car layout of %s into %s: %s" % (
                 CONFIG["work"], tune.car_work(CONFIG["work"], default_car), ", ".join(moved)))
         bind = opts.get("bind", DEFAULT_BIND)
-        server = Server((bind, port), Handler)
+        server = listen(bind, port)
         tune.load_cars_index(CONFIG["work"], CONFIG["game"])
     except (ValueError, OSError) as e:
         sys.exit("error: %s" % e)

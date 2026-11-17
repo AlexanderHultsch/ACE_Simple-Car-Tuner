@@ -629,18 +629,18 @@ class TestHostAndHeaders(ServerCase):
                 self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
 
     def test_private_hosts_with_the_port_and_the_machine_name_are_accepted(self):
-        with mock.patch.object(ts.socket, "gethostname", return_value="Alex-PC"):
+        with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"):
             for host in ("localhost:%d", "127.0.0.1:%d", "127.1.2.3:%d", "192.168.1.20:%d", "10.0.0.5:%d", "172.16.0.1:%d", "172.31.255.1:%d",
-                         "Alex-PC:%d", "ALEX-PC:%d", "alex-pc:%d"):
+                         "MyPC:%d", "MYPC:%d", "mypc:%d"):
                 with self.subTest(host):
                     self.assertEqual(self.get("/api/state", host=host % self.port).status, 200)
 
     def test_other_hosts_are_403_with_the_machine_name_set(self):
-        with mock.patch.object(ts.socket, "gethostname", return_value="Alex-PC"):
-            for host in ("localhost:%d" % (self.port + 1), "192.168.1.20:%d" % (self.port + 1), "192.168.1.20", "Alex-PC", "Alex-PC:%d" % (self.port + 1),
+        with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"):
+            for host in ("localhost:%d" % (self.port + 1), "192.168.1.20:%d" % (self.port + 1), "192.168.1.20", "MyPC", "MyPC:%d" % (self.port + 1),
                          "evil.example:%d" % self.port, "8.8.8.8:%d" % self.port, "172.32.0.1:%d" % self.port, "100.64.0.1:%d" % self.port,
-                         "[::1]:%d" % self.port, "192.168.1.20.evil.example:%d" % self.port, "Alex-PC.evil.example:%d" % self.port,
-                         "Alex-PC.local:%d" % self.port, "other-pc:%d" % self.port, "0.0.0.0:%d" % self.port, ":%d" % self.port):
+                         "[::1]:%d" % self.port, "192.168.1.20.evil.example:%d" % self.port, "MyPC.evil.example:%d" % self.port,
+                         "MyPC.local:%d" % self.port, "other-pc:%d" % self.port, "0.0.0.0:%d" % self.port, ":%d" % self.port):
                 with self.subTest(host):
                     r = self.get("/api/state", host=host)
                     self.assertEqual((r.status, r.json), (403, {"error": "forbidden host"}))
@@ -2999,9 +2999,9 @@ class TestLogsDir(Env):
     def test_the_option_value_is_expanded_and_made_absolute(self):
         ts.CONFIG["logs"] = os.path.join("rel", "logs")
         self.assertEqual(ts.logs_dir(), os.path.abspath(os.path.join("rel", "logs")))
-        ts.CONFIG["logs"] = "%ACE_TEST_LOGS_VAR%/l"
+        ts.CONFIG["logs"] = "%ACE_TEST_LOGS_VAR%/l" if os.name == "nt" else "$ACE_TEST_LOGS_VAR/l"
         with mock.patch.dict(os.environ, {"ACE_TEST_LOGS_VAR": "C:\\scratch" if os.name == "nt" else "/scratch"}):
-            self.assertEqual(ts.logs_dir(), os.path.abspath(os.path.expandvars("%ACE_TEST_LOGS_VAR%/l")))
+            self.assertEqual(ts.logs_dir(), os.path.abspath(os.path.expandvars(ts.CONFIG["logs"])))
 
     def test_without_the_option_it_is_the_logs_folder_of_the_repository(self):
         ts.CONFIG["logs"] = None
@@ -4658,16 +4658,16 @@ class TestHelpers(Env):
 
     def test_check_host_accepts_localhost_private_addresses_and_the_machine_name(self):
         ts.CONFIG["port"] = 8080
-        with mock.patch.object(ts.socket, "gethostname", return_value="Alex-PC"):
-            for host in ("localhost:8080", "127.0.0.1:8080", "192.168.1.20:8080", "10.0.0.5:8080", "172.16.0.1:8080", "Alex-PC:8080", "alex-pc:8080"):
+        with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"):
+            for host in ("localhost:8080", "127.0.0.1:8080", "192.168.1.20:8080", "10.0.0.5:8080", "172.16.0.1:8080", "MyPC:8080", "mypc:8080"):
                 with self.subTest(host):
                     ts.check_host(host)
 
     def test_check_host_refuses_everything_else(self):
         ts.CONFIG["port"] = 8080
-        with mock.patch.object(ts.socket, "gethostname", return_value="Alex-PC"):
-            for host in (None, "", "192.168.1.20", "Alex-PC", "192.168.1.20:8081", "192.168.1.20:80800", "192.168.1.20:", "evil.example:8080",
-                         "8.8.8.8:8080", "[::1]:8080", "192.168.1.20.evil.example:8080", "Alex-PC.local:8080", "172.32.0.1:8080",
+        with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"):
+            for host in (None, "", "192.168.1.20", "MyPC", "192.168.1.20:8081", "192.168.1.20:80800", "192.168.1.20:", "evil.example:8080",
+                         "8.8.8.8:8080", "[::1]:8080", "192.168.1.20.evil.example:8080", "MyPC.local:8080", "172.32.0.1:8080",
                          "100.64.0.1:8080", "0.0.0.0:8080", ":8080", "1:8080"):
                 with self.subTest(host), self.assertRaises(ts.ApiError) as cm:
                     ts.check_host(host)
@@ -4710,7 +4710,7 @@ class TestHelpers(Env):
         return probe
 
     def lan(self, infos, probe):
-        with mock.patch.object(ts.socket, "gethostname", return_value="Alex-PC"), \
+        with mock.patch.object(ts.socket, "gethostname", return_value="MyPC"), \
                 mock.patch.object(ts.socket, "getaddrinfo", **infos) as lookup, \
                 mock.patch.object(ts.socket, "socket", return_value=probe) as make:
             found = ts.lan_addresses()
@@ -4724,7 +4724,7 @@ class TestHelpers(Env):
         found, lookup, make = self.lan(self.infos("192.168.1.20", "127.0.0.1", "8.8.8.8", "192.168.1.20", "169.254.3.4", "100.64.0.1", "10.0.0.7",
                                                   "0.0.0.0"), probe)
         self.assertEqual(found, ["192.168.1.20", "169.254.3.4", "10.0.0.7"])
-        lookup.assert_called_once_with("Alex-PC", None, ts.socket.AF_INET)
+        lookup.assert_called_once_with("MyPC", None, ts.socket.AF_INET)
 
     def test_lan_addresses_asks_the_routing_table_with_a_udp_connect_and_sends_nothing(self):
         probe = self.probe_socket(("192.168.1.20", 5555))

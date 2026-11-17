@@ -604,7 +604,7 @@ class TestGameProcessStart(unittest.TestCase):
         self.assertEqual(logfacts.game_process_start.__defaults__, ((tune.GAME_EXE,),))
         self.assertEqual(tune.GAME_EXE, "AssettoCorsaEVO.exe")
 
-    @unittest.skipUnless(ctypes.sizeof(ctypes.c_void_p) == 8, "the 64-bit layout")
+    @unittest.skipUnless(ctypes.sizeof(ctypes.c_void_p) == 8 and ctypes.sizeof(ctypes.c_wchar) == 2, "the 64-bit Windows layout (wchar_t is 4 bytes elsewhere)")
     def test_the_process_entry_has_the_size_of_the_win32_structure(self):
         self.assertEqual(ctypes.sizeof(logfacts.ProcessEntry), 568)
         self.assertEqual(logfacts.ProcessEntry.szExeFile.offset, 44)

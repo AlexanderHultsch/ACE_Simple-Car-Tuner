@@ -996,6 +996,10 @@ class FakeLogger:
 class TestMain(unittest.TestCase):
     def setUp(self):
         FakeLogger.made, FakeLogger.facts, FakeLogger.error = [], [], None
+        if os.name != "nt":
+            for patch in (mock.patch.dict(os.environ, {"USERPROFILE": os.path.abspath("profile")}), mock.patch.object(os.path, "expandvars", ntpath.expandvars)):
+                patch.start()
+                self.addCleanup(patch.stop)
         patch = mock.patch.object(logger, "Logger", FakeLogger)
         patch.start()
         self.addCleanup(patch.stop)
@@ -1039,7 +1043,7 @@ class TestMain(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(FakeLogger.made, [(expected_work, os.path.abspath(logconf.default_logs_dir()))])
         self.assertEqual(os.path.basename(FakeLogger.made[0][1]), "logs")
-        self.assertEqual(os.path.basename(FakeLogger.made[0][0]), "ace_modded_cars_work")
+        self.assertEqual(ntpath.basename(FakeLogger.made[0][0]), "ace_modded_cars_work")
 
     def test_variables_in_the_options_are_expanded(self):
         with mock.patch.dict(os.environ, {"ACET_LOG_VAR": os.path.abspath("scratch")}), mock.patch.object(os.path, "expandvars", ntpath.expandvars):
@@ -1091,7 +1095,7 @@ class TestMain(unittest.TestCase):
             expected = clone_car.expand(clone_car.DEFAULT_MODS)
         self.assertEqual(code, 0)
         self.assertEqual(make.call_args.args[1], expected)
-        self.assertEqual(os.path.basename(expected), "mods")
+        self.assertEqual(ntpath.basename(expected), "mods")
         self.assertNotIn("%", expected)
 
     def test_the_facts_of_the_logger_are_the_function_of_logfacts(self):
@@ -1106,7 +1110,7 @@ class TestMain(unittest.TestCase):
         code, out, err = run_main("--mods", "%ACET_NO_SUCH_VAR%/m")
         self.assertTrue(code.startswith("error: cannot expand the mods directory"), code)
         self.assertEqual((out, FakeLogger.made), ("", []))
-        r = run_tool("logger.py", "--mods", "%ACET_NO_SUCH_VAR%/m")
+        r = run_tool("logger.py", "--work", "w", "--mods", "%ACET_NO_SUCH_VAR%/m")
         self.assertEqual((r.returncode, r.stdout), (1, ""))
         self.assertTrue(r.stderr.startswith("error: cannot expand the mods directory"), r.stderr)
 

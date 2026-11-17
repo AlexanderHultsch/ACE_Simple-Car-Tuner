@@ -240,7 +240,7 @@ class TestApiContract(unittest.TestCase):
                 self.assertNotRegex(CODE, r'api\("%s", undefined' % route)
 
     def test_api_requests_are_relative_to_the_page_below_the_base_path(self):
-        self.assertIn('res = await fetch(path.replace(/^\//, ""), opts);', function_body("api"))
+        self.assertIn(r'res = await fetch(path.replace(/^\//, ""), opts);', function_body("api"))
         self.assertEqual(re.findall(r"\bfetch\((\w+)", CODE), ["path"])
         self.assertEqual(re.findall(r"\b(?:href|src|action)\s*=|EventSource|location\.(?!hostname\b)|window\.open|<(?:a|link|img|form|iframe)\b", re.sub(r'<link rel="[a-z-]+"[^>]*>', "", HTML)), [])
 

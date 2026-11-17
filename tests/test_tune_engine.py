@@ -3097,7 +3097,7 @@ class TestMakeSnapshot(Base):
         kit = {"donor": "ks_b", "kind": "twin turbo", "files": [], "fields": [], "inline_fields": [], "stamp": []}
         garage = {"entries": [{"key": "own:fast", "label": "Fast"}, {"key": "stock:a|b", "label": "A"}]}
         sounds = [{"slot": "turbo", "option": {"key": T_RX7_EVENT}, "template": {}}, {"slot": "backfire", "option": {"key": B_EVENT}, "template": {}}]
-        with mock.patch.object(tune, "list_turbo_donors", lambda work: donors):
+        with mock.patch.object(tune, "turbo_donor", lambda work, car_id, names: donors[0] if car_id == "ks_b" else None):
             data = tune.make_snapshot(self.work, self.plan(kit, garage, sounds), [], "n")
         self.assertEqual((data["kit"], data["garage"], data["sounds"]), (
             {"donor": "ks_b", "label": "Twin B", "kind": "twin turbo", "boost": [1.0, 1.2]}, GARAGE_AB,
@@ -3106,7 +3106,7 @@ class TestMakeSnapshot(Base):
 
     def test_a_donor_that_is_not_listed_any_more_keeps_its_id_as_the_label(self):
         kit = {"donor": "ks_gone", "kind": "single turbo"}
-        with mock.patch.object(tune, "list_turbo_donors", lambda work: []):
+        with mock.patch.object(tune, "turbo_donor", lambda work, car_id, names: None):
             data = tune.make_snapshot(self.work, self.plan(kit), [], "n")
         self.assertEqual(data["kit"], {"donor": "ks_gone", "label": "ks_gone", "kind": "single turbo", "boost": []})
         self.assertTrue(tune.valid_snapshot(data))

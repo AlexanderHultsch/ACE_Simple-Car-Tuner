@@ -1,4 +1,4 @@
-"""Tests for the turbo kit of tools/tune.py: the "_turbo" state key, turbo_parts, turbo_kind, list_turbo_donors, turbo_choice, set_turbo, reset_turbo and the commands turbo-donors, turbo-add and turbo-remove.
+"""Tests for the turbo kit of tools/tune.py: the "_turbo" state key, turbo_listing, has_turbo, turbo_kind, list_turbo_donors, turbo_choice, set_turbo, reset_turbo and the commands turbo-donors, turbo-add and turbo-remove.
 
 No game data and no schemas: the cars are synthetic (support.FakeCar replaces tune.load_msg / save_msg with in-memory messages, one shared store for all fake cars); the commands run in-process on those cars, and as a subprocess where nothing decodes a car file (usage, no cars).
 """
@@ -37,6 +37,7 @@ class World(unittest.TestCase):
         cm = tmp()
         self.d = cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
+        self.addCleanup(tune._donor_listings.clear)
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": c, "label": "Car " + c} for c in ("ks_x", "ks_n", "ks_a", "ks_b", "ks_c", "ks_m", "ks_u")]}
         self.patch(tune, "load_cars", lambda path=None: data)
@@ -95,10 +96,27 @@ class World(unittest.TestCase):
             shutil.rmtree(tune.base_dir(self.work, car_id))
 
     def parts(self, car_id, cache=None):
-        return tune.turbo_parts(tune.base_dir(self.work, car_id), car_id, cache)
+        found = tune.turbo_listing(tune.base_dir(self.work, car_id), car_id, cache)
+        return {k: found[k] for k in ("files", "boost", "count")}
 
     def listing(self, car_id):
         return tune.turbo_listing(tune.base_dir(self.work, car_id), car_id)
+
+    @contextlib.contextmanager
+    def loads(self):
+        """The car ids of the files tune.load_msg decodes inside the block, in order."""
+        found, real = [], tune.load_msg
+
+        def counting(path):
+            found.append(os.path.relpath(path, self.work).split(os.sep)[0])
+            return real(path)
+
+        with mock.patch.object(tune, "load_msg", counting):
+            yield found
+
+    def touch(self, car_id, rel="data/engine.carengine"):
+        with open(os.path.join(self.fakes[car_id].car_root, *rel.split("/")), "ab") as f:
+            f.write(b"x")
 
     def engine_of(self, car_id):
         fc = self.fakes[car_id]
@@ -371,11 +389,12 @@ class TestTurboBoostSources(World):
         del engine["max_turbo_boost"]
         self.assertEqual(self.listing("ks_a")["boost_ref"], None)
 
-    def test_boost_ref_is_not_part_of_turbo_parts(self):
+    def test_boost_ref_is_not_part_of_the_turbo_boost(self):
         self.turbo_file("ks_a").clear()
         del self.engine_of("ks_a")["turbos"]
         self.engine_of("ks_a")["max_turbo_boost"] = 1.2
         self.assertEqual(self.parts("ks_a"), {"files": ["data/t0.turbo"], "boost": [], "count": 1})
+        self.assertEqual(self.listing("ks_a")["boost_ref"], 1.2)
 
     def test_list_turbo_donors_and_set_turbo_carry_boost_ref(self):
         self.turbo_file("ks_a").clear()
@@ -439,12 +458,156 @@ class TestListDonors(World):
         self.assertEqual(sorted(os.walk(self.work)), before)
 
 
+class TestHasTurbo(World):
+    def test_a_car_whose_engine_lists_a_turbo_file_has_a_turbo(self):
+        root = lambda car_id: tune.base_dir(self.work, car_id)
+        self.assertEqual([tune.has_turbo(root(c), c) for c in ("ks_x", "ks_a", "ks_b", "ks_m")], [False, True, True, True])
+
+    def test_an_engine_that_cannot_be_read_or_a_missing_base_has_none(self):
+        self.assertEqual([tune.has_turbo(tune.base_dir(self.work, c), c) for c in ("ks_u", "ks_z", "ks_none")], [False, False, False])
+
+    def test_the_cache_of_the_decoded_files_is_used(self):
+        cache = {}
+        self.assertTrue(tune.has_turbo(tune.base_dir(self.work, "ks_a"), "ks_a", cache))
+        with self.loads() as found:
+            self.assertTrue(tune.has_turbo(tune.base_dir(self.work, "ks_a"), "ks_a", cache))
+        self.assertEqual(found, [])
+
+
+class TestDonorCache(World):
+    def setUp(self):
+        super().setUp()
+        self.drop_base("ks_u", "ks_m")
+
+    def warm_up(self):
+        with self.loads() as cold:
+            donors = tune.list_turbo_donors(self.work)
+        return donors, cold
+
+    def test_the_second_call_decodes_nothing_and_returns_an_equal_result(self):
+        donors, cold = self.warm_up()
+        with self.loads() as warm:
+            again = tune.list_turbo_donors(self.work)
+        self.assertEqual((sorted(set(cold)), warm, again), (["ks_a", "ks_b", "ks_c", "ks_n", "ks_x"], [], donors))
+
+    def test_the_caller_gets_its_own_copy(self):
+        donors, _ = self.warm_up()
+        donors[0]["boost"].append(9.0)
+        tune.donor_listing(self.work, "ks_b")["files"].append("data/zzz")
+        self.assertEqual(tune.list_turbo_donors(self.work)[0]["boost"], [1.0, 1.2])
+        self.assertEqual(tune.donor_listing(self.work, "ks_b")["files"], ["data/t0.turbo", "data/t1.turbo"])
+
+    def test_a_changed_engine_file_is_decoded_again_and_only_that_car(self):
+        self.warm_up()
+        self.turbo_file("ks_b")["max_boost"] = 0.5
+        self.turbo_file("ks_b", "t1.turbo")["max_boost"] = 0.2
+        with self.loads() as warm:
+            self.assertEqual(tune.donor_listing(self.work, "ks_b")["boost"], [1.0, 1.2])
+        self.assertEqual(warm, [])
+        self.touch("ks_b")
+        with self.loads() as warm:
+            donors = tune.list_turbo_donors(self.work)
+        self.assertEqual((sorted(set(warm)), [d["boost"] for d in donors if d["car"] == "ks_b"]), (["ks_b"], [[0.5, 0.2]]))
+
+    def test_a_changed_turbo_file_or_car_file_is_decoded_again(self):
+        self.warm_up()
+        self.turbo_file("ks_a")["max_boost"] = 0.4
+        self.touch("ks_a", "data/t0.turbo")
+        with self.loads() as warm:
+            boost = [d["boost"] for d in tune.list_turbo_donors(self.work) if d["car"] == "ks_a"]
+        self.assertEqual((sorted(set(warm)), boost), (["ks_a"], [[0.4]]))
+        self.touch("ks_a", "data/ks_a.car")
+        with self.loads() as warm:
+            tune.list_turbo_donors(self.work)
+        self.assertEqual(sorted(set(warm)), ["ks_a"])
+
+    def test_a_second_car_file_of_the_car_is_noticed(self):
+        self.warm_up()
+        self.fakes["ks_a"].add("data/ks_zz.car", {"engine_path": self.fakes["ks_a"].game_path("data/engine.carengine")})
+        self.assertEqual(self.donor_ids(), ["ks_b", "ks_c"])
+
+    def test_forget_resolved_drops_the_listing_of_that_car_only(self):
+        self.warm_up()
+        tune.forget_resolved(self.work, "ks_c")
+        with self.loads() as warm:
+            tune.list_turbo_donors(self.work)
+        self.assertEqual(sorted(set(warm)), ["ks_c"])
+        with self.loads() as warm:
+            tune.list_turbo_donors(self.work)
+        self.assertEqual(warm, [])
+
+    def test_a_donor_that_loses_a_turbo_file_or_its_base_is_no_donor_any_more(self):
+        self.warm_up()
+        os.remove(os.path.join(self.fakes["ks_b"].car_root, "data", "t1.turbo"))
+        self.assertEqual(self.donor_ids(), ["ks_a", "ks_c"])
+        self.drop_base("ks_a")
+        self.assertEqual(self.donor_ids(), ["ks_c"])
+
+    def test_a_listing_that_failed_is_never_cached(self):
+        self.add_car("ks_u", ["t0.turbo"], [1.0])
+        u = self.fakes["ks_u"]
+        u.store[u.key(os.path.join(u.car_root, "data", "engine.carengine"))] = ValueError("cannot decode")
+        self.assertEqual(self.listing("ks_u")["count"], 0)
+        for _ in range(2):
+            with self.loads() as found:
+                self.assertEqual(tune.donor_listing(self.work, "ks_u")["count"], 0)
+            self.assertEqual(sorted(set(found)), ["ks_u"])
+        u.store[u.key(os.path.join(u.car_root, "data", "engine.carengine"))] = {"limiter": 7000, "turbos_to_load": [u.game_path("data/t0.turbo")]}
+        self.assertEqual(tune.donor_listing(self.work, "ks_u")["count"], 1)
+
+    def test_a_listing_with_a_missing_turbo_file_is_never_cached(self):
+        self.add_car("ks_m", ["t0.turbo", "t1.turbo"], [1.0, 1.0], present=["t0.turbo"])
+        for _ in range(2):
+            with self.loads() as found:
+                self.assertEqual(tune.donor_listing(self.work, "ks_m")["missing"], ["data/t1.turbo"])
+            self.assertTrue(found)
+        self.fakes["ks_m"].add("data/t1.turbo", {"max_boost": 1.0})
+        self.assertEqual(tune.donor_listing(self.work, "ks_m")["missing"], [])
+
+    def test_a_car_that_cannot_be_stamped_is_not_cached(self):
+        self.patch(tune, "resolve_stamp", lambda work, car_id, root=None: None)
+        self.warm_up()
+        with self.loads() as warm:
+            tune.list_turbo_donors(self.work)
+        self.assertEqual(sorted(set(warm)), ["ks_a", "ks_b", "ks_c", "ks_n", "ks_x"])
+
+    def test_the_listing_is_the_uncached_one(self):
+        for car_id in ("ks_x", "ks_a", "ks_b", "ks_c"):
+            for _ in range(2):
+                self.assertEqual(tune.donor_listing(self.work, car_id), self.listing(car_id))
+
+    def test_set_turbo_decodes_the_files_of_the_car_and_of_the_donor_only(self):
+        with self.loads() as found:
+            tune.set_turbo(self.work, "ks_x", "ks_b")
+        self.assertEqual(sorted(set(found)), ["ks_b", "ks_x"])
+        self.assertEqual(len(found), 2 + 4)
+
+    def test_check_kit_and_make_snapshot_decode_the_files_of_one_donor_only(self):
+        kit = {"donor": "ks_b", "kind": "twin turbo", "files": [], "fields": [], "inline_fields": [], "stamp": []}
+        with self.loads() as found:
+            tune.check_kit(self.work, "ks_x", "ks_b")
+        self.assertEqual(sorted(set(found)), ["ks_b", "ks_x"])
+        with self.loads() as found:
+            data = tune.make_snapshot(self.work, {"kit": kit, "garage": None, "sounds": []}, [], "n")
+        self.assertEqual((found, data["kit"]), ([], {"donor": "ks_b", "label": "Alpha", "kind": "twin turbo", "boost": [1.0, 1.2]}))
+
+    def test_a_donor_that_is_not_a_car_folder_id_is_none(self):
+        self.assertIsNone(tune.turbo_donor(self.work, "KS_B", {}))
+        self.assertIsNone(tune.turbo_donor(self.work, "../ks_b", {}))
+        self.assertEqual(tune.turbo_donor(self.work, "ks_b", {})["car"], "ks_b")
+
+
 class TestTurboChoice(World):
+    def test_has_turbo_tells_whether_the_car_has_a_turbo_itself(self):
+        self.assertIs(tune.turbo_choice(self.work, "ks_x")["has_turbo"], False)
+        res = tune.turbo_choice(self.work, "ks_a")
+        self.assertEqual((res["has_turbo"], res["available"], res["reason"]), (True, False, "the car has a turbo already"))
+
     def test_a_car_without_a_turbo_can_choose_among_the_other_donors(self):
         res = tune.turbo_choice(self.work, "ks_x")
         self.assertEqual((res["donor"], res["available"], res["reason"], res["picked"]), (None, True, "", None))
         self.assertEqual([d["car"] for d in res["donors"]], ["ks_b", "ks_a", "ks_c"])
-        self.assertEqual(set(res), {"donor", "available", "reason", "donors", "picked"})
+        self.assertEqual(set(res), {"donor", "available", "reason", "donors", "picked", "has_turbo"})
         self.assertEqual(res["donors"], tune.list_turbo_donors(self.work))
 
     def test_a_car_with_a_turbo_cannot_and_is_not_its_own_donor(self):

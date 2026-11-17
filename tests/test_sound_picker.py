@@ -70,6 +70,7 @@ class World(unittest.TestCase):
         cm = tmp()
         self.d = cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
+        self.addCleanup(tune._actor_options.clear)
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": c, "label": "Car " + c} for c in ("ks_x", "ks_a", "ks_b", "ks_n", "ks_u", "ks_z", "ks_q")]}
         self.patch(tune, "load_cars", lambda path=None: data)
@@ -118,6 +119,25 @@ class World(unittest.TestCase):
 
     def state(self, tune_id=None, car_id="ks_x"):
         return tune.load_state(self.work, car_id, tune_id)
+
+    @contextlib.contextmanager
+    def loads(self):
+        """The car ids of the files tune.load_msg decodes inside the block, in order."""
+        found, real = [], tune.load_msg
+
+        def counting(path):
+            found.append(os.path.relpath(path, self.work).split(os.sep)[0])
+            return real(path)
+
+        with mock.patch.object(tune, "load_msg", counting):
+            yield found
+
+    def actor_key(self, car_id, name=None):
+        return self.fakes[car_id].key(os.path.join(self.fakes[car_id].car_root, name or "%s.actor" % car_id))
+
+    def touch(self, car_id, name=None):
+        with open(os.path.join(self.fakes[car_id].car_root, name or "%s.actor" % car_id), "ab") as f:
+            f.write(b"x")
 
     def keys(self, options):
         return {slot: [o["key"] for o in found] for slot, found in options.items()}
@@ -266,6 +286,81 @@ class TestSoundOptions(World):
         tune.sound_options(self.work)
         self.assertEqual(self.fakes["ks_x"].saved, [])
         self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x")))
+
+
+class TestSoundOptionsCache(World):
+    def setUp(self):
+        super().setUp()
+        self.cold = tune.sound_options(self.work)
+
+    def test_the_second_call_decodes_only_the_cars_that_failed_and_returns_an_equal_result(self):
+        with self.loads() as warm:
+            again = tune.sound_options(self.work)
+        self.assertEqual((sorted(set(warm)), again), (["ks_u"], self.cold))
+
+    def test_without_the_failing_cars_it_decodes_nothing(self):
+        self.drop_cars("ks_u", "ks_z")
+        options, skipped = tune.sound_options(self.work)
+        with self.loads() as warm:
+            self.assertEqual(tune.sound_options(self.work), (options, skipped))
+        self.assertEqual(warm, [])
+
+    def test_the_caller_gets_its_own_copy(self):
+        options, skipped = tune.sound_options(self.work)
+        options["turbo"][0]["cars"].append("zzz")
+        options["backfire"].clear()
+        skipped.clear()
+        self.assertEqual(tune.sound_options(self.work), self.cold)
+
+    def test_the_cached_audio_entries_are_not_shared_with_the_caller(self):
+        found = tune.actor_sounds(self.work, "ks_x")
+        found["car"]["audio_events"][0]["event"] = "changed"
+        found["car"]["audio_events"].clear()
+        self.assertEqual([e["event"] for e in tune.actor_sounds(self.work, "ks_x")["car"]["audio_events"]], [T_NONE, B_A])
+
+    def test_a_changed_actor_file_is_read_again_and_only_that_car(self):
+        self.fakes["ks_n"].store[self.actor_key("ks_n")] = actor(engine(), turbo("turbo_rx7"), backfire("backfire_a"))
+        with self.loads() as warm:
+            self.assertEqual(tune.sound_options(self.work), self.cold)
+        self.assertEqual(sorted(set(warm)), ["ks_u"])
+        self.touch("ks_n")
+        with self.loads() as warm:
+            options, _ = tune.sound_options(self.work)
+        self.assertEqual((sorted(set(warm)), warm.count("ks_n")), (["ks_n", "ks_u"], 1))
+        self.assertEqual([(o["key"], o["cars"]) for o in options["turbo"]], [(T_NONE, ["ks_x"]), (T_RX7, ["ks_a", "ks_b", "ks_n"])])
+        self.assertEqual([(o["key"], o["cars"]) for o in options["backfire"]], [(B_A, ["ks_b", "ks_n", "ks_x"]), (B_CLASSIC, ["ks_a"])])
+
+    def test_an_actor_file_of_another_name_is_read_again(self):
+        old = os.path.join(self.fakes["ks_b"].car_root, "KS_B.ACTOR")
+        os.rename(old, os.path.join(self.fakes["ks_b"].car_root, "ks_b.actor"))
+        self.fakes["ks_b"].store[self.actor_key("ks_b")] = actor(engine(), turbo("turbo_none"))
+        options, _ = tune.sound_options(self.work)
+        self.assertEqual([(o["key"], o["cars"]) for o in options["turbo"]], [(T_NONE, ["ks_b", "ks_x"]), (T_RX7, ["ks_a"])])
+
+    def test_forget_resolved_drops_the_options_of_that_car_only(self):
+        tune.forget_resolved(self.work, "ks_a")
+        with self.loads() as warm:
+            tune.sound_options(self.work)
+        self.assertEqual(sorted(set(warm)), ["ks_a", "ks_u"])
+
+    def test_a_car_that_failed_is_never_cached(self):
+        for _ in range(2):
+            with self.loads() as warm:
+                self.assertEqual([s["car"] for s in tune.sound_options(self.work)[1]], ["ks_u", "ks_z"])
+            self.assertEqual(warm, ["ks_u"])
+        self.fakes["ks_u"].store[self.actor_key("ks_u")] = actor(engine(), turbo("turbo_rx7"))
+        options, skipped = tune.sound_options(self.work)
+        self.assertEqual(([s["car"] for s in skipped], options["turbo"][1]["cars"]), (["ks_z"], ["ks_a", "ks_b", "ks_u"]))
+
+    def test_a_car_that_cannot_be_stamped_is_not_cached(self):
+        self.patch(tune, "stat_or_none", lambda path: None)
+        with self.loads() as warm:
+            self.assertEqual(tune.sound_options(self.work), self.cold)
+        self.assertEqual(sorted(set(warm)), ["ks_a", "ks_b", "ks_n", "ks_u", "ks_x"])
+
+    def drop_cars(self, *car_ids):
+        for car_id in car_ids:
+            shutil.rmtree(tune.base_dir(self.work, car_id))
 
 
 class TestSoundOwn(World):

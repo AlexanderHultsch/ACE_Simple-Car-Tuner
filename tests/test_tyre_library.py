@@ -479,6 +479,55 @@ class TestSources(World):
         self.assertEqual(tune.list_source_tyres(os.path.join(self.work, "none")), [])
 
 
+class TestRepeatedCompounds(World):
+    def setUp(self):
+        super().setUp()
+        self.a.add("presets/r.compatibletyres", {"physic_compounds": [
+            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": ROAD_B},
+            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": GS + "tyres\\road\\missing.tyre"},
+            {"front_tyre_data_path": SLICK_S, "rear_tyre_data_paths": SLICK_S},
+            {"front_tyre_data_path": GS + "TYRES/ROAD/A.TYRE", "rear_tyre_data_paths": [ROAD_B]},
+            {"front_tyre_data_path": GS + "tyres\\road\\missing.tyre", "rear_tyre_data_paths": ROAD_B},
+            {"front_tyre_data_path": GS + "tyres\\road\\missing.tyre", "rear_tyre_data_paths": ROAD_B}]})
+
+    def test_the_pairs_are_the_first_of_each_in_file_order(self):
+        self.assertEqual(tune.preset_tyre_pairs(self.a.root, "ks_a"), [(ROAD_A, ROAD_B), (SLICK_S, SLICK_S)])
+        self.assertEqual(tune.preset_tyre_pairs(self.b.root, "ks_b"), [(ROAD_A, ROAD_B)])
+
+    def test_a_repeated_pair_is_checked_for_its_files_once(self):
+        real, checked = tune.tyre_present, []
+        self.patch(tune, "tyre_present", lambda root, path: checked.append(path) or real(root, path))
+        tune.preset_tyre_pairs(self.a.root, "ks_a")
+        self.assertEqual(checked, [ROAD_A, ROAD_B, SLICK_S, SLICK_S, ROAD_A, GS + "tyres\\road\\missing.tyre",
+                                   GS + "tyres\\road\\missing.tyre"])
+
+    def test_the_catalogue_is_the_same_as_before(self):
+        self.assertEqual(tune.list_source_tyres(self.work), [
+            {"key": KEY_AB, "front": ROAD_A, "rear": ROAD_B, "label": "tyres\\road\\a + tyres\\road\\b", "cars": ["ks_a", "ks_b"]},
+            {"key": KEY_SS, "front": SLICK_S, "rear": SLICK_S, "label": "tyres\\slick\\s", "cars": ["ks_a"]}])
+
+    def test_source_tyre_is_the_first_car_that_offers_the_pair_and_scans_no_further(self):
+        self.patch(tune, "list_source_tyres", lambda work: self.fail("the whole catalogue was built"))
+        scanned, real = [], tune.preset_tyre_pairs
+        self.patch(tune, "preset_tyre_pairs", lambda root, car_id: scanned.append(car_id) or real(root, car_id))
+        self.assertEqual(tune.source_tyre(self.work, KEY_AB), {"car": "ks_a", "front": ROAD_A, "rear": ROAD_B})
+        self.assertEqual(tune.source_tyre(self.work, KEY_SS), {"car": "ks_a", "front": SLICK_S, "rear": SLICK_S})
+        self.assertEqual(scanned, ["ks_a", "ks_a"])
+
+    def test_source_tyre_skips_a_car_that_cannot_be_read_and_names_an_unknown_key(self):
+        os.remove(os.path.join(self.a.shared, "tyres", "road", "b.tyre"))
+        self.assertEqual(tune.source_tyre(self.work, KEY_AB)["car"], "ks_b")
+        with self.assertRaisesRegex(ValueError, r"^unknown tyre source 'x\|y', tyre-sources lists the tyre pairs of the extracted cars$"):
+            tune.source_tyre(self.work, "x|y")
+
+    def test_tyre_rows_read_the_source_without_the_catalogue(self):
+        tid = self.create()
+        self.patch(tune, "list_source_tyres", lambda work: self.fail("the whole catalogue was built"))
+        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.2)
+        os.remove(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))
+        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.25)
+
+
 class TestRows(World):
     def test_defaults_come_from_the_source_files_of_the_axle(self):
         rows = self.rows(self.create())

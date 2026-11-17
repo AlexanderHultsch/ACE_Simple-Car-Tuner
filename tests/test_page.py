@@ -2003,7 +2003,7 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_page_reads_only_the_fields_of_the_answer_the_server_sends(self):
         source = inspect.getsource(ts.turbo_json)
-        sent = quoted_words(ts.tune.turbo_choice, ts.tune.list_turbo_donors, ts.turbo_json) | set(re.findall(r"\b(\w+)=", source))
+        sent = quoted_words(ts.tune.turbo_choice, ts.tune.turbo_donor, ts.turbo_json) | set(re.findall(r"\b(\w+)=", source))
         read = set(re.findall(r"\b(?:turbo|entry)\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS)))
         self.assertTrue({"donor", "donors", "picked", "has_turbo", "label", "kind", "count", "boost", "boost_ref", "car"} <= read, sorted(read))
         self.assertEqual(sorted(read - sent - {"length"}), [])

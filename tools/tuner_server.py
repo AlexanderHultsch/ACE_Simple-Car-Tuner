@@ -691,8 +691,7 @@ def api_garage_reset(car, body):
 
 
 def turbo_json(work, car, tune_id):
-    return dict(tune.turbo_choice(work, car, tune_id), car=car, tune=tune_id,
-                has_turbo=tune.turbo_parts(tune.base_dir(work, car), car)["count"] >= 1)
+    return dict(tune.turbo_choice(work, car, tune_id), car=car, tune=tune_id)
 
 
 def api_turbo(car, tune_id):

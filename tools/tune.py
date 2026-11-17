@@ -141,12 +141,12 @@ garage:       shows the choices of the car with their key: ticked (x), start (th
 garage-set:   ticks exactly the given keys (own:<id>, stock:<front>|<rear>), at least one; all stock tyres and no own tyre is
           the default and removes the entry.
 garage-reset: removes the selection (the car is not touched any more).
-Turbo kit (library functions turbo_parts, turbo_kind, list_turbo_donors, turbo_choice, set_turbo, reset_turbo): a modded car without a
+Turbo kit (library functions has_turbo, turbo_kind, list_turbo_donors, turbo_choice, set_turbo, reset_turbo): a modded car without a
 turbo can take the turbo setup of a donor, an installed car whose engine lists turbo files. The choice is the object "_turbo" =
 {"donor": <stock car id of the donor>} in the state file (tune_state.json, draft_state.json). Like "_tyres" it is not a setting: never
 reported as unknown, shown in show or counted as an applied setting, and duplicate and Create copy it with the rest of the state; no
 "_turbo" entry = the car is not touched. A donor is an extracted car (base folder present) whose engine (@engine) lists turbos_to_load
-files that are all present in its base; turbo_parts reads the files, their number and the max_boost of each turbo file (the
+files that are all present in its base; turbo_listing reads the files, their number and the max_boost of each turbo file (the
 engine's turbos list stands in when a file gives none and the list has a number for every file; boost_ref is the engine's
 max_turbo_boost when no boost is known).
 turbo-donors: lists the donors (car id, name, kind: no turbo / single turbo / twin turbo / <n> turbos, boost in bar); with --car it adds the
@@ -309,6 +309,8 @@ _index_error = []
 _tyre_lock = threading.Lock()
 _resolve_lock = threading.Lock()
 _resolved = {}
+_donor_listings = {}
+_actor_options = {}
 _ranges_lock = threading.Lock()
 _ranges_loaded = {}
 _stdout_lock = threading.Lock()
@@ -1285,10 +1287,12 @@ def resolve_target(s, t, root, car_id, cache):
 
 
 def forget_resolved(work, car_id):
-    """Drop the cached rows of resolve_defaults for a car (its base or its shared tyre files changed)."""
+    """Drop the cached rows of resolve_defaults, the cached turbo listing and the cached sound options of a car (its base or its shared tyre files changed)."""
     with _resolve_lock:
         for key in [k for k in _resolved if k[:2] == (work, car_id)]:
             del _resolved[key]
+        _donor_listings.pop((work, car_id), None)
+        _actor_options.pop((work, car_id), None)
 
 
 def resolve_stamp(work, car_id, root=None):
@@ -1646,9 +1650,9 @@ def snapshot_path(work, car_id, new_id):
 def make_snapshot(work, plan, applied, name):
     """The record of a build that the next build of the same modded car is compared with: the changed settings (id -> value), the
     turbo kit (donor, its label, kind and boost), the garage selection (ticked keys in order, starting tyre), the sound slots that
-    differ from the car's own and the game name; kit_info and the plan carry no label or boost, so the donor's come from list_turbo_donors."""
+    differ from the car's own and the game name; kit_info and the plan carry no label or boost, so the donor's come from turbo_donor."""
     kit, garage = plan["kit"], plan["garage"]
-    donor = next((d for d in list_turbo_donors(work) if d["car"] == kit["donor"]), None) if kit else None
+    donor = turbo_donor(work, kit["donor"], index_names(work)) if kit else None
     return {"version": SNAPSHOT_VERSION,
             "settings": {a["id"]: plain(a["new"]) for a in applied},
             "kit": {"donor": kit["donor"], "label": donor["label"] if donor else kit["donor"], "kind": kit["kind"],
@@ -2107,7 +2111,7 @@ def preset_tyre_pairs(root, car_id):
     """The (front, rear) game paths (game_path_key) of the physic compounds in presets/*.compatibletyres of a car in
     root: the rear is the first of rear_tyre_data_paths; both must be shared game files present below root."""
     folder = find_ci(car_root_of(root, car_id), "presets")
-    pairs = []
+    pairs, seen = [], set()
     for n in sorted(os.listdir(kspkg.long_path(folder))):
         if not n.lower().endswith(".compatibletyres"):
             continue
@@ -2117,13 +2121,23 @@ def preset_tyre_pairs(root, car_id):
             continue
         for pc in compounds if isinstance(compounds, list) else []:
             pair = compound_pair(pc)
-            if pair is None:
+            if pair is None or pair in seen:
                 continue
+            seen.add(pair)
             front, rear = pair
             if (front.startswith(GAME_SHARED) and rear.startswith(GAME_SHARED) and tyre_present(root, front)
-                    and tyre_present(root, rear) and (front, rear) not in pairs):
-                pairs.append((front, rear))
+                    and tyre_present(root, rear)):
+                pairs.append(pair)
     return pairs
+
+
+def extracted_pairs(work):
+    """(car id, preset_tyre_pairs of its base) of every extracted car in id order; a car whose presets cannot be read is skipped."""
+    for car_id in car_folders(work):
+        try:
+            yield car_id, preset_tyre_pairs(base_dir(work, car_id), car_id)
+        except (ValueError, OSError):
+            continue
 
 
 def list_source_tyres(work):
@@ -2131,11 +2145,7 @@ def list_source_tyres(work):
     sorted by label, then key. Reads the presets of the extracted cars only: nothing is extracted, the game package is not
     needed; a car or preset that cannot be read is skipped."""
     found = {}
-    for car_id in car_folders(work):
-        try:
-            pairs = preset_tyre_pairs(base_dir(work, car_id), car_id)
-        except (ValueError, OSError):
-            continue
+    for car_id, pairs in extracted_pairs(work):
         for front, rear in pairs:
             key = front + "|" + rear
             found.setdefault(key, {"key": key, "front": front, "rear": rear, "label": source_label(front, rear), "cars": []})["cars"].append(car_id)
@@ -2143,9 +2153,11 @@ def list_source_tyres(work):
 
 
 def source_tyre(work, source_key):
-    for e in list_source_tyres(work):
-        if e["key"] == source_key:
-            return e
+    """The first extracted car (in id order) that offers the tyre pair source_key: {car, front, rear}."""
+    for car_id, pairs in extracted_pairs(work):
+        for front, rear in pairs:
+            if front + "|" + rear == source_key:
+                return {"car": car_id, "front": front, "rear": rear}
     raise ValueError("unknown tyre source %r, tyre-sources lists the tyre pairs of the extracted cars" % (source_key,))
 
 
@@ -2264,11 +2276,11 @@ def tyre_rows(work, tyre_id, catalogue=None):
     tyre = load_tyre(work, tyre_id)
     cat = catalogue or load_catalogue()
     source = tyre["source"]
-    offer = next((e for e in list_source_tyres(work) if e["key"] == source["front"] + "|" + source["rear"]), None)
-    if offer is None:
+    try:
+        car_id = source_tyre(work, source["front"] + "|" + source["rear"])["car"]
+    except ValueError:
         raise ValueError("tyre %s: no extracted car offers its source %s any more, extract one with init or pick another "
-                         "source" % (tyre_id, source_label(source["front"], source["rear"])))
-    car_id = offer["cars"][0]
+                         "source" % (tyre_id, source_label(source["front"], source["rear"]))) from None
     root, cache, rels = base_dir(work, car_id), {}, {}
     for axle in ("front", "rear"):
         try:
@@ -2489,16 +2501,61 @@ def turbo_listing(root, car_id, cache=None):
     return {"files": files, "boost": boost, "boost_ref": boost_ref, "count": len(files), "missing": missing}
 
 
-def turbo_parts(root, car_id, cache=None):
-    """The turbo setup of a car in root (a base folder, as resolve_file takes it): {files (the turbo files turbos_to_load of
-    its engine names, in order, as @turbo[N] resolves them), boost (as turbo_listing gives it), count (len(files))}. A car
-    whose engine lists no turbo file or cannot be read has count 0."""
+def has_turbo(root, car_id, cache=None):
+    """Whether the engine of the car in root (a base folder, as resolve_file takes it) lists at least one turbo file; an
+    engine that cannot be read lists none."""
+    return turbo_listing(root, car_id, cache)["count"] >= 1
+
+
+def files_stamp(root, car_id, rels):
+    """The (mtime_ns, size) of each file below the car folder, None for a missing one."""
+    car_root = car_root_of(root, car_id)
+    return [(st.st_mtime_ns, st.st_size) if st else None for st in (stat_or_none(car_path(car_root, r)) for r in rels)]
+
+
+def donor_listing(work, car_id):
+    """turbo_listing of the base of a car, cached per (work, car) while resolve_stamp and the stamp of every file the listing
+    read are unchanged (forget_resolved drops it); the caller gets its own copy. A listing is not cached when a file it read
+    cannot be decoded, when the engine cannot be read or when a turbo file is missing."""
+    root, key, cache = base_dir(work, car_id), (work, car_id), {}
+    stamp = resolve_stamp(work, car_id)
+    with _resolve_lock:
+        hit = _donor_listings.get(key)
+    if hit and stamp is not None and hit[0] == stamp:
+        try:
+            if files_stamp(root, car_id, hit[1]) == hit[2]:
+                return copy.deepcopy(hit[3])
+        except (ValueError, OSError):
+            pass
     found = turbo_listing(root, car_id, cache)
-    return {"files": found["files"], "boost": found["boost"], "count": found["count"]}
+    rels = [k for k in cache if isinstance(k, str)]
+    if (stamp is not None and isinstance(cache.get(("role", "@engine")), str) and not found["missing"]
+            and not any(isinstance(cache[r], ValueError) for r in rels)):
+        try:
+            files = files_stamp(root, car_id, rels)
+        except (ValueError, OSError):
+            return found
+        if resolve_stamp(work, car_id) == stamp:
+            with _resolve_lock:
+                _donor_listings[key] = (stamp, rels, files, copy.deepcopy(found))
+    return found
 
 
 def turbo_kind(count):
     return "no turbo" if count == 0 else "single turbo" if count == 1 else "twin turbo" if count == 2 else "%d turbos" % count
+
+
+def turbo_donor(work, car_id, names):
+    """The list_turbo_donors entry of one car, None when the id is no car folder id, its base is missing or its engine lists no
+    turbo file or lacks one on disk; names is index_names."""
+    if not (re.fullmatch(r"[a-z0-9_]+", car_id) and os.path.isdir(kspkg.long_path(car_root_of(base_dir(work, car_id), car_id)))):
+        return None
+    found = donor_listing(work, car_id)
+    if found["count"] < 1 or found["missing"]:
+        return None
+    return {"car": car_id, "label": stock_car_name(work, car_id, names),
+            "count": found["count"], "kind": turbo_kind(found["count"]), "boost": found["boost"],
+            "boost_ref": found["boost_ref"]}
 
 
 def list_turbo_donors(work):
@@ -2507,16 +2564,7 @@ def list_turbo_donors(work):
     then id: {car, label (stock_info.json, else the cached car index, else the id), count, kind, boost, boost_ref (as
     turbo_listing gives them)}. Nothing is extracted, the game package is not needed."""
     names = index_names(work)
-    donors = []
-    for car_id in car_folders(work):
-        if not os.path.isdir(kspkg.long_path(car_root_of(base_dir(work, car_id), car_id))):
-            continue
-        found = turbo_listing(base_dir(work, car_id), car_id)
-        if found["count"] < 1 or found["missing"]:
-            continue
-        donors.append({"car": car_id, "label": stock_car_name(work, car_id, names),
-                       "count": found["count"], "kind": turbo_kind(found["count"]), "boost": found["boost"],
-                       "boost_ref": found["boost_ref"]})
+    donors = [d for d in (turbo_donor(work, car_id, names) for car_id in car_folders(work)) if d]
     return sorted(donors, key=lambda d: (d["label"].lower(), d["car"]))
 
 
@@ -2533,13 +2581,13 @@ def saved_turbo(state):
 def turbo_choice(work, car_id, tune=None):
     """The turbo kit of a car: {donor (saved donor id or None), available (False when the car has a turbo itself or no
     donor exists), reason (why not, else ""), donors (list_turbo_donors without the car), picked (the entry of the saved
-    donor in donors, None when it has none or is no donor any more)}."""
+    donor in donors, None when it has none or is no donor any more), has_turbo (whether the car has a turbo itself)}."""
     donor = saved_turbo(load_state(work, car_id, tune))
     donors = [d for d in list_turbo_donors(work) if d["car"] != car_id]
-    reason = ("the car has a turbo already" if turbo_parts(base_dir(work, car_id), car_id)["count"] >= 1
-              else "" if donors else "no installed car has a turbo")
+    own = has_turbo(base_dir(work, car_id), car_id)
+    reason = "the car has a turbo already" if own else "" if donors else "no installed car has a turbo"
     return {"donor": donor, "available": not reason, "reason": reason, "donors": donors,
-            "picked": next((d for d in donors if d["car"] == donor), None)}
+            "picked": next((d for d in donors if d["car"] == donor), None), "has_turbo": own}
 
 
 def set_turbo(work, car_id, donor, tune=None):
@@ -2547,7 +2595,7 @@ def set_turbo(work, car_id, donor, tune=None):
     must be extracted and have no turbo itself, the donor must be one of list_turbo_donors and not the car. Returns
     {donor, count, kind, boost, boost_ref} of the donor."""
     root = base_dir(work, car_id)
-    if turbo_parts(root, car_id)["count"] >= 1:
+    if has_turbo(root, car_id):
         raise ValueError("%s has a turbo already" % car_id)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("no base car in %s, run init first" % root)
@@ -2555,7 +2603,7 @@ def set_turbo(work, car_id, donor, tune=None):
         raise ValueError("the turbo donor must be a car id, got %r" % (donor,))
     if donor == car_id:
         raise ValueError("%s cannot be its own turbo donor" % car_id)
-    picked = next((d for d in list_turbo_donors(work) if d["car"] == donor), None)
+    picked = turbo_donor(work, donor, {})
     if picked is None:
         raise ValueError("%s is not an installed car with a turbo" % donor)
     state = load_state(work, car_id, tune)
@@ -2627,15 +2675,13 @@ def check_kit(work, car_id, donor):
     """The checks of set_turbo at the time a kit is used: the car has no turbo itself and is extracted, the donor is another car
     that list_turbo_donors would list. Raises ValueError("turbo kit: ...")."""
     root = base_dir(work, car_id)
-    if turbo_parts(root, car_id)["count"] >= 1:
+    if has_turbo(root, car_id):
         raise ValueError("turbo kit: %s has a turbo already" % car_id)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("turbo kit: no base car in %s, run init first" % root)
     if donor == car_id:
         raise ValueError("turbo kit: %s cannot be its own turbo donor" % car_id)
-    droot = base_dir(work, donor)
-    found = turbo_listing(droot, donor) if os.path.isdir(kspkg.long_path(car_root_of(droot, donor))) else None
-    if found is None or found["count"] < 1 or found["missing"]:
+    if turbo_donor(work, donor, {}) is None:
         raise ValueError("turbo kit: %s is not an installed car with a turbo" % donor)
 
 
@@ -3050,6 +3096,27 @@ def load_actor(work, car_id):
     return load_msg(actor_path(work, car_id))[0]
 
 
+def actor_sounds(work, car_id):
+    """The audio entries of the sound slots of a car's actor file, as the object sounds.collect_options reads. Cached per
+    (work, car) while the path, size and time of the actor file are unchanged (forget_resolved drops it); the caller gets its
+    own copy. Raises like load_actor."""
+    path, key = actor_path(work, car_id), (work, car_id)
+    st = stat_or_none(path)
+    stamp = (path, st.st_mtime_ns, st.st_size) if st else None
+    with _resolve_lock:
+        hit = _actor_options.get(key)
+    if hit and stamp is not None and hit[0] == stamp:
+        return copy.deepcopy(hit[1])
+    kinds = set(sounds.SLOTS.values())
+    events = [e for e in sounds.audio_events(load_actor(work, car_id)) if isinstance(e, dict) and e.get("type") in kinds]
+    found = {"car": {"audio_events": events}}
+    after = stat_or_none(path)
+    if stamp is not None and after and (path, after.st_mtime_ns, after.st_size) == stamp:
+        with _resolve_lock:
+            _actor_options[key] = (stamp, copy.deepcopy(found))
+    return found
+
+
 def sound_options(work):
     """The sounds the installed cars offer, read from the .actor file of every car with an extracted base (installed_cars):
     ({slot: [{key, event, bank, optional, cars}]}, skipped); see sounds.collect_options. A car whose actor file is missing or cannot
@@ -3057,7 +3124,7 @@ def sound_options(work):
     actors, skipped = {}, []
     for car_id in installed_cars(work):
         try:
-            actors[car_id] = load_actor(work, car_id)
+            actors[car_id] = actor_sounds(work, car_id)
         except (ValueError, OSError) as e:
             skipped.append({"car": car_id, "reason": str(e)})
     return sounds.collect_options(actors), skipped

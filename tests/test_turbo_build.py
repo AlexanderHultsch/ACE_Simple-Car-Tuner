@@ -99,6 +99,7 @@ class World(unittest.TestCase):
         self.d = cm.__enter__()
         self.addCleanup(cm.__exit__, None, None, None)
         self.addCleanup(tune._resolved.clear)
+        self.addCleanup(tune._donor_listings.clear)
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": c, "label": "Car " + c} for c in CARS]}
         self.patch(tune, "load_cars", lambda path=None: data)

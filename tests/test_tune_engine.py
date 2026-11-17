@@ -1092,7 +1092,7 @@ class TestStockInfo(Base):
 
     def stub_game(self, rows, loc=b""):
         sch = {"enums": {"CarContentData.Property%d" % i: ({}, {0: "Prop%d_Zero" % i}) for i in (1, 2, 3)}}
-        self.patch(tune, "schema", lambda: sch)
+        self.patch(car_json, "load_schema", lambda path=None: sch)
         self.patch(tune, "read_game_file", lambda work, game, rel: b"table")
         self.patch(car_json, "decode_msg", lambda s, name, data: {"preset": {"lines": [{"car_content": r} for r in rows]}})
         if loc:
@@ -1200,7 +1200,7 @@ class TestPickCarAndIndex(Base):
 
     def stub_table(self, lines):
         self.patch(tune, "read_game_file", lambda work, game, rel: b"table")
-        self.patch(tune, "schema", lambda: {})
+        self.patch(car_json, "load_schema", lambda path=None: {})
         self.patch(car_json, "decode_msg", lambda s, name, data: {"preset": {"lines": lines}})
 
     def test_index_from_the_game_is_sorted_cached_and_cleaned(self):
@@ -2058,9 +2058,9 @@ class TestWorkFolder(Base):
 
     def test_inside_accepts_children_and_refuses_others(self):
         root = str(self.d)
-        self.assertEqual(tune.inside(root, os.path.join(root, "a", "b")), os.path.realpath(os.path.join(root, "a", "b")))
+        self.assertEqual(tune.resolve_inside(root, os.path.join(root, "a", "b")), os.path.realpath(os.path.join(root, "a", "b")))
         with self.assertRaisesRegex(ValueError, "is not inside"):
-            tune.inside(root, os.path.join(root, "..", "elsewhere"))
+            tune.resolve_inside(root, os.path.join(root, "..", "elsewhere"))
 
     def test_remove_tree_removes_a_subfolder(self):
         self.write(os.path.join(self.work, "a", "f.txt"), "x")
@@ -3083,13 +3083,13 @@ class TestMakeSnapshot(Base):
 
     def test_the_record_of_a_plain_build(self):
         applied = [{"id": "limiter", "old": 7000, "new": 8000, "files": ["a"]}, {"id": "f", "old": tune.to_f32(0.1), "new": 0.25, "files": []}]
-        data = tune.make_snapshot(self.work, "ks_x", self.plan(), applied, "Car X MY")
+        data = tune.make_snapshot(self.work, self.plan(), applied, "Car X MY")
         self.assertRegex(data.pop("time"), r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
         self.assertEqual(data, {"version": 1, "settings": {"limiter": 8000, "f": 0.25}, "kit": None, "garage": None, "sounds": {}, "name": "Car X MY"})
 
     def test_the_new_values_are_plain_numbers(self):
         applied = [{"id": "f", "old": 0.0, "new": tune.to_f32(0.1), "files": []}]
-        data = tune.make_snapshot(self.work, "ks_x", self.plan(), applied, "n")
+        data = tune.make_snapshot(self.work, self.plan(), applied, "n")
         self.assertEqual(json.dumps(data["settings"]), '{"f": 0.1}')
 
     def test_the_kit_garage_and_sounds(self):
@@ -3098,7 +3098,7 @@ class TestMakeSnapshot(Base):
         garage = {"entries": [{"key": "own:fast", "label": "Fast"}, {"key": "stock:a|b", "label": "A"}]}
         sounds = [{"slot": "turbo", "option": {"key": T_RX7_EVENT}, "template": {}}, {"slot": "backfire", "option": {"key": B_EVENT}, "template": {}}]
         with mock.patch.object(tune, "list_turbo_donors", lambda work: donors):
-            data = tune.make_snapshot(self.work, "ks_x", self.plan(kit, garage, sounds), [], "n")
+            data = tune.make_snapshot(self.work, self.plan(kit, garage, sounds), [], "n")
         self.assertEqual((data["kit"], data["garage"], data["sounds"]), (
             {"donor": "ks_b", "label": "Twin B", "kind": "twin turbo", "boost": [1.0, 1.2]}, GARAGE_AB,
             {"turbo": T_RX7_EVENT, "backfire": B_EVENT}))
@@ -3107,12 +3107,12 @@ class TestMakeSnapshot(Base):
     def test_a_donor_that_is_not_listed_any_more_keeps_its_id_as_the_label(self):
         kit = {"donor": "ks_gone", "kind": "single turbo"}
         with mock.patch.object(tune, "list_turbo_donors", lambda work: []):
-            data = tune.make_snapshot(self.work, "ks_x", self.plan(kit), [], "n")
+            data = tune.make_snapshot(self.work, self.plan(kit), [], "n")
         self.assertEqual(data["kit"], {"donor": "ks_gone", "label": "ks_gone", "kind": "single turbo", "boost": []})
         self.assertTrue(tune.valid_snapshot(data))
 
     def test_a_record_it_makes_is_valid(self):
-        self.assertTrue(tune.valid_snapshot(tune.make_snapshot(self.work, "ks_x", self.plan(), [{"id": "x", "old": 1, "new": True, "files": []}], "n")))
+        self.assertTrue(tune.valid_snapshot(tune.make_snapshot(self.work, self.plan(), [{"id": "x", "old": 1, "new": True, "files": []}], "n")))
 
 
 # --------------------------------------------------------------------------------------------- error chains
@@ -3133,7 +3133,7 @@ class TestErrorChains(Base):
         not_chained(self, cm.exception)
 
     def test_save_msg_encode_error_is_not_chained(self):
-        self.patch(tune, "schema", lambda: {})
+        self.patch(car_json, "load_schema", lambda path=None: {})
 
         def encode(sch, name, obj):
             raise ValueError("cannot encode")

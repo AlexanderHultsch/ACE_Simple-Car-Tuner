@@ -1,5 +1,4 @@
 {
-  "car_id": "ks_bmw_m3_e46_csl",
   "groups": [
     {"name": "Meta", "description": "Names shown in the game's car list. The name suffix tells your tuned car apart from the stock car."},
     {"name": "Display", "description": "Numbers shown on the car's spec sheet in the menus. They are text only and do not change how the car drives."},

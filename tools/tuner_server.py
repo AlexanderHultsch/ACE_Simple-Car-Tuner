@@ -179,7 +179,7 @@ STATIC_FILES = {"/apple-touch-icon.png": (WEB / "apple-touch-icon.png", "image/p
 DEFAULT_PORT = 8080
 DEFAULT_BIND = "0.0.0.0"
 BASE_PATH = "/ACESCT"
-GAME_CHECK_SECONDS = 4.0
+GAME_CHECK_SECONDS = 15.0
 MAX_BODY = 65536
 # routes that start a background job answer 202 instead of 200
 ACCEPTED = ("/api/init", "/api/apply")
@@ -195,7 +195,7 @@ JOB = {"kind": None, "state": "idle", "log": [], "result": None, "error": None, 
 JOB_LOCK = threading.Lock()
 # STATE_LOCK serializes tune_state.json edits and row builds; JOB_LOCK guards the JOB dict (the job thread takes STATE_LOCK only to clear the draft)
 STATE_LOCK = threading.Lock()
-# the poll path asks for the game at most every GAME_CHECK_SECONDS: [time of the last check, its result]
+# the poll path asks for the game at most every GAME_CHECK_SECONDS (longer than the idle poll of the page); Apply always asks fresh: [time of the last check, its result]
 GAME_CHECK = [float("-inf"), False]
 
 

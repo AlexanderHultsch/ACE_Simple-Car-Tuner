@@ -1,8 +1,11 @@
 """Tests for tuner/catalogue.json and tuner/cars.json as data: the format tools/tune.py reads, the loaders' validation, counts quoted in the docs."""
 import collections
 import json
+import os
+import pathlib
 import re
 import unittest
+from unittest import mock
 
 from support import ROOT, FakeCar, mini_catalogue, mini_setting, tmp
 
@@ -51,7 +54,6 @@ def write_json(d, name, data):
 class TestCatalogueData(unittest.TestCase):
     def test_loads_through_tune(self):
         self.assertGreater(len(SETTINGS), 100)
-        self.assertIsInstance(CAT["car_id"], str)
 
     def test_ids_unique_and_well_formed(self):
         ids = [s["id"] for s in SETTINGS]
@@ -421,11 +423,58 @@ class TestLoaderValidation(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "needs settings"):
             self.load(settings={"a": 1})
 
-    def test_car_id_is_not_required(self):
-        with tmp() as d:
-            data = mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")]))
-            del data["car_id"]
-            tune.load_catalogue(write_json(d, "c.json", data))
+
+class TestCatalogueMemo(unittest.TestCase):
+    def setUp(self):
+        self.addCleanup(tune._catalogue_loaded.clear)
+        self.cm = tmp()
+        self.d = self.cm.__enter__()
+        self.addCleanup(self.cm.__exit__, None, None, None)
+
+    def touch(self, path, step=1000000):
+        st = os.stat(path)
+        os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + step))
+
+    def test_an_unchanged_file_is_parsed_once_and_the_same_object_comes_back(self):
+        path = write_json(self.d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")])))
+        with mock.patch.object(tune, "read_json", wraps=tune.read_json) as read:
+            first = tune.load_catalogue(path)
+            self.assertIs(tune.load_catalogue(path), first)
+            self.assertIs(tune.load_catalogue(pathlib.Path(path)), first)
+        self.assertEqual(read.call_count, 1)
+
+    def test_a_changed_file_is_parsed_again(self):
+        path = write_json(self.d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")])))
+        self.assertEqual([s["id"] for s in tune.load_catalogue(path)["settings"]], ["a"])
+        write_json(self.d, "c.json", mini_catalogue(mini_setting("b", targets=[("@engine", "limiter")])))
+        self.assertEqual([s["id"] for s in tune.load_catalogue(path)["settings"]], ["b"])
+
+    def test_a_rewrite_of_the_same_size_with_another_modification_time_is_parsed_again(self):
+        path = write_json(self.d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")])))
+        tune.load_catalogue(path)
+        write_json(self.d, "c.json", mini_catalogue(mini_setting("b", targets=[("@engine", "limiter")])))
+        self.touch(path)
+        self.assertEqual([s["id"] for s in tune.load_catalogue(path)["settings"]], ["b"])
+
+    def test_two_paths_are_kept_apart(self):
+        one = write_json(self.d, "one.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")])))
+        two = write_json(self.d, "two.json", mini_catalogue(mini_setting("b", targets=[("@engine", "limiter")])))
+        self.assertEqual([tune.load_catalogue(p)["settings"][0]["id"] for p in (one, two, one)], ["a", "b", "a"])
+
+    def test_a_catalogue_that_fails_the_validation_is_never_kept(self):
+        path = write_json(self.d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")], advanced="yes")))
+        for _ in range(2):
+            with self.assertRaisesRegex(ValueError, "'a'"):
+                tune.load_catalogue(path)
+        write_json(self.d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")])))
+        self.touch(path)
+        self.assertEqual(tune.load_catalogue(path)["settings"][0]["id"], "a")
+
+    def test_a_missing_file_raises_every_time(self):
+        path = str(self.d / "none.json")
+        for _ in range(2):
+            with self.assertRaises(FileNotFoundError):
+                tune.load_catalogue(path)
 
 
 MISSING = object()

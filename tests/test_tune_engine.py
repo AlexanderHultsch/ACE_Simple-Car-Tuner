@@ -305,10 +305,22 @@ class TestCoerce(unittest.TestCase):
                     tune.coerce(s, v)
                 self.assertIn("f expects", str(cm.exception))
 
+    def test_float_refuses_values_the_game_cannot_store_as_float32(self):
+        s = mini_setting("f")
+        for v in ("1e39", "-1e39", 1e39, "3.5e38"):
+            with self.subTest(v):
+                with self.assertRaisesRegex(ValueError, "f is out of the float range the game stores"):
+                    tune.coerce(s, v)
+        for v in ("nan", "inf", "-inf", float("nan"), 10**400):
+            with self.subTest(v):
+                with self.assertRaisesRegex(ValueError, "f expects"):
+                    tune.coerce(s, v)
+        self.assertEqual([tune.coerce(s, v) for v in ("3.4e38", "-3.4e38")], [3.4e38, -3.4e38])
+
     def test_string_needs_text_without_control_characters(self):
         s = mini_setting("t", type="string")
         self.assertEqual(tune.coerce(s, " a b "), " a b ")
-        for v in ("", "a\nb", "a\x00", 5, None):
+        for v in ("", "a\nb", "a\x00", "a\x7fb", 5, None):
             with self.subTest(v):
                 with self.assertRaisesRegex(ValueError, "t expects non-empty text"):
                     tune.coerce(s, v)
@@ -330,7 +342,7 @@ class TestCoerce(unittest.TestCase):
         self.assertEqual(tune.coerce(s, "x" * tune.NAME_SUFFIX_MAX), "x" * 30)
         self.assertEqual(tune.coerce(s, "  " + "x" * 30 + "  "), "x" * 30)
         self.assertEqual(tune.coerce(s, "x"), "x")
-        for v in ("", "   ", "x" * 31, " " + "x" * 31, "a\tb", "a\nb", "\x1f", "a\x00", 3, None):
+        for v in ("", "   ", "x" * 31, " " + "x" * 31, "a\tb", "a\nb", "\x1f", "a\x00", "a\x7fb", 3, None):
             with self.subTest(repr(v)):
                 with self.assertRaisesRegex(ValueError, "name_suffix expects 1 to 30 characters"):
                     tune.coerce(s, v)
@@ -1034,6 +1046,13 @@ class TestResolveCache(CarCase):
         self.assertEqual([r["id"] for r in self.resolve(mini_catalogue(*metas()))], ["name_suffix", "variant_name"])
         self.assertEqual([r["id"] for r in self.resolve(mini_catalogue(limiter()))], ["limiter"])
 
+    def test_the_cache_key_holds_no_catalogue_text(self):
+        self.resolve()
+        self.assertTrue(tune._resolved)
+        text = json.dumps(self.cat, sort_keys=True)
+        for key in tune._resolved:
+            self.assertFalse(any(isinstance(part, str) and text in part for part in key), key)
+
     def test_rows_are_not_cached_when_the_stock_info_is_missing(self):
         os.remove(tune.stock_info_path(self.work, "ks_x"))
         self.resolve()
@@ -1536,19 +1555,29 @@ class TestTuneSuffix(TuneCase):
         tune.save_state(self.work, "ks_bravo", {"name_suffix": "_C"})
 
     def test_taken_is_per_stock_car(self):
-        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "_A"))
-        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "_B"))
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_C"))
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_a"))
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_A "))
+        self.assertIsNotNone(tune.suffix_owner(self.work, "ks_alpha", "_A"))
+        self.assertIsNotNone(tune.suffix_owner(self.work, "ks_alpha", "_B"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_C"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_a"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_A "))
+
+    def test_free_suffix_reads_the_state_of_each_tune_once(self):
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY"}, "ax_alp02")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY 2"}, "ax_alp03")
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY 3"}, "ax_alp04")
+        reads = []
+        real = tune.load_state
+        self.patch(tune, "load_state", lambda work, car, tune_id=None: (reads.append(tune_id), real(work, car, tune_id))[1])
+        self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY"), "MY 4")
+        self.assertEqual(sorted(reads), ["ax_alp01", "ax_alp02", "ax_alp03", "ax_alp04", "ax_alpha"])
 
     def test_exclude_ignores_that_tune(self):
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_A", exclude="ax_alpha"))
-        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "_A", exclude="ax_alp01"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_A", exclude="ax_alpha"))
+        self.assertIsNotNone(tune.suffix_owner(self.work, "ks_alpha", "_A", exclude="ax_alp01"))
 
     def test_the_default_suffix_counts_when_the_state_has_none(self):
         tune.save_state(self.work, "ks_alpha", {}, "ax_alp02")
-        self.assertTrue(tune.suffix_taken(self.work, "ks_alpha", "MY"))
+        self.assertIsNotNone(tune.suffix_owner(self.work, "ks_alpha", "MY"))
 
     def test_free_suffix_returns_a_free_one_unchanged(self):
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "_NEW"), "_NEW")
@@ -1627,8 +1656,8 @@ class TestTuneSuffix(TuneCase):
         self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp03"), {"name_suffix": "_MY3"})
         self.assertEqual(tune.suffix_owner(self.work, "ks_alpha", "MY"), "ax_alp02")
         self.assertEqual(tune.suffix_owner(self.work, "ks_alpha", "MY 3"), "ax_alp03")
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_MY"))
-        self.assertFalse(tune.suffix_taken(self.work, "ks_alpha", "_MY3"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_MY"))
+        self.assertIsNone(tune.suffix_owner(self.work, "ks_alpha", "_MY3"))
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY"), "MY 2")
         self.assertEqual(tune.free_suffix(self.work, "ks_alpha", "MY 3"), "MY 4")
 
@@ -3243,7 +3272,7 @@ class TestCommands(CarCase):
     def main(self, *argv):
         return self.run_main(*argv, "--work", self.work)
 
-    def test_defaults_prints_the_table_hidden_count_and_writes_defaults_json(self):
+    def test_defaults_prints_the_table_and_the_hidden_count(self):
         code, out, err = self.main("defaults")
         self.assertEqual((code, err), (0, ""))
         lines = out.splitlines()
@@ -3251,8 +3280,6 @@ class TestCommands(CarCase):
         self.assertIn("limiter", out)
         self.assertNotIn("deep", out.split("hidden")[0])
         self.assertIn("1 hidden for this car (not applicable)", out)
-        with open(os.path.join(self.work, "ks_x", "defaults.json"), encoding="utf-8") as f:
-            self.assertEqual([r["id"] for r in json.load(f)], ["name_suffix", "variant_name", "limiter", "m"])
 
     def test_defaults_hidden_lists_each_hidden_setting_with_its_reason(self):
         code, out, err = self.main("defaults", "--hidden")
@@ -3523,6 +3550,7 @@ class TestCommands(CarCase):
              "targets": [], "absent": False, "consistent": True, "copies_differ": False} for s in (cat or tune.load_catalogue())["settings"]])
         opened = []
         real_open = builtins.open
+        tune._catalogue_loaded.clear()
 
         def spy(file, *a, **k):
             if str(file).endswith("catalogue.json"):

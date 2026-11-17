@@ -136,9 +136,9 @@ def mini_setting(sid, kind="value", type="float", targets=None, **extra):
     return s
 
 
-def mini_catalogue(*settings, car_id="ks_x"):
+def mini_catalogue(*settings):
     groups = list(dict.fromkeys(s["group"] for s in settings if "group" in s))
-    return {"car_id": car_id, "groups": [{"name": g, "description": "d " + g} for g in groups], "settings": list(settings)}
+    return {"groups": [{"name": g, "description": "d " + g} for g in groups], "settings": list(settings)}
 
 
 class FakeCar:

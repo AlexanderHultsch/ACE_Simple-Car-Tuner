@@ -4611,11 +4611,11 @@ class TestStatePollCost(ServerCase):
     def test_the_poll_check_asks_again_after_the_cache_time(self):
         calls = []
         self.patch(ts, "game_running", lambda: calls.append(1) or True)
-        ts.GAME_CHECK[:] = [time.monotonic() - 10, False]
+        ts.GAME_CHECK[:] = [time.monotonic() - 20, False]
         self.assertTrue(ts.game_running_cached())
         self.assertTrue(ts.game_running_cached())
         self.assertEqual(len(calls), 1)
-        ts.GAME_CHECK[0] -= 10
+        ts.GAME_CHECK[0] -= 20
         self.assertTrue(ts.game_running_cached())
         self.assertEqual(len(calls), 2)
 

@@ -36,7 +36,7 @@ Cars outside that list are untested: init and apply print "note: <id> is not in 
 unverified". <car> below is the chosen stock car id, <new_id> its tuned copy (default: ax_ plus the stock id without
 its ks_, e.g. ks_bmw_m3_e46_csl -> ax_bmw_m3_e46_csl; other prefixes: ax plus the id without its first two
 characters; same length as the stock id).
-Work folder layout: <work>/<car>/{base, build/<new_id>, snapshots/<new_id>.json, tune_state.json, stock_info.json, defaults.json} per car,
+Work folder layout: <work>/<car>/{base, build/<new_id>, snapshots/<new_id>.json, tune_state.json, stock_info.json} per car,
 shared <work>/backups, <work>/stock_loc/en.cars.loc and <work>/cars_index.json. The first command that runs moves the
 old single-car layout (<work>/base, build, tune_state.json, stock_info.json, defaults.json) into <work>/<default car>
 and prints what moved.
@@ -60,8 +60,7 @@ init:    extracts the stock car from the game package into <work>/<car>/base (sk
           car names (see below) next to the car folder, into <work>/<car>/base/content/cars/common_phsx/...; defaults,
           set, show and apply do that on first need for bases extracted earlier. Without the game package the tyre
           settings are hidden ("shared tyre files not extracted").
-defaults: reads every applicable setting of tuner/catalogue.json from <work>/<car>/base, prints the table and writes
-          <work>/<car>/defaults.json (the applicable rows with their targets, for inspection only: nothing reads it back). A setting is applicable when all its required targets resolve for the car; the
+defaults: reads every applicable setting of tuner/catalogue.json from <work>/<car>/base and prints the table. A setting is applicable when all its required targets resolve for the car; the
           others are hidden: their number is printed, --hidden lists each with its reason. When the copies of a value of
           an applicable setting disagree in the stock data, they are listed in the section "copies differ in the stock
           data" (the default shown is the value of the first required target); that is not an error.
@@ -234,6 +233,7 @@ import contextlib
 import copy
 import datetime
 import difflib
+import hashlib
 import io
 import json
 import math
@@ -313,6 +313,8 @@ _donor_listings = {}
 _actor_options = {}
 _ranges_lock = threading.Lock()
 _ranges_loaded = {}
+_catalogue_lock = threading.Lock()
+_catalogue_loaded = {}
 _stdout_lock = threading.Lock()
 _kit_lock = threading.Lock()
 
@@ -524,6 +526,25 @@ def check_setting(s, seen, names, path):
 
 
 def load_catalogue(path=CATALOGUE):
+    """The validated catalogue at path, parsed again only when the file's (mtime_ns, size) changed. The caller gets the shared
+    object and must not change it; a catalogue that fails the validation is never kept."""
+    key = str(path)
+    try:
+        st = os.stat(path)
+    except OSError:
+        return read_catalogue(path)
+    stamp = (st.st_mtime_ns, st.st_size)
+    with _catalogue_lock:
+        hit = _catalogue_loaded.get(key)
+    if hit and hit[0] == stamp:
+        return hit[1]
+    cat = read_catalogue(path)
+    with _catalogue_lock:
+        _catalogue_loaded[key] = (stamp, cat)
+    return cat
+
+
+def read_catalogue(path):
     cat = read_json(path)
     if not isinstance(cat.get("settings"), list):
         raise ValueError("%s: needs settings" % path)
@@ -653,17 +674,21 @@ def coerce(s, v):
             if type(v) is bool or not isinstance(v, (str, int, float)):
                 raise ValueError
             v = float(v)
-        except ValueError:
+        except (ValueError, OverflowError):
             raise ValueError("%s expects a number, got %r" % (s["id"], v)) from None
         if not math.isfinite(v):
             raise ValueError("%s expects a finite number, got %r" % (s["id"], v))
+        try:
+            to_f32(v)
+        except ValueError:
+            raise ValueError("%s is out of the float range the game stores (about +-3.4e38), got %r" % (s["id"], v)) from None
     elif s.get("handler") == "name_suffix":
         if isinstance(v, str):
             v = re.sub(" {2,}", " ", v.strip())
-        if not isinstance(v, str) or not 1 <= len(v) <= NAME_SUFFIX_MAX or re.search(r"[\x00-\x1f]", v):
+        if not isinstance(v, str) or not 1 <= len(v) <= NAME_SUFFIX_MAX or re.search(r"[\x00-\x1f\x7f]", v):
             raise ValueError("%s expects 1 to %d characters without control characters" % (s["id"], NAME_SUFFIX_MAX))
     else:
-        if not isinstance(v, str) or not v or re.search(r"[\x00-\x1f]", v):
+        if not isinstance(v, str) or not v or re.search(r"[\x00-\x1f\x7f]", v):
             raise ValueError("%s expects non-empty text without control characters" % s["id"])
         if t == "enum" and v not in s.get("choices", [v]):
             raise ValueError("%s must be one of: %s" % (s["id"], ", ".join(s["choices"])))
@@ -1326,7 +1351,8 @@ def resolve_defaults(work, car_id, catalogue=None, game=DEFAULT_GAME, hidden=Fal
     root = base_dir(work, car_id) if tune is None else root_for(work, car_id, tune)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("no base car in %s, run init first" % root)
-    key, stamp = (work, car_id, root, json.dumps(cat, sort_keys=True)), resolve_stamp(work, car_id, root)
+    digest = hashlib.sha1(json.dumps(cat, sort_keys=True).encode()).hexdigest()
+    key, stamp = (work, car_id, root, digest), resolve_stamp(work, car_id, root)
     with _resolve_lock:
         hit = _resolved.get(key)
     if hit and stamp is not None and hit[0] == stamp:
@@ -1946,18 +1972,16 @@ def suffix_owner(work, car_id, suffix, exclude=None):
     return None
 
 
-def suffix_taken(work, car_id, suffix, exclude=None):
-    return suffix_owner(work, car_id, suffix, exclude) is not None
-
-
 def free_suffix(work, car_id, wanted, exclude=None):
     """wanted when no other tune of the stock car uses it, else the number after a space at its end counted up (MY -> MY 2 ->
     MY 3, T 1 -> T 2; leading zeros keep their width; a number without a space is part of the text), the stem cut to stay
     within the length limit of the setting."""
-    wanted = coerce(name_suffix_setting(), wanted)
+    s = name_suffix_setting()
+    wanted = coerce(s, wanted)
     stem, digits = re.fullmatch(r"(.*?)(?: (\d+))?", wanted).groups()
+    taken = {t["name_suffix"] for t in tunes_of(work, car_id, s) if t["id"] != exclude}
     candidate, n = wanted, int(digits or 1)
-    while suffix_taken(work, car_id, candidate, exclude):
+    while candidate in taken:
         n += 1
         number = str(n).zfill(len(digits or ""))
         if len(number) + 2 > NAME_SUFFIX_MAX:
@@ -3481,7 +3505,6 @@ def cmd_defaults():
     tune_arg(work, car_id, opts)
     every = resolve_defaults(work, car_id, hidden=True)
     rows = [r for r in every if r["applicable"]]
-    save_json(os.path.join(car_work(work, car_id), "defaults.json"), rows)
     print_defaults(rows)
     print("%d hidden for this car (not applicable)" % (len(every) - len(rows)))
     if "hidden" in opts:

@@ -65,7 +65,7 @@ The kit copies the top-level engine fields whose name contains "turbo", "boost" 
 
 - Run Phase 0 on the PC first (recommended, read-only), then decide on A or B.
 - Whether samples or banks derived from Kunos' cars may only be used locally (recommended: local only, never in git).
-- Kill criterion (decided by Alex, 2026-11-14): if Phase 0 finds no separate, easily extractable turbo event or slot (see the short task list in HANDOVER.md section 0a), the turbo sound idea is dropped and no further turbo work is planned; the turbo kit stays as it is, marked experimental.
+- Kill criterion (decided by Alex, 2026-11-14): if Phase 0 finds no separate, easily extractable turbo event or slot (the Phase 0 task list that stood in the handover is gone; its result is section 9 of this document), the turbo sound idea is dropped and no further turbo work is planned; the turbo kit stays as it is, marked experimental.
 
 ## 9. Phase 0 on the PC (2026-11-14): result
 

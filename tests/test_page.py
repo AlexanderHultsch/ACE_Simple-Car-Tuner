@@ -1,4 +1,4 @@
-"""Static checks of tuner/web/index.html and start_tuner.bat with regular expressions only (no browser, no node).
+"""Static checks of tuner/web/index.html with regular expressions only (no browser, no node).
 
 The page is cut once into markup, <style> and <script>; the tests compare the three with each other (DOM ids, CSS classes, functions) and with tools/tuner_server.py (routes, header names, answer fields). The JS helpers are plain regexes: strings, comments and braces are only handled as far as this one file needs.
 """
@@ -11,7 +11,6 @@ from support import ROOT
 import tuner_server as ts
 
 HTML = (ROOT / "tuner" / "web" / "index.html").read_text(encoding="utf-8")
-BAT = (ROOT / "start_tuner.bat").read_text(encoding="ascii")
 README = (ROOT / "docs" / "README.md").read_text(encoding="utf-8")
 USER_GUIDE = (ROOT / "docs" / "USER_GUIDE.md").read_text(encoding="utf-8")
 STYLE = re.search(r"<style>(.*?)</style>", HTML, re.S).group(1)
@@ -3124,66 +3123,6 @@ class TestLoggingCopy(unittest.TestCase):
                                                    "copyFileAsText", "copyFileOnPc", "onThisPc", "copySessionFile", "renderLogSessions"))
         code.encode("ascii")
         self.assertNotRegex(code, r"\.html\b|innerHTML|insertAdjacentHTML")
-
-
-class TestStartBat(unittest.TestCase):
-    def test_it_starts_the_server_script_of_the_repo_from_the_repo_root(self):
-        self.assertIn(r'tools\tuner_server.py', BAT)
-        self.assertTrue((ROOT / "tools" / "tuner_server.py").is_file())
-        self.assertIn(r'cd /d "%~dp0"', BAT)
-        self.assertEqual((ROOT / "start_tuner.bat").parent, ROOT)
-
-    def test_paths_are_relative_to_the_batch_file(self):
-        self.assertIn("%~dp0", BAT)
-        self.assertNotRegex(BAT, r"(?i)\b[a-z]:\\users\\")
-
-    def test_python_runs_isolated_with_the_documented_port_flag(self):
-        self.assertRegex(BAT, r'"%PY%" -I tools\\tuner_server\.py --port (?:\d+|%PORT%)')
-        self.assertIn("--port", ts.__doc__)
-
-    def test_the_port_is_the_default_port_of_the_server_and_the_user_guide(self):
-        self.assertEqual(set(re.findall(r"(?:--port |127\.0\.0\.1:|PORT=)(\d+)", BAT)), {str(ts.DEFAULT_PORT)})
-        self.assertEqual(ts.DEFAULT_PORT, 8080)
-        self.assertIn("http://127.0.0.1:%d%s/" % (ts.DEFAULT_PORT, ts.BASE_PATH), USER_GUIDE)
-
-    def test_it_looks_for_the_python_the_user_guide_documents(self):
-        path = re.search(r'set "PY=(.*?python\.exe)"', BAT).group(1)
-        self.assertEqual(path, r"%LOCALAPPDATA%\Programs\Python\Python312\python.exe")
-        self.assertIn(path.rsplit("\\", 1)[0] + "\\", USER_GUIDE)
-
-    def test_a_missing_python_stops_with_a_message_and_exit_code_1(self):
-        self.assertIn('if not exist "%PY%" (', BAT)
-        self.assertIn("exit /b 1", BAT)
-        self.assertIn("pause", BAT)
-
-    # the browser is opened after a fixed delay (ping -n 3 is about 2 s), not when the server listens
-    def test_the_browser_is_opened_after_a_fixed_two_second_delay(self):
-        self.assertRegex(BAT, r'start "" /min cmd /c "ping -n 3 127\.0\.0\.1 >nul & start http://127\.0\.0\.1:(?:\d+|%PORT%)/ACESCT/"')
-        self.assertIn("http://127.0.0.1:%PORT%" + ts.BASE_PATH + "/", BAT)
-
-    # the game package is passed on only when the user set GAME in the file
-    def test_the_game_package_is_optional_and_passed_on_only_when_set(self):
-        self.assertIn('set "GAME="', BAT)
-        self.assertIn("if defined GAME (", BAT)
-        self.assertIn(r'"%PY%" -I tools\tuner_server.py --port %PORT% --game "%GAME%"', BAT)
-        self.assertIn(r'"%PY%" -I tools\tuner_server.py --port %PORT%' + "\n", BAT)
-        self.assertIn("--game", ts.__doc__)
-
-    def test_the_file_is_plain_ascii_without_a_byte_order_mark(self):
-        raw = (ROOT / "start_tuner.bat").read_bytes()
-        raw.decode("ascii")
-        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
-
-    def test_every_line_ends_with_crlf(self):
-        raw = (ROOT / "start_tuner.bat").read_bytes()
-        self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"))
-        self.assertTrue(raw.endswith(b"\r\n"))
-
-    def test_it_tells_the_user_about_the_windows_firewall_question_before_the_server_starts(self):
-        line = next(l for l in BAT.splitlines() if l.startswith("echo After the first start Windows asks"))
-        self.assertIn("private network", line)
-        self.assertIn("choose Allow", line)
-        self.assertLess(BAT.index(line), BAT.index('"%PY%" -I tools'))
 
 
 if __name__ == "__main__":

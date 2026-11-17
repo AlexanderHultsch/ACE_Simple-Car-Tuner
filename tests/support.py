@@ -1,9 +1,11 @@
-"""Shared helpers for the test suite: repo paths, tools/ on sys.path, run_tool() for CLI calls, tmp() temp dirs, protobuf byte builders.
+"""Shared helpers for the test suite: repo paths, tools/ on sys.path, run_tool() for CLI calls, run_main() for in-process main(), usage_cases() for the "bad arguments print the usage" tests, tmp() temp dirs, Sandbox test case base, audio-event entry builders, protobuf byte builders.
 
 tmp() is a context manager yielding a pathlib.Path that is removed on exit; run_tool() runs a tools/ script with `python -B -I`.
 """
 import contextlib
 import copy
+import io
+import json
 import os
 import pathlib
 import re
@@ -11,6 +13,8 @@ import struct
 import subprocess
 import sys
 import tempfile
+import unittest
+from unittest import mock
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 TOOLS = ROOT / "tools"
@@ -27,6 +31,104 @@ def run_tool(name, *args, cwd=None, input=None):
 def tmp():
     with tempfile.TemporaryDirectory() as d:
         yield pathlib.Path(d)
+
+
+BANK = "content\\sfx\\turbo.bank"
+BACKFIRE_BANK = "content\\sfx\\backfire.bank"
+TURBO = "event:/parts/turbos/"
+BACKFIRE = "event:/parts/backfires/"
+
+
+def entry(event, kind=None, bank=BANK, **more):
+    """An audio_events entry of an ActorData object as car_json decodes it (the first entry of a car has no type)."""
+    e = {"event": event}
+    if kind is not None:
+        e["type"] = kind
+    e["transform"] = {"scale": {"x": 1.0}}
+    e["bank"] = bank
+    e.update(more)
+    return e
+
+
+def engine():
+    return entry("event:/evo_cars/ks_x/engine_int", None, "content\\sfx\\ks_x.bank")
+
+
+def turbo(name, **more):
+    return entry(TURBO + name, "TurboEvent", **more)
+
+
+def backfire(name, **more):
+    return entry(BACKFIRE + name, "Backfire", BACKFIRE_BANK, **more)
+
+
+class Sandbox(unittest.TestCase):
+    """A TestCase with a scratch folder self.d (pathlib.Path, removed after the test), patch() undone after the test and write()."""
+
+    def setUp(self):
+        td = tempfile.TemporaryDirectory()
+        self.d = pathlib.Path(td.name)
+        self.addCleanup(td.cleanup)
+
+    def patch(self, target, name, value):
+        p = mock.patch.object(target, name, value)
+        p.start()
+        self.addCleanup(p.stop)
+        return value
+
+    def write(self, path, data, binary=False):
+        """Writes data (str, bytes, or a JSON-able object) to path, making the folder; returns path."""
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "wb" if binary else "w", **({} if binary else {"encoding": "utf-8"})) as f:
+            f.write(data if isinstance(data, (str, bytes)) else json.dumps(data))
+        return path
+
+
+def run_main(main, argv=None, cwd=None):
+    """main() with sys.argv set to argv (left alone when None), the working folder set to cwd (when given) and
+    stdout/stderr captured; returns (exit code, stdout, stderr). A string SystemExit code goes to stderr and becomes 1, as the
+    interpreter does; a plain return is 0."""
+    out, err, code = io.StringIO(), io.StringIO(), None
+    with contextlib.ExitStack() as stack:
+        if argv is not None:
+            stack.enter_context(mock.patch.object(sys, "argv", argv))
+        if cwd is not None:
+            stack.callback(os.chdir, os.getcwd())
+            os.chdir(cwd)
+        stack.enter_context(contextlib.redirect_stdout(out))
+        stack.enter_context(contextlib.redirect_stderr(err))
+        try:
+            main()
+        except SystemExit as e:
+            code = e.code
+    if isinstance(code, str):
+        err.write(code + "\n")
+        code = 1
+    return code or 0, out.getvalue(), err.getvalue()
+
+
+def usage_cases(cls, usage, cases, module, check_empty=False, real=()):
+    """Adds a test_usage_<name> to cls for each (name, argv) of cases: module.main() run with argv in an empty working
+    folder prints the usage block on stdout, nothing on stderr and exits 2 (check_empty: and leaves the folder empty). The
+    cases named in real start the tool as a process instead, so argv handling and the exit code through the interpreter
+    stay covered."""
+    tool = module.__name__ + ".py"
+
+    def make(argv, as_process):
+        def test(self):
+            with tmp() as d:
+                if as_process:
+                    r = run_tool(tool, *argv, cwd=d)
+                    code, out, err = r.returncode, r.stdout, r.stderr
+                else:
+                    code, out, err = run_main(module.main, [tool, *argv], cwd=d)
+                if check_empty:
+                    self.assertEqual(os.listdir(d), [])
+            self.assertEqual((code, out.strip(), err), (2, usage.strip(), ""))
+        return test
+
+    for name, argv in cases:
+        setattr(cls, "test_usage_" + name, make(argv, name in real))
 
 
 def pb_varint(n):

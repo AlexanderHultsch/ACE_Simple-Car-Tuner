@@ -2,15 +2,12 @@
 
 No game data and no schemas: the cars are synthetic (support.FakeCar replaces tune.load_msg with in-memory messages, one shared store for both fake cars); the CLI is run in-process on those cars, and as a subprocess where nothing decodes a car file.
 """
-import contextlib
-import io
 import json
 import os
-import sys
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
 import tune
 
@@ -35,18 +32,10 @@ def tyre_obj(dy, curve="road"):
     return {"modelData": {"Dy0": dy}, "thermalData": {"thermalPerformanceCurve": CURVES[curve]}}
 
 
-class Base(unittest.TestCase):
+class Base(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work = str(self.d / "work")
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def read(self, tyre_id):
         with open(tune.tyre_path(self.work, tyre_id), "rb") as f:
@@ -60,16 +49,7 @@ class Base(unittest.TestCase):
         return path
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv])
 
 
 class World(Base):
@@ -817,16 +797,6 @@ class TestCommands(World):
         self.assertTrue(err.startswith("error: cannot expand the work directory"), err)
 
 
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tune.py", *argv, cwd=d)
-            self.assertEqual(os.listdir(d), [])
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_usage_" + name
-    return test
-
-
 class TestCliUsage(unittest.TestCase):
     def test_the_usage_block_lists_every_tyre_command(self):
         for cmd in ("tyres", "tyre-sources", "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete"):
@@ -834,19 +804,18 @@ class TestCliUsage(unittest.TestCase):
         self.assertNotIn("--car", "\n".join(line for line in USAGE.splitlines() if "tyre" in line))
 
 
-for _name, _argv in (("no_arguments", []), ("tyres_with_a_positional", ["tyres", "x"]), ("tyre_sources_with_a_positional", ["tyre-sources", "x"]),
-                     ("tyre_new_without_options", ["tyre-new"]), ("tyre_new_without_source", ["tyre-new", "--name", "x"]),
-                     ("tyre_new_without_name", ["tyre-new", "--source", "k"]),
-                     ("tyre_new_with_a_positional", ["tyre-new", "--name", "x", "--source", "k", "y"]),
-                     ("tyre_new_option_without_value", ["tyre-new", "--name"]),
-                     ("tyre_show_without_id", ["tyre-show"]), ("tyre_show_with_two_ids", ["tyre-show", "a", "b"]),
-                     ("tyre_set_with_two_operands", ["tyre-set", "a", "b"]), ("tyre_set_with_four_operands", ["tyre-set", "a", "b", "c", "d"]),
-                     ("tyre_set_without_operands", ["tyre-set"]),
-                     ("tyre_unset_with_one_operand", ["tyre-unset", "a"]), ("tyre_unset_with_three_operands", ["tyre-unset", "a", "b", "c"]),
-                     ("tyre_delete_without_id", ["tyre-delete"]), ("tyre_delete_with_two_ids", ["tyre-delete", "a", "b"]),
-                     ("tyres_with_a_car", ["tyres", "--car", "ks_x"]), ("tyre_show_with_a_tune", ["tyre-show", "a", "--tune", "ax01"]),
-                     ("tyre_set_with_an_unknown_option", ["tyre-set", "a", "b", "c", "--bogus", "1"])):
-    setattr(TestCliUsage, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("tyres_with_a_positional", ["tyres", "x"]), ("tyre_sources_with_a_positional", ["tyre-sources", "x"]),
+                                  ("tyre_new_without_options", ["tyre-new"]), ("tyre_new_without_source", ["tyre-new", "--name", "x"]),
+                                  ("tyre_new_without_name", ["tyre-new", "--source", "k"]),
+                                  ("tyre_new_with_a_positional", ["tyre-new", "--name", "x", "--source", "k", "y"]),
+                                  ("tyre_new_option_without_value", ["tyre-new", "--name"]),
+                                  ("tyre_show_without_id", ["tyre-show"]), ("tyre_show_with_two_ids", ["tyre-show", "a", "b"]),
+                                  ("tyre_set_with_two_operands", ["tyre-set", "a", "b"]), ("tyre_set_with_four_operands", ["tyre-set", "a", "b", "c", "d"]),
+                                  ("tyre_set_without_operands", ["tyre-set"]),
+                                  ("tyre_unset_with_one_operand", ["tyre-unset", "a"]), ("tyre_unset_with_three_operands", ["tyre-unset", "a", "b", "c"]),
+                                  ("tyre_delete_without_id", ["tyre-delete"]), ("tyre_delete_with_two_ids", ["tyre-delete", "a", "b"]),
+                                  ("tyres_with_a_car", ["tyres", "--car", "ks_x"]), ("tyre_show_with_a_tune", ["tyre-show", "a", "--tune", "ax01"]),
+                                  ("tyre_set_with_an_unknown_option", ["tyre-set", "a", "b", "c", "--bogus", "1"])), tune, check_empty=True)
 
 
 class TestCliSubprocess(unittest.TestCase):
@@ -869,9 +838,9 @@ class TestCliSubprocess(unittest.TestCase):
                                   (("tyre-set", "nope", "tyre_grip_lateral_front", "1"), "error: no tyre 'nope' in the library\n"),
                                   (("tyre-unset", "../x", "a"), "error: bad tyre id '../x'"), (("tyre-delete", "A"), "error: bad tyre id 'A'")):
                 with self.subTest(argv):
-                    r = run_tool("tune.py", *argv, "--work", d / "w", cwd=d)
-                    self.assertEqual((r.returncode, r.stdout), (1, ""))
-                    self.assertTrue(r.stderr.startswith(message), r.stderr)
+                    code, out, err = run_main(tune.main, ["tune.py", *argv, "--work", str(d / "w")], cwd=d)
+                    self.assertEqual((code, out), (1, ""))
+                    self.assertTrue(err.startswith(message), err)
             self.assertEqual(os.listdir(d), [])
 
     def test_a_tyre_file_in_the_work_folder_is_listed_and_shown_as_an_error_when_damaged(self):

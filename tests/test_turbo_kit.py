@@ -7,11 +7,10 @@ import io
 import json
 import os
 import shutil
-import sys
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
 import car_json
 import tune
@@ -28,15 +27,13 @@ def turbo_cat():
         mini_setting("limiter", type="int", targets=[("@engine", "limiter")]))
 
 
-class World(unittest.TestCase):
+class World(Sandbox):
     """Fake cars in one work folder: ks_x and ks_n have no turbo, ks_a one turbo (boost 0.8, name Beta), ks_b two turbos (boost 1.0 and
     1.2, name Alpha), ks_c three turbos (no stock info), ks_m two turbo files of which one is not on disk, ks_u an engine that cannot be
     decoded, and ks_z only a build folder (no base)."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.addCleanup(tune._donor_listings.clear)
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": c, "label": "Car " + c} for c in ("ks_x", "ks_n", "ks_a", "ks_b", "ks_c", "ks_m", "ks_u")]}
@@ -53,12 +50,6 @@ class World(unittest.TestCase):
         u = self.add_car("ks_u", ["t0.turbo"], [1.0])
         u.store[u.key(os.path.join(u.car_root, "data", "engine.carengine"))] = ValueError("cannot decode")
         os.makedirs(os.path.join(self.work, "ks_z", "build"))
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def add_car(self, car_id, turbos=(), boost=(), name=None, present=None):
         fc = FakeCar(self.work, car_id)
@@ -80,12 +71,6 @@ class World(unittest.TestCase):
                         "property_3": "P3", "variant_name": "Base"})
         self.fakes[car_id] = fc
         return fc
-
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
 
     def base_as_kit(self):
         """The kit root is out of scope of these tests (tests/test_turbo_build.py builds it): a car with a saved kit reads base."""
@@ -133,16 +118,7 @@ class World(unittest.TestCase):
         return tune.load_state(self.work, car_id, tune_id)
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv, "--work", self.work]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv, "--work", self.work])
 
 
 class TestStateKey(World):
@@ -856,15 +832,6 @@ class TestCommands(World):
         self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x")))
 
 
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tune.py", *argv, cwd=d)
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_" + name
-    return test
-
-
 class TestCliProcess(unittest.TestCase):
     def test_the_usage_on_stdout_names_the_three_commands(self):
         with tmp() as d:
@@ -881,14 +848,13 @@ class TestCliProcess(unittest.TestCase):
             self.assertEqual(os.listdir(d), [])
 
 
-for _name, _argv in (("no_arguments", []), ("turbo_donors_with_a_positional", ["turbo-donors", "x"]),
-                     ("turbo_donors_with_draft", ["turbo-donors", "--draft"]), ("turbo_add_without_operand", ["turbo-add"]),
-                     ("turbo_add_with_two_operands", ["turbo-add", "ks_a", "ks_b"]),
-                     ("turbo_add_tune_with_draft", ["turbo-add", "ks_a", "--tune", "ax01", "--draft"]),
-                     ("turbo_add_option_without_value", ["turbo-add", "ks_a", "--car"]),
-                     ("turbo_remove_with_a_positional", ["turbo-remove", "x"]),
-                     ("turbo_remove_tune_with_draft", ["turbo-remove", "--tune", "ax01", "--draft"])):
-    setattr(TestCliProcess, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCliProcess, USAGE, (("no_arguments", []), ("turbo_donors_with_a_positional", ["turbo-donors", "x"]),
+                                    ("turbo_donors_with_draft", ["turbo-donors", "--draft"]), ("turbo_add_without_operand", ["turbo-add"]),
+                                    ("turbo_add_with_two_operands", ["turbo-add", "ks_a", "ks_b"]),
+                                    ("turbo_add_tune_with_draft", ["turbo-add", "ks_a", "--tune", "ax01", "--draft"]),
+                                    ("turbo_add_option_without_value", ["turbo-add", "ks_a", "--car"]),
+                                    ("turbo_remove_with_a_positional", ["turbo-remove", "x"]),
+                                    ("turbo_remove_tune_with_draft", ["turbo-remove", "--tune", "ax01", "--draft"])), tune)
 
 
 if __name__ == "__main__":

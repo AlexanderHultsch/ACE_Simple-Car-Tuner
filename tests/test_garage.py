@@ -7,11 +7,9 @@ import io
 import json
 import os
 import re
-import sys
 import unittest
-from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
 import clone_car
 import kspkg
@@ -49,15 +47,13 @@ def tyre_obj(dy, curve="road"):
     return {"modelData": {"Dy0": dy, "Dy1": dy, "Fz0": 3000}, "thermalData": {"thermalPerformanceCurve": CURVES[curve], "x": 1}}
 
 
-class World(unittest.TestCase):
+class World(Sandbox):
     """Two extracted cars. ks_x (the car under test): shared tyres a, b, s, w, m; .car lists front [A (upper case), S, W, M] and
     rear [B, S, W]; presets p (A+B with a string rear, S+[S, B] with a list rear and a wire order, W+W, one compound that names a
     file in the car folder) and q (S+[S], A+B). ks_y: only the pair gt f+r, which ks_x does not have."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": "ks_x", "label": "Car X"}]}
         self.patch(tune, "load_cars", lambda path=None: data)
@@ -89,18 +85,6 @@ class World(unittest.TestCase):
         self.write(tune.stock_info_path(self.work, "ks_x"), {"car_id": "ks_x", "display_name": "Car X", "brand": "Brand", "year": 1999,
                                                               "property_1": "P1", "property_2": "P2", "property_3": "P3", "variant_name": "Base"})
 
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
-
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
-
     def tyres(self):
         """The library: gt (source in ks_y only), slicky (source s+s), soft (source a+b); sorted in that order."""
         self.gt = tune.create_tyre(self.work, "gt", KEY_GG)["id"]
@@ -115,16 +99,7 @@ class World(unittest.TestCase):
         return [s["key"] for s in tune.car_stock_tyres(self.work, "ks_x")]
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv, "--work", self.work]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv, "--work", self.work])
 
 
 class TestStateKey(World):
@@ -1094,16 +1069,6 @@ class TestCommands(World):
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "tune_state.json")))
 
 
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tune.py", *argv, cwd=d)
-            self.assertEqual(os.listdir(d), [])
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_usage_" + name
-    return test
-
-
 class TestCliSubprocess(unittest.TestCase):
     def test_runtime_errors_are_error_lines_on_stderr_with_exit_1(self):
         with tmp() as d:
@@ -1113,9 +1078,9 @@ class TestCliSubprocess(unittest.TestCase):
                                   (("garage-set", "own:nope"), "error: no tyre 'nope' in the library\n"),
                                   (("garage-set", "stock:a|b"), "error: unknown stock tyre a|b of ")):
                 with self.subTest(argv):
-                    r = run_tool("tune.py", *argv, "--work", d / "w", cwd=d)
-                    self.assertEqual((r.returncode, r.stdout), (1, ""))
-                    self.assertTrue(r.stderr.startswith(message), r.stderr)
+                    code, out, err = run_main(tune.main, ["tune.py", *argv, "--work", str(d / "w")], cwd=d)
+                    self.assertEqual((code, out), (1, ""))
+                    self.assertTrue(err.startswith(message), err)
             self.assertEqual(os.listdir(d), [])
 
     def test_garage_and_garage_reset_on_an_empty_work_folder_write_nothing(self):
@@ -1129,14 +1094,13 @@ class TestCliSubprocess(unittest.TestCase):
             self.assertEqual(os.listdir(d), [])
 
 
-for _name, _argv in (("garage_with_a_positional", ["garage", "x"]), ("garage_set_without_keys", ["garage-set"]),
-                     ("garage_set_with_only_options", ["garage-set", "--draft"]), ("garage_reset_with_a_positional", ["garage-reset", "x"]),
-                     ("garage_tune_with_draft", ["garage", "--tune", "ax01", "--draft"]),
-                     ("garage_set_tune_with_draft", ["garage-set", "own:x", "--tune", "ax01", "--draft"]),
-                     ("garage_reset_tune_with_draft", ["garage-reset", "--tune", "ax01", "--draft"]),
-                     ("garage_with_an_unknown_option", ["garage", "--bogus", "1"]), ("garage_option_without_value", ["garage", "--car"]),
-                     ("garage_with_new_id", ["garage", "--new-id", "ax02"])):
-    setattr(TestCliSubprocess, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCliSubprocess, USAGE, (("garage_with_a_positional", ["garage", "x"]), ("garage_set_without_keys", ["garage-set"]),
+                                       ("garage_set_with_only_options", ["garage-set", "--draft"]), ("garage_reset_with_a_positional", ["garage-reset", "x"]),
+                                       ("garage_tune_with_draft", ["garage", "--tune", "ax01", "--draft"]),
+                                       ("garage_set_tune_with_draft", ["garage-set", "own:x", "--tune", "ax01", "--draft"]),
+                                       ("garage_reset_tune_with_draft", ["garage-reset", "--tune", "ax01", "--draft"]),
+                                       ("garage_with_an_unknown_option", ["garage", "--bogus", "1"]), ("garage_option_without_value", ["garage", "--car"]),
+                                       ("garage_with_new_id", ["garage", "--new-id", "ax02"])), tune, check_empty=True)
 
 
 if __name__ == "__main__":

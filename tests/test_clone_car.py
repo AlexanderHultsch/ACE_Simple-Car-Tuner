@@ -10,7 +10,7 @@ import sys
 import unittest
 from unittest import mock
 
-from support import run_tool, tmp
+from support import Sandbox, run_tool
 
 import car_json
 import clone_car
@@ -20,17 +20,9 @@ USAGE = clone_car.__doc__.split("\n\n")[1]
 BOM = b"\xef\xbb\xbf"
 
 
-class Base(unittest.TestCase):
+class Base(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
+        super().setUp()
 
     def write(self, path, data):
         path = str(path)

@@ -7,7 +7,7 @@ import re
 import unittest
 from unittest import mock
 
-from support import ROOT, FakeCar, mini_catalogue, mini_setting, tmp
+from support import ROOT, FakeCar, Sandbox, mini_catalogue, mini_setting, tmp
 
 import clone_car
 import tune
@@ -424,12 +424,10 @@ class TestLoaderValidation(unittest.TestCase):
             self.load(settings={"a": 1})
 
 
-class TestCatalogueMemo(unittest.TestCase):
+class TestCatalogueMemo(Sandbox):
     def setUp(self):
         self.addCleanup(tune._catalogue_loaded.clear)
-        self.cm = tmp()
-        self.d = self.cm.__enter__()
-        self.addCleanup(self.cm.__exit__, None, None, None)
+        super().setUp()
 
     def touch(self, path, step=1000000):
         st = os.stat(path)

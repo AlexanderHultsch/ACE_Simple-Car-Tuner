@@ -5,38 +5,12 @@ The objects are plain dicts like the ones tools/car_json.py decodes an .actor fi
 import copy
 import unittest
 
-from support import desc_enum, desc_field, desc_file, desc_message, desc_set, pb_msg, pb_str, pb_vint, tmp
+from support import (BACKFIRE, BACKFIRE_BANK, BANK, TURBO, backfire, desc_enum, desc_field, desc_file, desc_message, desc_set, engine, entry,
+                     pb_msg, pb_str, pb_vint, tmp, turbo)
 
 import car_json as cj
 import sounds
 import tune
-
-BANK = "content\\sfx\\turbo.bank"
-BACKFIRE_BANK = "content\\sfx\\backfire.bank"
-TURBO = "event:/parts/turbos/"
-BACKFIRE = "event:/parts/backfires/"
-
-
-def entry(event, kind=None, bank=BANK, **more):
-    e = {"event": event}
-    if kind is not None:
-        e["type"] = kind
-    e["transform"] = {"scale": {"x": 1.0}}
-    e["bank"] = bank
-    e.update(more)
-    return e
-
-
-def turbo(name, **more):
-    return entry(TURBO + name, "TurboEvent", **more)
-
-
-def backfire(name, **more):
-    return entry(BACKFIRE + name, "Backfire", BACKFIRE_BANK, **more)
-
-
-def engine():
-    return entry("event:/evo_cars/ks_x/engine_int", None, "content\\sfx\\ks_x.bank")
 
 
 def actor(*entries, order=True):

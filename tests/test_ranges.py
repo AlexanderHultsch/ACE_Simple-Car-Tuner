@@ -2,16 +2,13 @@
 
 No game data and no schemas: the cars are synthetic (support.FakeCar replaces tune.load_msg / save_msg with in-memory messages, one shared store for all fake cars); the command runs in-process on those cars, and as a subprocess where no car is decoded.
 """
-import contextlib
-import io
 import json
 import math
 import os
-import sys
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp
 
 import kspkg
 import tune
@@ -31,13 +28,11 @@ def stock_info(car_id):
             "property_2": "P2", "property_3": "P3", "variant_name": "Base"}
 
 
-class Fleet(unittest.TestCase):
+class Fleet(Sandbox):
     """A work folder in a scratch folder with synthetic extracted cars; car() adds one with the given engine values."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work = str(self.d / "work")
         self.first = None
         self.cat = mini_catalogue(*numeric())
@@ -55,26 +50,11 @@ class Fleet(unittest.TestCase):
             self.write(tune.stock_info_path(self.work, car_id), stock_info(car_id))
         return fc
 
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
-
     def compute(self, **kw):
         return tune.compute_ranges(self.work, kw.pop("catalogue", self.cat), game="")
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv])
 
 
 class TestComputeRanges(Fleet):

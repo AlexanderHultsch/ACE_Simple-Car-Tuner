@@ -24,7 +24,7 @@ import unittest
 import urllib.parse
 from unittest import mock
 
-from support import ROOT, FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import ROOT, FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
 import clone_car
 import logconf
@@ -126,13 +126,11 @@ def symlink_or_skip(test, target, path):
         test.skipTest("symbolic links cannot be created here")
 
 
-class Env(unittest.TestCase):
+class Env(Sandbox):
     """CONFIG and JOB patched, stdout / stderr captured, game_running / tune.init / tune.apply stubbed, no subprocess."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work, self.mods, self.logs = str(self.d / "work"), str(self.d / "mods"), str(self.d / "logs")
         self.out, self.err = io.StringIO(), io.StringIO()
         self.patch(sys, "stdout", self.out)
@@ -151,12 +149,6 @@ class Env(unittest.TestCase):
         self.cat = mini_catalogue(limiter(), aids_off(), suffix(), boost())
         self.patch(tune, "load_cars", lambda path=None: self.data)
         self.patch(tune, "load_catalogue", lambda path=None: self.cat)
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def patch_list(self, target, values):
         saved = list(target)
@@ -215,12 +207,6 @@ class ServerCase(Env):
         self.server.shutdown()
         self.server.server_close()
         thread.join(5)
-
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
 
     def make_car(self):
         gp = self.fc.game_path
@@ -5573,46 +5559,37 @@ class TestMain(Env):
 
 
 # -------------------------------------------------------------------------------------------------- CLI conventions
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tuner_server.py", *argv, cwd=d)
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_usage_" + name
-    return test
-
-
 class TestCli(unittest.TestCase):
     pass
 
 
-for _name, _argv in (("positional", ["foo"]), ("positional_after_options", ["--port", "8765", "foo"]),
-                     ("unknown_option", ["--bogus", "1"]), ("help", ["--help"]), ("port_without_value", ["--port"]),
-                     ("work_without_value", ["--work"]), ("mods_without_value", ["--mods"]), ("logs_without_value", ["--logs"]),
-                     ("bind_without_value", ["--bind"])):
-    setattr(TestCli, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCli, USAGE, (("positional", ["foo"]), ("positional_after_options", ["--port", "8765", "foo"]),
+                             ("unknown_option", ["--bogus", "1"]), ("help", ["--help"]), ("port_without_value", ["--port"]),
+                             ("work_without_value", ["--work"]), ("mods_without_value", ["--mods"]), ("logs_without_value", ["--logs"]),
+                             ("bind_without_value", ["--bind"])), ts, real=("positional",))
 
 
 class TestCliRuntimeErrors(unittest.TestCase):
     def run_server(self, *argv):
         with tmp() as d:
-            return run_tool("tuner_server.py", *argv, cwd=d)
+            return run_main(ts.main, ["tuner_server.py", *argv], cwd=d)
 
     def test_a_port_below_1024_is_an_error_line_on_stderr_with_exit_1(self):
-        r = self.run_server("--port", "80")
+        with tmp() as d:
+            r = run_tool("tuner_server.py", "--port", "80", cwd=d)
         self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", "error: --port must be a number from 1024 to 65535\n"))
 
     def test_a_bad_port_is_an_error_line_on_stderr_with_exit_1(self):
         for port in ("abc", "0", "70000", "-1"):
             with self.subTest(port):
-                r = self.run_server("--port", port)
-                self.assertEqual((r.returncode, r.stdout), (1, ""))
-                self.assertRegex(r.stderr, r"^error: --port must be a number from \d+ to 65535\n$")
+                code, out, err = self.run_server("--port", port)
+                self.assertEqual((code, out), (1, ""))
+                self.assertRegex(err, r"^error: --port must be a number from \d+ to 65535\n$")
 
     def test_an_unexpandable_work_folder_is_an_error_line_on_stderr_with_exit_1(self):
-        r = self.run_server("--work", "%ACE_TEST_NO_SUCH_VAR%/w")
-        self.assertEqual((r.returncode, r.stdout), (1, ""))
-        self.assertTrue(r.stderr.startswith("error: cannot expand the work directory"), r.stderr)
+        code, out, err = self.run_server("--work", "%ACE_TEST_NO_SUCH_VAR%/w")
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("error: cannot expand the work directory"), err)
 
 
 class TestUsageText(unittest.TestCase):

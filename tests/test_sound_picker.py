@@ -7,11 +7,11 @@ import io
 import json
 import os
 import shutil
-import sys
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import (BACKFIRE, BACKFIRE_BANK, BANK, TURBO, FakeCar, Sandbox, backfire, engine, entry, mini_catalogue, mini_setting, run_main,
+                     run_tool, tmp, turbo, usage_cases)
 
 import clone_car
 import kspkg
@@ -20,34 +20,9 @@ import tune
 USAGE = tune.__doc__.split("\n\n")[1]
 KEY = tune.SOUND_KEY
 REAL_RENAME = os.rename
-BANK = "content\\sfx\\turbo.bank"
-BACKFIRE_BANK = "content\\sfx\\backfire.bank"
-T = "event:/parts/turbos/"
-B = "event:/parts/backfires/"
+T, B = TURBO, BACKFIRE
 T_NONE, T_RX7 = T + "turbo_none", T + "turbo_rx7"
 B_A, B_B, B_CLASSIC = B + "backfire_a", B + "backfire_b", B + "backfire_classic#8"
-
-
-def entry(event, kind=None, bank=BANK, **more):
-    e = {"event": event}
-    if kind is not None:
-        e["type"] = kind
-    e["transform"] = {"scale": {"x": 1.0}}
-    e["bank"] = bank
-    e.update(more)
-    return e
-
-
-def engine():
-    return entry("event:/evo_cars/ks_x/engine_int", None, "content\\sfx\\ks_x.bank")
-
-
-def turbo(name, **more):
-    return entry(T + name, "TurboEvent", **more)
-
-
-def backfire(name, **more):
-    return entry(B + name, "Backfire", BACKFIRE_BANK, **more)
 
 
 def actor(*entries):
@@ -61,15 +36,13 @@ def sound_cat():
         mini_setting("limiter", type="int", targets=[("@engine", "limiter")]))
 
 
-class World(unittest.TestCase):
+class World(Sandbox):
     """Fake cars in one work folder: ks_x (the default car; own sounds turbo_none and backfire_a), ks_a (turbo_rx7, backfire_classic with
     optionalParam 8, the backfire entry first), ks_b (turbo_rx7, backfire_a, its actor file is named KS_B.ACTOR), ks_n (a backfire entry
     only: backfire_b), ks_u (an actor that cannot be decoded), ks_z (no actor file) and ks_q (only a build folder: not installed)."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.addCleanup(tune._actor_options.clear)
         self.work = str(self.d / "work")
         data = {"default": "ks_x", "cars": [{"id": c, "label": "Car " + c} for c in ("ks_x", "ks_a", "ks_b", "ks_n", "ks_u", "ks_z", "ks_q")]}
@@ -85,12 +58,6 @@ class World(unittest.TestCase):
         u.store[u.key(os.path.join(u.car_root, "ks_u.actor"))] = ValueError("cannot decode")
         self.add_car("ks_z", None)
         os.makedirs(os.path.join(self.work, "ks_q", "build"))
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def add_car(self, car_id, obj, name=None, file=None):
         fc = FakeCar(self.work, car_id)
@@ -110,12 +77,6 @@ class World(unittest.TestCase):
                         "property_3": "P3", "variant_name": "Base"})
         self.fakes[car_id] = fc
         return fc
-
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
 
     def state(self, tune_id=None, car_id="ks_x"):
         return tune.load_state(self.work, car_id, tune_id)
@@ -143,16 +104,7 @@ class World(unittest.TestCase):
         return {slot: [o["key"] for o in found] for slot, found in options.items()}
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv, "--work", self.work]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv, "--work", self.work])
 
 
 class TestStateKey(World):
@@ -1066,16 +1018,6 @@ class TestCommands(World):
         self.assertFalse(os.path.exists(tune.state_path(self.work, "ks_x")))
 
 
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tune.py", *argv, cwd=d)
-            self.assertEqual(os.listdir(d), [])
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_" + name
-    return test
-
-
 class TestCliSubprocess(unittest.TestCase):
     def test_the_usage_on_stdout_names_the_commands(self):
         with tmp() as d:
@@ -1086,13 +1028,12 @@ class TestCliSubprocess(unittest.TestCase):
             self.assertIn("python tools/tune.py " + line, r.stdout)
 
 
-for _name, _argv in (("sounds_with_a_positional", ["sounds", "x"]), ("sounds_tune_with_draft", ["sounds", "--tune", "ax01", "--draft"]),
-                     ("sounds_option_without_value", ["sounds", "--car"]), ("sound_set_without_operands", ["sound-set"]),
-                     ("sound_set_with_one_operand", ["sound-set", "turbo"]), ("sound_set_with_three_operands", ["sound-set", "turbo", "a", "b"]),
-                     ("sound_set_tune_with_draft", ["sound-set", "turbo", "a", "--tune", "ax01", "--draft"]),
-                     ("sound_reset_with_two_operands", ["sound-reset", "turbo", "backfire"]),
-                     ("sound_reset_tune_with_draft", ["sound-reset", "--tune", "ax01", "--draft"])):
-    setattr(TestCliSubprocess, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCliSubprocess, USAGE, (("sounds_with_a_positional", ["sounds", "x"]), ("sounds_tune_with_draft", ["sounds", "--tune", "ax01", "--draft"]),
+                                       ("sounds_option_without_value", ["sounds", "--car"]), ("sound_set_without_operands", ["sound-set"]),
+                                       ("sound_set_with_one_operand", ["sound-set", "turbo"]), ("sound_set_with_three_operands", ["sound-set", "turbo", "a", "b"]),
+                                       ("sound_set_tune_with_draft", ["sound-set", "turbo", "a", "--tune", "ax01", "--draft"]),
+                                       ("sound_reset_with_two_operands", ["sound-reset", "turbo", "backfire"]),
+                                       ("sound_reset_tune_with_draft", ["sound-reset", "--tune", "ax01", "--draft"])), tune, check_empty=True)
 
 
 if __name__ == "__main__":

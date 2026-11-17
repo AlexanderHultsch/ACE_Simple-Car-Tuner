@@ -8,7 +8,7 @@ import os
 import time
 import unittest
 
-from support import ROOT, tmp
+from support import ROOT, Sandbox, tmp
 
 import ace_shm
 import logconf
@@ -473,11 +473,9 @@ class TestValidateConfig(unittest.TestCase):
         self.fails(self.ok(ticked=["behaviour.rpm", "limiter", "behaviour.rpm"]), "behaviour.rpm is ticked twice")
 
 
-class TestConfigFile(unittest.TestCase):
+class TestConfigFile(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work = str(self.d / "work")
 
     def test_the_file_is_log_config_json_in_the_work_folder(self):
@@ -766,11 +764,9 @@ class TestSelectedChannels(unittest.TestCase):
         self.assertIn("bhp", sel["live"])
 
 
-class TestStopFile(unittest.TestCase):
+class TestStopFile(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.logs = str(self.d / "logs")
 
     def test_the_name_is_logger_stop_and_the_path_is_in_the_logs_folder(self):
@@ -811,11 +807,9 @@ class TestStopFile(unittest.TestCase):
         self.assertFalse(logconf.logger_status(self.logs)["running"])
 
 
-class TestSessions(unittest.TestCase):
+class TestSessions(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.logs = str(self.d / "logs")
 
     def session(self, name, lines, mtime=None, eol="\n"):
@@ -952,11 +946,9 @@ class TestSessions(unittest.TestCase):
         self.assertEqual(logconf.default_logs_dir(), os.path.join(str(ROOT), "logs"))
 
 
-class TestLoggerStatus(unittest.TestCase):
+class TestLoggerStatus(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.logs = str(self.d / "logs")
 
     def status(self, **more):
@@ -1322,11 +1314,9 @@ class TestAiCommand(unittest.TestCase):
         self.assertLess(len(self.text), 1048576)
 
 
-class TestSessionFile(unittest.TestCase):
+class TestSessionFile(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.logs = str(self.d / "logs")
         self.path = write(os.path.join(self.logs, "2026-11-16_12-00-00_ks_x.jsonl"), "{}\n")
 

@@ -12,7 +12,7 @@ import sys
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting
 
 import logfacts
 import tune
@@ -45,14 +45,12 @@ def snapshot(**kw):
     return data
 
 
-class FactsCase(unittest.TestCase):
+class FactsCase(Sandbox):
     """Two stock cars in a scratch work folder: ks_alpha (display name Alpha Stock) with the modded cars ax_alpha (default, suffix MY)
     and ax_alp01 (suffix Drift), and ks_bravo (Bravo Stock) without any tune."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work, self.mods = str(self.d / "work"), str(self.d / "mods")
         os.makedirs(self.mods)
         self.patch(tune, "load_cars", lambda path=None: {"default": "ks_alpha", "cars": [{"id": "ks_alpha", "label": "Alpha"},
@@ -68,22 +66,10 @@ class FactsCase(unittest.TestCase):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "MY", "limiter": 8000})
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "Drift"}, "ax_alp01")
 
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
-
     def effective_rows(self, work, car_id, catalogue=None, hidden=False, tune=None):
         self.row_calls.append((work, car_id, catalogue, hidden, tune))
         REAL_LOAD_STATE(work, car_id, tune)
         return self.rows
-
-    def write(self, path, data, binary=False):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb" if binary else "w", **({} if binary else {"encoding": "utf-8"})) as f:
-            f.write(data if isinstance(data, (str, bytes)) else json.dumps(data))
-        return path
 
     def stock_info(self, car_id, name):
         self.write(tune.stock_info_path(self.work, car_id), {"car_id": car_id, "display_name": name, "brand": "B", "year": 1999})
@@ -490,13 +476,11 @@ class TestOtherCars(FactsCase):
         json.dumps(got)
 
 
-class TestRealRows(unittest.TestCase):
+class TestRealRows(Sandbox):
     """tune.effective_rows itself, on a stubbed car."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work, self.mods = str(self.d / "work"), str(self.d / "mods")
         for name, value in (("load_cars", lambda path=None: {"default": "ks_alpha", "cars": [{"id": "ks_alpha", "label": "Alpha"}]}),
                             ("load_catalogue", lambda path=None: mini_catalogue(suffix(), limiter()))):

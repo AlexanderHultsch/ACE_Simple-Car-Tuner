@@ -2,19 +2,16 @@
 
 No game data and no schemas: the cars are synthetic and their files are JSON text on disk (the tests replace tune.load_msg / save_msg by a JSON reader and a writer that opens the file in place, as the real save_msg does, so a patched file that is still a hard link of base would change base); clone_car.build is replaced by the real copy_renamed and kspkg.cmd_pack by a recorder. The wire bookkeeping (_order, _packed) of the copied fields is checked against car_json.encode_msg on a small schema built here.
 """
-import contextlib
 import hashlib
-import io
 import json
 import os
 import shutil
 import struct
-import sys
 import unittest
 from unittest import mock
 
-from support import (FakeCar, desc_field, desc_file, desc_message, desc_set, mini_catalogue, mini_setting, pb_bytes, pb_f32, pb_int,
-                     pb_msg, pb_str, run_tool, tmp)
+from support import (FakeCar, Sandbox, desc_field, desc_file, desc_message, desc_set, mini_catalogue, mini_setting, pb_bytes, pb_f32, pb_int,
+                     pb_msg, pb_str, run_main, run_tool, tmp)
 
 import car_json
 import clone_car
@@ -89,15 +86,13 @@ def assert_order_valid(test, obj):
         test.assertEqual({k: order.count(k) for k in set(order)}, want)
 
 
-class World(unittest.TestCase):
+class World(Sandbox):
     """Fake cars in one work folder: ks_x (the car under test) and ks_n have no turbo (ks_x has an inline engine block in its .car, ks_n
     none), ks_a has one turbo (boost 0.8), ks_b two (1.0 and 1.2), ks_s one (0.9, entry written in capitals with slashes, file in a
     subfolder, no inline block in its .car). Every file is JSON text on disk."""
 
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.addCleanup(tune._resolved.clear)
         self.addCleanup(tune._donor_listings.clear)
         self.work = str(self.d / "work")
@@ -115,12 +110,6 @@ class World(unittest.TestCase):
         self.add_car("ks_a", ["data/t0.turbo"], [0.8], inline=True)
         self.add_car("ks_b", ["data/turbo_a.turbo", "data/turbo_b.turbo"], [1.0, 1.2], inline=True)
         self.add_car("ks_s", ["data/turbos/s.turbo"], [0.9], style="slash")
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def spy_patch_kit(self, work, car_id, donor, part):
         self.builds.append((car_id, donor))
@@ -161,12 +150,6 @@ class World(unittest.TestCase):
         self.fakes[car_id] = fc
         return fc
 
-    def write(self, path, data):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(data if isinstance(data, str) else json.dumps(data))
-        return path
-
     def car_file(self, root, car_id, rel):
         return os.path.join(root, "content", "cars", car_id, *rel.split("/"))
 
@@ -204,16 +187,7 @@ class World(unittest.TestCase):
         tune.save_state(self.work, "ks_x", {"name_suffix": "_B", KEY: {"donor": "ks_b"}}, "ax01")
 
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv, "--work", self.work]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv, "--work", self.work])
 
 
 class TestKitRoot(World):

@@ -13,7 +13,7 @@ import threading
 import unittest
 from unittest import mock
 
-from support import FakeCar, mini_catalogue, mini_setting, run_tool, tmp
+from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
 import car_json
 import clone_car
@@ -49,18 +49,10 @@ def not_chained(test, exc):
     test.assertTrue(exc.__context__ is None or exc.__suppress_context__, "implicit exception chain: %r" % (exc.__context__,))
 
 
-class Base(unittest.TestCase):
+class Base(Sandbox):
     def setUp(self):
-        cm = tmp()
-        self.d = cm.__enter__()
-        self.addCleanup(cm.__exit__, None, None, None)
+        super().setUp()
         self.work = str(self.d / "work")
-
-    def patch(self, target, name, value):
-        p = mock.patch.object(target, name, value)
-        p.start()
-        self.addCleanup(p.stop)
-        return value
 
     def cars(self, *tested, default=None):
         tested = tested or (("ks_x", "Car X"),)
@@ -68,23 +60,8 @@ class Base(unittest.TestCase):
         self.patch(tune, "load_cars", lambda path=None: data)
         return data
 
-    def write(self, path, data, binary=False):
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb" if binary else "w", **({} if binary else {"encoding": "utf-8"})) as f:
-            f.write(data if isinstance(data, (str, bytes)) else json.dumps(data))
-        return path
-
     def run_main(self, *argv):
-        out, err, code = io.StringIO(), io.StringIO(), None
-        with mock.patch.object(sys, "argv", ["tune.py", *argv]), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            try:
-                tune.main()
-            except SystemExit as e:
-                code = e.code
-        if isinstance(code, str):
-            err.write(code + "\n")
-            code = 1
-        return code or 0, out.getvalue(), err.getvalue()
+        return run_main(tune.main, ["tune.py", *argv])
 
 
 class CarCase(Base):
@@ -3721,32 +3698,22 @@ class TestUsageText(unittest.TestCase):
                                 tune.main()
 
 
-def usage_case(name, argv):
-    def test(self):
-        with tmp() as d:
-            r = run_tool("tune.py", *argv, cwd=d)
-        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr), (2, USAGE.strip(), ""))
-    test.__name__ = "test_" + name
-    return test
-
-
 class TestCliUsage(unittest.TestCase):
     pass
 
 
-for _name, _argv in (("no_arguments", []), ("unknown_command", ["frobnicate"]), ("cars_with_a_positional", ["cars", "x"]),
-                     ("init_with_a_positional", ["init", "x"]), ("defaults_with_a_positional", ["defaults", "x"]),
-                     ("set_with_one_operand", ["set", "limiter"]), ("set_with_three_operands", ["set", "a", "b", "c"]),
-                     ("unset_without_operand", ["unset"]), ("unset_with_two_operands", ["unset", "a", "b"]),
-                     ("show_with_a_positional", ["show", "x"]), ("apply_with_a_positional", ["apply", "x"]),
-                     ("unknown_option", ["show", "--bogus", "1"]),
-                     ("option_without_value", ["show", "--car"]), ("tune_without_value", ["show", "--tune"]),
-                     ("cars_modded_with_tested", ["cars", "--modded", "--tested"]), ("duplicate_with_a_positional", ["duplicate", "x"]),
-                     ("duplicate_tune_with_draft", ["duplicate", "--tune", "ax01", "--draft"]), ("duplicate_with_all", ["duplicate", "--all"]),
-                     ("init_with_a_tune", ["init", "--tune", "ax01"]),
-                     ("cars_with_a_tune", ["cars", "--tune", "ax01"]), ("show_with_draft", ["show", "--draft"]),
-                     ("apply_with_new_id_without_value", ["apply", "--tune", "ax01", "--new-id"])):
-    setattr(TestCliUsage, "test_usage_" + _name, usage_case(_name, _argv))
+usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("unknown_command", ["frobnicate"]), ("cars_with_a_positional", ["cars", "x"]),
+                                  ("init_with_a_positional", ["init", "x"]), ("defaults_with_a_positional", ["defaults", "x"]),
+                                  ("set_with_one_operand", ["set", "limiter"]), ("set_with_three_operands", ["set", "a", "b", "c"]),
+                                  ("unset_without_operand", ["unset"]), ("unset_with_two_operands", ["unset", "a", "b"]),
+                                  ("show_with_a_positional", ["show", "x"]), ("apply_with_a_positional", ["apply", "x"]),
+                                  ("unknown_option", ["show", "--bogus", "1"]),
+                                  ("option_without_value", ["show", "--car"]), ("tune_without_value", ["show", "--tune"]),
+                                  ("cars_modded_with_tested", ["cars", "--modded", "--tested"]), ("duplicate_with_a_positional", ["duplicate", "x"]),
+                                  ("duplicate_tune_with_draft", ["duplicate", "--tune", "ax01", "--draft"]), ("duplicate_with_all", ["duplicate", "--all"]),
+                                  ("init_with_a_tune", ["init", "--tune", "ax01"]),
+                                  ("cars_with_a_tune", ["cars", "--tune", "ax01"]), ("show_with_draft", ["show", "--draft"]),
+                                  ("apply_with_new_id_without_value", ["apply", "--tune", "ax01", "--new-id"])), tune, real=("no_arguments",))
 
 
 class TestCliRuntimeErrors(unittest.TestCase):
@@ -3759,32 +3726,32 @@ class TestCliRuntimeErrors(unittest.TestCase):
 
     def test_unknown_setting_is_an_error_line_on_stderr_with_exit_1(self):
         with tmp() as d:
-            r = run_tool("tune.py", "unset", "no_such_setting", "--work", d / "w", cwd=d)
-            self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", "error: unknown setting 'no_such_setting'\n"))
+            code, out, err = run_main(tune.main, ["tune.py", "unset", "no_such_setting", "--work", str(d / "w")], cwd=d)
+            self.assertEqual((code, out, err), (1, "", "error: unknown setting 'no_such_setting'\n"))
 
     def test_unextracted_car_is_an_error_line_on_stderr_with_exit_1(self):
         with tmp() as d:
-            r = run_tool("tune.py", "defaults", "--work", d / "w", cwd=d)
-            self.assertEqual((r.returncode, r.stdout), (1, ""))
-            self.assertRegex(r.stderr, r"^error: no base car in .*, run init first\n$")
+            code, out, err = run_main(tune.main, ["tune.py", "defaults", "--work", str(d / "w")], cwd=d)
+            self.assertEqual((code, out), (1, ""))
+            self.assertRegex(err, r"^error: no base car in .*, run init first\n$")
 
     def test_tune_with_new_id_is_an_error_line_on_stderr_with_exit_1(self):
         with tmp() as d:
-            r = run_tool("tune.py", "apply", "--tune", "ax01", "--new-id", "ax02", "--no-install", "--work", d / "w", cwd=d)
-            self.assertEqual((r.returncode, r.stdout, r.stderr), (1, "", "error: --tune and --new-id cannot be combined\n"))
+            code, out, err = run_main(tune.main, ["tune.py", "apply", "--tune", "ax01", "--new-id", "ax02", "--no-install", "--work", str(d / "w")], cwd=d)
+            self.assertEqual((code, out, err), (1, "", "error: --tune and --new-id cannot be combined\n"))
             self.assertEqual(os.listdir(d), [])
 
     def test_unknown_tune_is_an_error_line_on_stderr_with_exit_1(self):
         with tmp() as d:
-            r = run_tool("tune.py", "show", "--tune", "ax_zz99", "--work", d / "w", cwd=d)
-            self.assertEqual((r.returncode, r.stdout), (1, ""))
-            self.assertRegex(r.stderr, r"^error: .*ax_zz99")
+            code, out, err = run_main(tune.main, ["tune.py", "show", "--tune", "ax_zz99", "--work", str(d / "w")], cwd=d)
+            self.assertEqual((code, out), (1, ""))
+            self.assertRegex(err, r"^error: .*ax_zz99")
 
     def test_unexpanded_work_folder_is_an_error_line(self):
         with tmp() as d:
-            r = run_tool("tune.py", "show", "--work", "%ACE_TEST_NO_SUCH_VAR%/w", cwd=d)
-            self.assertEqual((r.returncode, r.stdout), (1, ""))
-            self.assertTrue(r.stderr.startswith("error: cannot expand the work directory"), r.stderr)
+            code, out, err = run_main(tune.main, ["tune.py", "show", "--work", "%ACE_TEST_NO_SUCH_VAR%/w"], cwd=d)
+            self.assertEqual((code, out), (1, ""))
+            self.assertTrue(err.startswith("error: cannot expand the work directory"), err)
             self.assertEqual(os.listdir(d), [])
 
 

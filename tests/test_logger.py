@@ -1,4 +1,4 @@
-"""Tests for tools/logger.py and start_logger.bat without the game: Logger.step() driven by a scripted fake source (blocks built from the ace_shm structs), a fake clock and a fake wall clock, session files and the status file in scratch folders, the command line, and the batch file.
+"""Tests for tools/logger.py without the game: Logger.step() driven by a scripted fake source (blocks built from the ace_shm structs), a fake clock and a fake wall clock, session files and the status file in scratch folders and the command line (start_logger.bat is in tests/test_bat.py).
 
 The game's shared memory is never opened (the source is always a fake), and the real work folder, logs folder and game folder are never touched.
 """
@@ -8,14 +8,13 @@ import io
 import json
 import ntpath
 import os
-import re
 import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
-from support import ROOT, TOOLS, run_tool
+from support import TOOLS, run_tool
 
 import ace_shm
 import clone_car
@@ -25,8 +24,6 @@ import logger
 import tune
 
 USAGE = logger.__doc__.split("\n\n")[1]
-BAT = (ROOT / "start_logger.bat").read_text(encoding="ascii")
-TUNER_BAT = (ROOT / "start_tuner.bat").read_text(encoding="ascii")
 
 BASE = datetime.datetime(2026, 11, 16, 14, 30, 5, tzinfo=datetime.timezone(datetime.timedelta(hours=1)))
 BASE_TS = BASE.timestamp()
@@ -1311,60 +1308,6 @@ class TestConsole(unittest.TestCase):
         with contextlib.redirect_stdout(pipe), tempfile.TemporaryDirectory() as d:
             logger.Logger(os.path.join(d, "w"), os.path.join(d, "l")).out("waiting for the game ...")
         self.assertEqual((pipe.getvalue(), Pipe.flushed), ("waiting for the game ...\n", 1))
-
-
-class TestStartBat(unittest.TestCase):
-    def test_it_starts_the_logger_script_of_the_repo_from_the_repo_root(self):
-        self.assertIn(r"tools\logger.py", BAT)
-        self.assertTrue((ROOT / "tools" / "logger.py").is_file())
-        self.assertIn(r'cd /d "%~dp0"', BAT)
-        self.assertEqual((ROOT / "start_logger.bat").parent, ROOT)
-        self.assertLess(BAT.index(r'cd /d "%~dp0"'), BAT.index(r"tools\logger.py"))
-
-    def test_paths_are_relative_to_the_batch_file(self):
-        self.assertIn("%~dp0", BAT)
-        self.assertNotRegex(BAT, r"(?i)\b[a-z]:\\users\\")
-
-    def test_python_runs_isolated(self):
-        self.assertRegex(BAT, r'"%PY%" -I tools\\logger\.py\r?\n')
-        self.assertIn("--work", logger.__doc__)
-        self.assertIn("--logs", logger.__doc__)
-        self.assertIn("--mods", logger.__doc__)
-
-    def test_it_has_the_window_title(self):
-        self.assertIn("title ACE Session Logger\n", BAT)
-
-    def test_it_looks_for_the_same_python_as_the_tuner_start_file(self):
-        mine = re.search(r'set "PY=(.*?python\.exe)"', BAT).group(1)
-        self.assertEqual(mine, re.search(r'set "PY=(.*?python\.exe)"', TUNER_BAT).group(1))
-        self.assertEqual(mine, r"%LOCALAPPDATA%\Programs\Python\Python312\python.exe")
-
-    def test_a_missing_python_stops_with_a_message_and_exit_code_1_like_the_tuner_start_file(self):
-        block = re.search(r'if not exist "%PY%" \(\n.*?\n\)\n', BAT, re.S).group(0)
-        self.assertEqual(block, re.search(r'if not exist "%PY%" \(\n.*?\n\)\n', TUNER_BAT, re.S).group(0))
-        self.assertIn("exit /b 1", block)
-        self.assertIn("pause", block)
-
-    def test_the_window_stays_open_after_the_logger_stops(self):
-        tail = BAT[BAT.index(r"tools\logger.py"):].splitlines()
-        self.assertEqual(tail[1:], ["echo.", "echo The session logger has stopped.", "pause"])
-
-    def test_it_starts_no_browser_and_takes_no_port(self):
-        self.assertNotIn("start http", BAT)
-        self.assertNotIn("PORT", BAT)
-
-    def test_the_file_is_plain_ascii_without_a_byte_order_mark(self):
-        raw = (ROOT / "start_logger.bat").read_bytes()
-        raw.decode("ascii")
-        self.assertFalse(raw.startswith(b"\xef\xbb\xbf"))
-
-    def test_every_line_ends_with_crlf(self):
-        raw = (ROOT / "start_logger.bat").read_bytes()
-        self.assertEqual(raw.count(b"\n"), raw.count(b"\r\n"))
-        self.assertTrue(raw.endswith(b"\r\n"))
-
-    def test_git_checks_batch_files_out_with_crlf(self):
-        self.assertIn("*.bat text eol=crlf", (ROOT / ".gitattributes").read_text(encoding="utf-8").splitlines())
 
 
 if __name__ == "__main__":

@@ -70,12 +70,12 @@ class SharedMemory:
         info = _MemoryInfo()
         _kernel32.VirtualQuery(view, ctypes.byref(info), ctypes.sizeof(info))
         self.handle, self.view = handle, view
-        # Never read past the block, even if the game publishes a smaller one than we expect.
+        # Never read past the mapped pages (VirtualQuery gives the view size rounded up to 4096 bytes), so a smaller block is only padded when it ends on an earlier page.
         self.available = min(size, info.RegionSize or size) if size else info.RegionSize
         self.size = size or self.available
 
     def read(self) -> bytes:
-        """`size` bytes; zero-padded if the game's block is smaller."""
+        """`size` bytes; zero-padded when the mapped view is smaller (the view size is a whole number of pages)."""
         return ctypes.string_at(self.view, self.available).ljust(self.size, b"\0")
 
     def read_at(self, offset: int, length: int) -> bytes:

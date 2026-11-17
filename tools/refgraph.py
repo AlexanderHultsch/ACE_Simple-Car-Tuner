@@ -9,8 +9,9 @@ Every file is scanned as raw bytes for strings starting with content\ (or conten
 lower-cased and normalized to backslashes. Refs under content\cars\<car_id>\ of a car
 present in <extracted_root> are ok/MISSING (target file or directory exists or not),
 everything else is external. Prints a per-file section, then a summary with counts,
-MISSING refs, external refs grouped by their first three path segments, and files
-that no other file refers to.
+MISSING refs, external refs grouped by their first three path segments, FALLBACK refs
+(found without a protobuf length prefix, so their end is a guess) and files that no other
+file refers to.
 
 Exit code 0 if no MISSING refs, 1 if MISSING refs are found or on a runtime error
 (error: ... on stderr), 2 on bad usage (usage block on stdout).

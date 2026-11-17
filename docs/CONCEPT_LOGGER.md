@@ -12,13 +12,13 @@ The idea comes from the Assetto Corsa analysis of the parallel repository `Alexa
 
 | Part | What |
 |---|---|
-| `tools/ace_shm.py` | `OpenFileMappingW` reader (`winmem`), the `Physics`, `Graphics` and `Static` ctypes layouts, a `parse` to a flat dict of named values; a fake-memory builder for tests; a `dump` command that prints the raw values once (to check the layouts on the PC) |
+| `tools/ace_shm.py` | `OpenFileMappingW` reader (`SharedMemory`), the `Physics`, `Graphics` and `Static` ctypes layouts, `channels()` (flat dict of named readings), `session_info()`, and a `dump` command that prints the raw values once (to check the layouts on the PC) |
 | `tools/logger.py` | the logger process: waits for the game, one session = one file, config read at session start |
 | `tuner/log_channels.json` | for every setting id of `catalogue.json` (and the context group) its once-only reading, its live values and its status (section 6) |
 | `tools/tuner_server.py` | routes `/api/log_config` (get, set), `/api/log_sessions` (list) and `/api/log_status` (is the logger running); same pattern as the garage and sound routes |
 | `tuner/web/index.html` | the tab "Logging" next to Car Tuner and Tyre Creator |
 | `start_logger.bat` | in the repository root next to `start_tuner.bat` |
-| `logs/` | in the repository, git-ignored (A: inside OneDrive, large files sync; it can be moved to the work folder later) |
+| `logs/` | in the repository, git-ignored (A: the author keeps the repository inside OneDrive, so `logs/` syncs; see USER_GUIDE for `--logs`) |
 | `log_config.json` | the ticked channels and the sample rate, saved in the work folder by the tab |
 
 The logger is a separate process (A: its own batch file). It uses the tuner's functions to read the expected values (effective values of the car from the work folder), so it needs the same folder layout as the tuner.
@@ -45,7 +45,7 @@ Line types:
 
 1. `header` (not tickable, always written): everything below, for the AI to compare 1:1.
 2. `static`: the once-only values of the ticked settings, read **2 s after the session goes live with the car standing** (A). If the car never stands still, the first 2 s of driving are used and the line says so (`"moving": true`).
-3. `s` (sample): `{"type":"s","t":12.345,"rpm":6500, ...}` at 30 or 60 Hz, only ticked channels, values rounded to 3 to 4 digits. About 15 bytes per channel and sample: 15 channels at 60 Hz are roughly 55 MB per hour.
+3. `s` (sample): `{"type":"s","t":12.345,"rpm":6500, ...}` at 30 or 60 Hz, only ticked channels, values rounded to 3 decimals. A scalar channel costs about 12 bytes per sample, a four-wheel array 35 to 55 bytes; the default four rows are about 80 bytes per sample (9 MB per hour at 30 Hz), all Behaviour values about 680 bytes (75 MB per hour at 30 Hz).
 4. `end`: reason (game closed, car, track or session changed, logger stopped), duration, sample count.
 
 ### Header content (A, decided 2026-11-16)
@@ -62,9 +62,11 @@ Not in the header (A): driver name, track configuration, track length, nation, c
 
 From the physics, graphics and static blocks (layouts in `ace_shm.py`); units as the game gives them, angles converted to degrees:
 
-`rpm`, `rpm_max`, `gas`, `brake`, `clutch`, `gear`, `speed_kmh`, `steer`, `steer_deg`, `acc_g` (3), `angular_vel`, `pitch_deg`, `roll_deg`, `heading_deg`, `wheel_load` (4), `wheel_speed` (4), `slip_ratio` (4), `slip_angle_deg` (4), `camber_deg` (4), `susp_travel` (4), `ride_height` (2), `tyre_pressure_psi` (4), `tyre_temp_core` (4), `tyre_temp_in/mid/out` (4 each), `brake_temp` (4), `brake_torque` (4), `brake_bias`, `boost`, `boost_max`, `bhp`, `torque`, `fuel_l`, `fuel_max_l`, `max_gears`, and the electronics levels and flags: `tc_level`, `tc_cut_level`, `abs_level`, `esc_level`, `engine_map`, `diff_power_level`, `diff_coast_level`, `diff_power_pct`, `diff_coast_pct`, `damper_levels` (front/rear bump/rebound), `tc_active`, `abs_active`, `esc_active`. Wheel order front left, front right, rear left, rear right. Nothing is derived: gear ratios, mass and so on are computed by the AI from the raw channels.
+The names are the keys of `ace_shm.channels()`; their units and caveats are in `tuner/log_glossary.json`.
 
 ## 6. Channel table: every tuner setting (preliminary; to be reviewed)
+
+This table is the concept as decided on 2026-11-16 and is partly superseded: `tuner/log_channels.json` is the truth for status, once and live of every setting.
 
 Status: **direct** = the game shows the value (a once-only reading, then live values): the row is tickable. **indirect** = only its effect is visible, **none** = nothing in the shared memory: both rows are greyed and **not tickable** (A); their effect is recorded through the "Behaviour values" group. The Once and Live columns below name the channels a direct row logs; for indirect rows they only say which behaviour values show the effect (a hint shown in the note).
 
@@ -117,7 +119,7 @@ Some indirect rows are only readable after driving the situation that shows them
 
 - The development laptop cannot run the game: everything is built and tested against fake memory. The real behaviour of the layouts, the car name, the 2 s standing rule and the rates is checked on the gaming PC.
 - ACE publishes no spring, damper, toe, caster or tyre model values; the greyed rows are honest about that.
-- `logs/` is inside OneDrive: large files will sync.
+- The author keeps the repository inside OneDrive, so `logs/` syncs; see USER_GUIDE for `--logs`.
 - ACE stops writing shared memory while the setup page is open; the logger sees that as no new data and writes nothing.
 
 ## 8b. Considered and declined (2026-11-16)

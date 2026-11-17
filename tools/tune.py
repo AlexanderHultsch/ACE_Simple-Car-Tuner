@@ -190,7 +190,7 @@ ranges:       the soft borders for the settings page (library functions compute_
 <work> defaults to %USERPROFILE%\\ace_modded_cars_work. --game is accepted by cars and init only; the other commands use the default Steam path of the game package for what they extract on first need. Writes nothing outside <work> and the mods folder. File
 operations on car trees use extended-length paths (kspkg.long_path), so deep Windows paths work.
 
-Catalogue settings: id, group, label, kind (value, curve_scale, meta, flag), type (int, float, string, enum, bool), unit, description and verified are required. min/max are a suggested range (a value outside it only gives a warning). Kind value writes the value into all its targets; the default is read from the first required target. Kind curve_scale has a default factor and curve_from (file role and path of a curve file name); apply multiplies the value of every point of that curve by the factor. Kind meta needs a handler (variant_name, name_suffix) and a default or a default_template (text with {stock_variant_name}). An enum lists its choices.
+Catalogue settings: id, group, label, kind (value, curve_scale, meta, flag), type (int, float, string, enum, bool), unit, description and verified are required. min/max are a suggested range (a value outside it only gives a warning). Kind value writes the value into all its targets; the default is read from the first required target. Kind curve_scale has a default factor and curve_from (file role and path of a curve file name); apply multiplies the value of every point of that curve by the factor. Kind meta needs a handler (variant_name, name_suffix) and a default or a default_template (text with {stock_display_name} and {stock_variant_name}, replaced by the stock display name and the stock variant text). An enum lists its choices.
 
 Catalogue field paths (inside the JSON that car_json decodes): dot-separated names, name[3] = list element by index,
 name[key=VALUE] = the list element whose field key equals VALUE, name[*] = every element of the list (all existing
@@ -601,6 +601,7 @@ BOOL_WORDS = {"true": True, "yes": True, "1": True, "on": True, "false": False, 
 
 
 def coerce(s, v):
+    """The value v of setting s as its type (bool, int, float, text, enum choice, name suffix); ValueError with the setting id in the text when it does not fit."""
     t = s["type"]
     if t == "bool":
         if type(v) is bool:
@@ -654,6 +655,7 @@ def same(s, a, b):
 
 
 def set_value(work, car_id, setting_id, text, catalogue=None, tune=None):
+    """Check one value, save it in the state of the tune and return {id, value, warnings}; the setting must be applicable to the car."""
     cat = catalogue or load_catalogue()
     s = find_setting(cat, setting_id)
     v = coerce(s, text)
@@ -668,7 +670,9 @@ def set_value(work, car_id, setting_id, text, catalogue=None, tune=None):
 
 
 def unset_value(work, car_id, setting_id, catalogue=None, tune=None):
+    """Remove one setting from the state of the tune; returns {id, removed}."""
     state = load_state(work, car_id, tune)
+    # a name that is not in the state must be a catalogue setting; _tyres, _turbo and _sounds are no settings, so they are refused as unknown here (their own commands remove them)
     if setting_id not in state or setting_id in (TYRE_KEY, TURBO_KEY, SOUND_KEY):
         find_setting(catalogue or load_catalogue(), setting_id)
     removed = state.pop(setting_id, None) is not None
@@ -756,6 +760,7 @@ def locate(obj, path, create=False, missing_ok=False):
 
 
 def get_value(obj, path, missing_ok=False):
+    """(value, absent) of the field path in obj; absent is True (value None) when the last field is missing, or with missing_ok an object on the way."""
     container, key = locate(obj, path, missing_ok=missing_ok)
     if container is None or (isinstance(container, dict) and key not in container):
         return None, True
@@ -914,7 +919,7 @@ def write_stock_info(work, car_id, game=DEFAULT_GAME):
     return "written"
 
 
-# best effort: when the game or the schemas are unavailable the car keeps whatever stock_info.json it has (or none) and callers fall back to the preset name
+# best effort: when the game or the schemas are unavailable the car keeps whatever stock_info.json it has (or none) and callers fall back to the preset name (a damaged stock_info.json still raises ValueError)
 def stock_info_or_none(work, car_id, game=DEFAULT_GAME):
     info = load_stock_info(work, car_id)
     if not complete_stock_info(info):
@@ -981,6 +986,7 @@ def preset_display_name(car_root):
 
 
 def init(work, car_id, game=DEFAULT_GAME):
+    """Extract the stock car into <work>/<car>/base (skipped when present), then ensure stock_loc, stock_info and the shared tyre files; returns the tree counts plus present, dir, stock_loc, stock_info, tyre_files."""
     base = base_dir(work, car_id)
     car_root = car_root_of(base, car_id)
     present = count_tree(car_root) if os.path.isdir(kspkg.long_path(car_root)) else None
@@ -1259,7 +1265,7 @@ def forget_resolved(work, car_id):
 
 
 def resolve_stamp(work, car_id, root=None):
-    # init rewrites every .car file when it extracts, so their (mtime_ns, size) changes whenever what resolve_defaults reads can have changed
+    """The (mtime_ns, size) of every .car file of the car and of its stock_info.json (plus the kit stamp of a kit root), None when unreadable. init rewrites every .car file when it extracts, so the stamp changes whenever what resolve_defaults reads can have changed."""
     root = root or base_dir(work, car_id)
     try:
         data = find_ci(car_root_of(root, car_id), "data")
@@ -1360,6 +1366,7 @@ def resolve_rows(work, car_id, cat, game, root=None):
 
 
 def effective_rows(work, car_id, catalogue=None, hidden=False, tune=None):
+    """The rows of resolve_defaults with the saved value of the state of tune (None: the default tune) as value and whether it differs from the default as changed."""
     cat = catalogue or load_catalogue()
     state = load_state(work, car_id, tune)
     rows = resolve_defaults(work, car_id, cat, hidden=hidden, tune=new_id_for(car_id) if tune is None else tune)
@@ -1740,6 +1747,7 @@ def change_lines(res):
 
 
 def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
+    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
     cat = catalogue or load_catalogue()
     new_id = new_id or new_id_for(car_id)
     plan = apply_plan(work, car_id, new_id, install, mods_dir, cat)
@@ -2468,8 +2476,7 @@ def list_turbo_donors(work):
     """The cars that can give their turbo setup: every extracted car (base folder present; a car that cannot be read counts
     as having no turbo) whose engine lists at least one turbo file and has all of them in its base, sorted by display name,
     then id: {car, label (stock_info.json, else the cached car index, else the id), count, kind, boost, boost_ref (as
-    turbo_listing gives them)}. Nothing is
-    extracted, the game package is not needed."""
+    turbo_listing gives them)}. Nothing is extracted, the game package is not needed."""
     names = {c["id"]: c["display_name"] for c in load_cars_index(work, "") or []}
     donors = []
     for car_id in car_folders(work):
@@ -2697,7 +2704,7 @@ def kit_inline(path, donor, donor_inline, texts, new_texts):
 
 
 def kit_turbo_files(work, car_id, donor, part, listing):
-    """Copy the turbo files of the donor (listing: turbo_listing of its base) into the data folder of the car in part as
+    """Copy the turbo files of the donor (listing: turbo_listing of its base plus texts = the turbos_to_load entries of its engine file, as patch_kit adds it) into the data folder of the car in part as
     kit_turbo_<n>.turbo; returns (paths below the car folder, the turbos_to_load entries that name them)."""
     droot = base_dir(work, donor)
     car_root = car_root_of(part, car_id)

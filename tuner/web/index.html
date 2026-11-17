@@ -85,8 +85,10 @@ button[role="tab"] {
   border-bottom-width: 2px; border-bottom-style: solid; border-bottom-color: transparent;
   background: transparent; color: var(--color-text-muted);
 }
+/* the generic button:hover colours all four borders; a tab only draws its bottom border */
 button[role="tab"]:hover { border-bottom-color: transparent; color: var(--color-text); }
 button[role="tab"][aria-selected="true"] { border-bottom-color: var(--color-accent); color: var(--color-text); }
+/* the Car Tuner panel starts with a bar, the other two start with a panel: same gap below the tab row */
 [role="tabpanel"] > .panel:first-child { margin-top: 16px; }
 button:focus-visible, input:focus-visible, select:focus-visible {
   outline: 2px solid var(--color-accent); outline-offset: 1px;
@@ -144,6 +146,7 @@ thead th {
   position: sticky; top: 0; z-index: 2; text-align: left; font-size: 13px; padding: 9px 12px;
   background: var(--color-bg-elevated); border-bottom: 1px solid var(--color-border);
 }
+/* the wrapper has no overflow:hidden (it would break the sticky header), so the header rounds its own corners */
 thead th:first-child { border-top-left-radius: 8px; }
 thead th:last-child { border-top-right-radius: 8px; }
 col.c-name { width: 22%; }
@@ -1853,7 +1856,7 @@ function renderGarageLines() {
   $("garage-error").hidden = garageError === "";
 }
 
-// the checkboxes and the reset button are off while a job runs and while the page has no base car
+// the checkboxes are off while a job runs and while the page has no base car; the reset button is off for the same reasons and while the car offers its stock tyres already
 function lockGarage() {
   let why = "";
   if (!info) why = serverError || "server not reachable";
@@ -2037,8 +2040,8 @@ function renderTurboLines() {
   $("turbo-sound-link").classList.toggle("warn", !!turboSoundLink && !!turboSoundLink.error);
 }
 
-// the select is off while a job runs, while the page has no base car and while there is nothing to choose from (no donor
-// and no saved donor to take away)
+// the select is off while a job runs, while the page has no base car and while there is nothing to choose from (the kit is not
+// loaded, or no donor exists and no saved donor is left to take away)
 function lockTurbo() {
   let why = "";
   if (!info) why = serverError || "server not reachable";
@@ -2215,7 +2218,8 @@ function renderSoundsLines() {
   $("sounds-error").hidden = soundsError === "";
 }
 
-// the selects and the reset button are off while a job runs and while the page has no base car
+// the selects are off while a job runs, while the page has no base car and while nothing is loaded; the reset button is off for the
+// first two reasons and while the car has its own sounds already
 function lockSounds() {
   let why = "";
   if (!info) why = serverError || "server not reachable";

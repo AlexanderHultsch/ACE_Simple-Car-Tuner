@@ -37,16 +37,16 @@ import logfacts  # noqa: E402
 import tune  # noqa: E402
 
 LOGGER_VERSION = "1.0"
-STATUS_EVERY_S = 1.0
-STALE_S = 5.0
-STATIC_AFTER_S = 2.0
+STATUS_EVERY_S = 1.0       # heartbeat of logger_status.json (the page calls it "not running" after logconf.STATUS_MAX_AGE = 5 s)
+STALE_S = 5.0              # no new packet this long: reopen the blocks; if that fails the game has closed (our open handle keeps its blocks alive)
+STATIC_AFTER_S = 2.0       # the static line is read after the car stood this long, or this long after the start if it never did
 STANDING_KMH = 1.0
-WAIT_S = 1.0
-IDLE_S = 0.25
-MAX_SAMPLE_WAIT_S = 0.05
-POLL_S = 0.001
-RESYNC_S = 1.0
-SLUG_MAX = 40
+WAIT_S = 1.0               # step interval while the game is not running
+IDLE_S = 0.25              # step interval while the game runs without a live session or while sampling is off (pause, replay)
+MAX_SAMPLE_WAIT_S = 0.05   # longest sleep while the next sample is not due yet
+POLL_S = 0.001             # a sample is due but the physics packet has not changed: look again after 1 ms
+RESYNC_S = 1.0             # more than this behind schedule: drop the missed samples instead of catching up in a burst
+SLUG_MAX = 40              # characters of the car name in the file name
 
 
 def rounded(value):
@@ -292,6 +292,7 @@ class Logger:
             os.remove(self.status_path)
 
 
+# Python before 3.11 sleeps in 15 ms steps on Windows; 3.11+ has high-resolution timers and this call is then harmless.
 def timer_resolution(on):
     """Windows: asks for a 1 ms timer so that short sleeps are short; any failure is ignored."""
     if sys.platform != "win32":

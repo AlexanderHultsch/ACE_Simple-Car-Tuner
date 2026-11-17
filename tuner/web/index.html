@@ -609,10 +609,10 @@ let soundsJobRunning = false;
 // ticks are changed in it at once and saved in the background (logPending counts the saves not answered yet, logQueue sends them
 // one at a time); logSeq counts the loads and the answers of writes, so that a slow load never replaces a newer answer;
 // logOpen holds the ids of the groups the user opened (every group starts collapsed); logBoxes are the checkboxes of the shown
-// groups; the status of the logger is polled every LOG_POLL_MS while the Logging tab is shown, logFile is the file it named
-// last and logStatusSeq counts the polls, so that a slow answer never replaces a newer one; logRunning is whether the logger runs
-// as the last poll said (null before the first answer and after a failed poll), logBusy is true while a start or stop request
-// is in flight
+// groups; the status of the logger is polled every LOG_POLL_MS while the Logging tab is shown and the page is visible, logFile is
+// the file it named last and logStatusSeq counts the polls, so that a slow answer never replaces a newer one; logRunning is whether
+// the logger runs as the last poll said (null before the first answer and after a failed poll), logBusy is true while a start or
+// stop request is in flight
 let logData = null;
 let logError = "";
 let logSeq = 0;
@@ -666,6 +666,18 @@ function choiceOf(value) {
 
 function moddedList() {
   return serverState && serverState.modded ? serverState.modded : [];
+}
+
+function jobRunning() {
+  return !!serverState && serverState.job.state === "running";
+}
+
+// why the panels of the Car Tuner tab are locked: "" when they are free
+function panelLockReason() {
+  if (!serverState) return serverError || "server not reachable";
+  if (jobRunning()) return "a job is running";
+  if (!serverState.base_present) return "extract the stock car first";
+  return "";
 }
 
 function moddedEntry() {
@@ -800,7 +812,7 @@ function renderCars() {
 }
 
 function renderButtons() {
-  const running = !!serverState && serverState.job.state === "running";
+  const running = jobRunning();
   const draft = selection.tune === DRAFT;
   let why = "";
   if (!serverState) why = serverError || "server not reachable";
@@ -945,7 +957,7 @@ async function refresh() {
   renderStatus();
   renderButtons();
   renderProgress();
-  const busy = serverState && serverState.job.state === "running";
+  const busy = jobRunning();
   // a hidden tab polls rarely and refreshes at once when it is shown again
   pollTimer = setTimeout(refresh, document.hidden ? POLL_HIDDEN_MS : (busy ? POLL_BUSY_MS : POLL_IDLE_MS));
 }
@@ -1308,7 +1320,7 @@ async function loadGroupInfo(target) {
   }
 }
 
-async function loadSettings() {
+async function loadSettings(withPanels = true) {
   const target = selection;
   try {
     await loadGroupInfo(target);
@@ -1317,12 +1329,22 @@ async function loadSettings() {
     buildTable(list, target);
     tableLoaded = true;
     localError = "";
-    loadGarage();
-    loadTurbo();
-    loadSounds();
+    if (withPanels) loadCarPanels();
   } catch (e) {
     localError = e.message;
   }
+}
+
+// the three panels of the Car Tuner tab are read again together; the job flags take the present state, so that a job end seen in
+// the same refresh does not read them a second time
+function loadCarPanels() {
+  const running = jobRunning();
+  garageJobRunning = running;
+  turboJobRunning = running;
+  soundsJobRunning = running;
+  loadGarage();
+  loadTurbo();
+  loadSounds();
 }
 
 /* ---------- actions ---------- */
@@ -1335,9 +1357,7 @@ async function startJob(path, body) {
     localError = e.message;
   }
   await refresh();
-  loadGarage();
-  loadTurbo();
-  loadSounds();
+  if (serverState && !jobRunning()) loadCarPanels();
 }
 
 // Create has started its job: when it ends with a new modded car, that car is selected
@@ -1355,9 +1375,13 @@ function createdCar() {
   return false;
 }
 
+function showText(id, text) {
+  $(id).textContent = text;
+  $(id).hidden = text === "";
+}
+
 function showDialogError(text) {
-  $("dialog-error").textContent = text;
-  $("dialog-error").hidden = text === "";
+  showText("dialog-error", text);
 }
 
 function openDialog(kind) {
@@ -1390,7 +1414,7 @@ function closeDialog(restoreFocus) {
 }
 
 async function submitDialog() {
-  if (!dialog || dialog.busy || !serverState || serverState.job.state === "running") return;
+  if (!dialog || dialog.busy || !serverState || jobRunning()) return;
   const mine = dialog;
   const create = mine.kind === "create";
   const target = selection;
@@ -1410,9 +1434,7 @@ async function submitDialog() {
         closeDialog(true);
       }
       await refresh();
-      loadGarage();
-      loadTurbo();
-      loadSounds();
+      if (serverState && !jobRunning()) loadCarPanels();
     } else {
       const res = await api("/api/duplicate", { new_id: newId, suffix: suffix }, target);
       if (dialog !== mine) return;
@@ -1506,7 +1528,7 @@ function neighbourOf(id) {
 
 // locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncTyres() {
-  const running = !!serverState && serverState.job.state === "running";
+  const running = jobRunning();
   // a job that ends may have installed a car, so the game tyres are read again
   if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);
   tyreJobRunning = running;
@@ -1550,8 +1572,7 @@ function renderTyres() {
   }
   if (entry) select.value = entry.id;
   else select.selectedIndex = -1;
-  $("tyre-error").textContent = tyreError;
-  $("tyre-error").hidden = tyreError === "";
+  showText("tyre-error", tyreError);
   const notes = $("tyre-notes");
   notes.replaceChildren();
   if (tyreLoaded && tyres.length === 0) addLine(notes, "No tyres yet. Press New tyre to create one.", "empty");
@@ -1669,7 +1690,6 @@ async function sendTyreSet(r, text) {
     const res = await api("/api/tyre_set", { id: r.tyre, setting: r.data.id, value: text }, selection);
     showRow(r, res.row, false);
     setMsg(r, res.warnings.join(" "), "warn");
-    loadTyres(false);
   } catch (e) {
     setField(r);
     setMsg(r, e.message, "err");
@@ -1681,44 +1701,38 @@ async function sendTyreUnset(r) {
     const res = await api("/api/tyre_unset", { id: r.tyre, setting: r.data.id }, selection);
     showRow(r, res.row, false);
     setMsg(r, "", "");
-    loadTyres(false);
   } catch (e) {
     setMsg(r, e.message, "err");
   }
+}
+
+function writeTyre(route, body) {
+  queue = queue.then(async () => {
+    try {
+      await api(route, body, selection);
+      tyreError = "";
+    } catch (e) {
+      tyreError = e.message;
+    }
+    await loadTyres(true);
+  });
 }
 
 function changeTyreSource() {
   const entry = tyreEntry();
   if (!entry) return;
   const key = $("tyre-source").value;
-  queue = queue.then(async () => {
-    try {
-      await api("/api/tyre_source", { id: entry.id, source: key }, selection);
-      tyreError = "";
-    } catch (e) {
-      tyreError = e.message;
-    }
-    await loadTyres(true);
-  });
+  writeTyre("/api/tyre_source", { id: entry.id, source: key });
 }
 
 function resetTyre() {
   const entry = tyreEntry();
   if (!entry || !window.confirm("Reset all values of the tyre " + entry.name + " to those of its source tyre?")) return;
-  queue = queue.then(async () => {
-    try {
-      await api("/api/tyre_reset", { id: entry.id }, selection);
-      tyreError = "";
-    } catch (e) {
-      tyreError = e.message;
-    }
-    await loadTyres(true);
-  });
+  writeTyre("/api/tyre_reset", { id: entry.id });
 }
 
 function showTyreDialogError(text) {
-  $("tyre-dialog-error").textContent = text;
-  $("tyre-dialog-error").hidden = text === "";
+  showText("tyre-dialog-error", text);
 }
 
 function openTyreDialog(kind) {
@@ -1766,7 +1780,7 @@ function closeTyreDialog(restoreFocus) {
 }
 
 async function submitTyreDialog() {
-  if (!tyreDialog || tyreDialog.busy || (serverState && serverState.job.state === "running")) return;
+  if (!tyreDialog || tyreDialog.busy || jobRunning()) return;
   const mine = tyreDialog;
   const name = $("tyre-dialog-name").value.trim();
   const source = $("tyre-dialog-source").value;
@@ -1826,16 +1840,12 @@ function renderGarageLines() {
   const missing = garage ? garage.missing : [];
   $("garage-missing").textContent = missing.length ? "No longer available, Apply is refused until you change the tyre list or reset it: " + missing.join(", ") : "";
   $("garage-missing").hidden = missing.length === 0;
-  $("garage-error").textContent = garageError;
-  $("garage-error").hidden = garageError === "";
+  showText("garage-error", garageError);
 }
 
 // the checkboxes are off while a job runs and while the page has no base car; the reset button is off for the same reasons and while the car offers its stock tyres already
 function lockGarage() {
-  let why = "";
-  if (!serverState) why = serverError || "server not reachable";
-  else if (serverState.job.state === "running") why = "a job is running";
-  else if (!serverState.base_present) why = "extract the stock car first";
+  let why = panelLockReason();
   const locked = why !== "";
   for (const g of garageRows) g.input.disabled = locked;
   if (!locked && !(garage && garage.custom)) why = "the car offers its stock tyres already";
@@ -1871,7 +1881,7 @@ function renderGarage() {
 
 // locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncGarage() {
-  const running = !!serverState && serverState.job.state === "running";
+  const running = jobRunning();
   // a job that ends may have changed the library or the car, so the garage is read again
   if (garageJobRunning && !running && !$("panel-car").hidden) loadGarage();
   garageJobRunning = running;
@@ -2008,8 +2018,7 @@ function turboSoundText() {
 
 function renderTurboLines() {
   $("turbo-picked").textContent = turboPickedText();
-  $("turbo-error").textContent = turboError;
-  $("turbo-error").hidden = turboError === "";
+  showText("turbo-error", turboError);
   $("turbo-sound-link").textContent = turboSoundText();
   $("turbo-sound-link").hidden = turboSoundLink === null;
   $("turbo-sound-link").classList.toggle("warn", !!turboSoundLink && !!turboSoundLink.error);
@@ -2018,10 +2027,7 @@ function renderTurboLines() {
 // the select is off while a job runs, while the page has no base car and while there is nothing to choose from (the kit is not
 // loaded, or no donor exists and no saved donor is left to take away)
 function lockTurbo() {
-  let why = "";
-  if (!serverState) why = serverError || "server not reachable";
-  else if (serverState.job.state === "running") why = "a job is running";
-  else if (!serverState.base_present) why = "extract the stock car first";
+  const why = panelLockReason();
   const nothing = !turbo || (turbo.donors.length === 0 && !turbo.donor);
   $("turbo-donor").disabled = why !== "" || nothing;
   $("turbo-donor").title = why;
@@ -2056,7 +2062,7 @@ function renderTurbo() {
 
 // locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncTurbo() {
-  const running = !!serverState && serverState.job.state === "running";
+  const running = jobRunning();
   // a job that ends may have installed or changed a car, so the kit is read again
   if (turboJobRunning && !running && !$("panel-car").hidden) loadTurbo();
   turboJobRunning = running;
@@ -2138,7 +2144,7 @@ function turboChanged() {
   renderTurboLines();
   queue = queue.then(async () => {
     const done = donor === "" ? await sendTurboReset(target) : await sendTurboSet(donor, target);
-    if (done && target === selection) await loadSettings();
+    if (done && target === selection) await loadSettings(false);
   });
 }
 
@@ -2190,17 +2196,13 @@ function renderSoundsLines() {
   $("sounds-missing").textContent = missing.length ? "No longer available, Apply is refused until you change the sound or reset it: " +
     missing.map((m) => m.slot + ": " + soundShortName(m.key)).join(", ") : "";
   $("sounds-missing").hidden = missing.length === 0;
-  $("sounds-error").textContent = soundsError;
-  $("sounds-error").hidden = soundsError === "";
+  showText("sounds-error", soundsError);
 }
 
 // the selects are off while a job runs, while the page has no base car and while nothing is loaded; the reset button is off for the
 // first two reasons and while the car has its own sounds already
 function lockSounds() {
-  let why = "";
-  if (!serverState) why = serverError || "server not reachable";
-  else if (serverState.job.state === "running") why = "a job is running";
-  else if (!serverState.base_present) why = "extract the stock car first";
+  let why = panelLockReason();
   const locked = why !== "";
   for (const slot of SOUND_SLOTS) {
     SOUND_SELECTS[slot].disabled = locked || !sounds;
@@ -2238,7 +2240,7 @@ function renderSounds() {
 
 // locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncSounds() {
-  const running = !!serverState && serverState.job.state === "running";
+  const running = jobRunning();
   // a job that ends may have installed a car or changed the car, so the sounds are read again
   if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();
   soundsJobRunning = running;
@@ -2345,6 +2347,7 @@ function renderLoggerButtons() {
 // a failing poll says so in the status line and never shows an error; a new file name (a session started or ended) reads the
 // session list again
 async function pollLogStatus() {
+  if (document.hidden) return;
   const seq = ++logStatusSeq;
   let s;
   try {
@@ -2418,8 +2421,7 @@ async function stopLogger() {
 
 function renderLogLines() {
   const text = logError || logSessionsError;
-  $("log-error").textContent = text;
-  $("log-error").hidden = text === "";
+  showText("log-error", text);
 }
 
 function renderLogSessions() {
@@ -2473,8 +2475,7 @@ function kiloBytes(size) {
 }
 
 function showCopyMsg(text) {
-  $("log-copy-msg").textContent = text;
-  $("log-copy-msg").hidden = text === "";
+  showText("log-copy-msg", text);
 }
 
 // a copy button is off while its own request runs; the message of the last copy and the error line are cleared when the next starts
@@ -2521,7 +2522,11 @@ async function copyFileOnPc(name) {
   try {
     await api("/api/log_copy", { file: name }, selection);
   } catch (e) {
-    return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;
+    try {
+      return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;
+    } catch (e2) {
+      throw new Error(e2.message + " The file itself could not be copied either: " + e.message);
+    }
   }
   return name + " copied: paste it into the chat with Ctrl+V";
 }
@@ -2798,9 +2803,7 @@ function selectTab(i) {
     panels[k].hidden = k !== i;
   });
   if (tabs[i] === $("tab-tyres")) loadTyres(true);
-  if (tabs[i] === $("tab-car")) loadGarage();
-  if (tabs[i] === $("tab-car")) loadTurbo();
-  if (tabs[i] === $("tab-car")) loadSounds();
+  if (tabs[i] === $("tab-car")) loadCarPanels();
   if (tabs[i] === $("tab-logging")) {
     loadLog();
     loadLogSessions();
@@ -2872,7 +2875,10 @@ $("show-advanced").addEventListener("change", () => {
   applyFilter();
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) refresh();
+  if (!document.hidden) {
+    refresh();
+    if (tabs[activeTab] === $("tab-logging")) pollLogStatus();
+  }
 });
 
 refresh();

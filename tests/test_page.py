@@ -46,6 +46,7 @@ def referenced_ids():
     ids |= set(re.findall(r"""querySelector(?:All)?\(\s*["']#([\w-]+)""", CODE))
     for array in re.findall(r"for \(const id of \[([^\]]*)\]", CODE):
         ids |= set(re.findall(r'"([^"]+)"', array))
+    ids |= set(re.findall(r"""\bshowText\(\s*["']([^"']+)["']""", CODE))
     return ids
 
 
@@ -227,7 +228,7 @@ class TestApiContract(unittest.TestCase):
         for route in (r for r in ts.GET_ROUTES if r in self.ROUTES and r not in ts.QUERY_ROUTES):
             with self.subTest(route):
                 self.assertRegex(CODE, r'api\("%s", undefined' % route)
-                self.assertNotRegex(CODE, r'(?:api|startJob)\("%s", \{' % route)
+                self.assertNotRegex(CODE, r'(?:api|startJob|writeTyre)\("%s", \{' % route)
         # a GET route with a query string carries the id of the tyre or the name of the file there and still has no body
         for route in ts.QUERY_ROUTES:
             with self.subTest(route):
@@ -236,7 +237,7 @@ class TestApiContract(unittest.TestCase):
                 self.assertNotRegex(CODE, r'(?:api|startJob)\("%s\?%s=[^)]*, \{' % (route, QUERY_PARAMS[route]))
         for route in (r for r in ts.POST_ROUTES if r in self.ROUTES):
             with self.subTest(route):
-                self.assertRegex(CODE, r'(?:api|startJob)\("%s", \{' % route)
+                self.assertRegex(CODE, r'(?:api|startJob|writeTyre)\("%s", \{' % route)
                 self.assertNotRegex(CODE, r'api\("%s", undefined' % route)
 
     def test_api_requests_are_relative_to_the_page_below_the_base_path(self):
@@ -258,11 +259,11 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 37, calls)
+        self.assertEqual(len(calls), 36, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
-        plain = set(re.findall(r'\b(?:api|startJob)\("(/api/[a-z_]+)"', CODE))
+        plain = set(re.findall(r'\b(?:api|startJob|writeTyre)\("(/api/[a-z_]+)"', CODE))
         queried = {r for r in ts.QUERY_ROUTES if re.search(r'\bapi\("%s\?%s=" \+ encodeURIComponent\(\w+\), undefined, selection\)' % (r, QUERY_PARAMS[r]), CODE)}
         self.assertEqual(sorted(plain | queried), sorted(self.ROUTES))
         self.assertEqual(re.findall(r"async function api\((.*?)\) \{", CODE), ["path, body, target"])
@@ -306,7 +307,7 @@ class TestApiContract(unittest.TestCase):
         self.assertIn("setTimeout(refresh, document.hidden ? POLL_HIDDEN_MS : (busy ? POLL_BUSY_MS : POLL_IDLE_MS))", CODE)
 
     def test_the_page_polls_faster_while_a_job_runs(self):
-        self.assertIn('const busy = serverState && serverState.job.state === "running";', CODE)
+        self.assertIn("const busy = jobRunning();", CODE)
 
 
 class TestCssClasses(unittest.TestCase):
@@ -824,17 +825,71 @@ class TestPolling(unittest.TestCase):
         self.assertGreater(poll_hidden, poll_idle)
         handler = re.search(r'document\.addEventListener\("visibilitychange", \(\) => \{(.*?)\}\);', CODE, re.S)
         self.assertIsNotNone(handler, "no visibilitychange handler")
-        self.assertRegex(handler.group(1), r"if \(!document\.hidden\) refresh\(\);")
+        self.assertRegex(handler.group(1), r"if \(!document\.hidden\) \{\s*refresh\(\);")
+        self.assertRegex(handler.group(1), r'refresh\(\);\s*if \(tabs\[activeTab\] === \$\("tab-logging"\)\) pollLogStatus\(\);')
+
+    def test_the_status_of_the_logger_is_not_polled_while_the_page_is_hidden_and_is_read_at_once_when_it_is_shown_again(self):
+        body = function_body("pollLogStatus")
+        self.assertTrue(body.lstrip().startswith("if (document.hidden) return;"))
+        self.assertLess(body.index("if (document.hidden) return;"), body.index("++logStatusSeq"))
+        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
+        self.assertEqual(len(re.findall(r"\bsetTimeout\(refresh,", CODE)), 1)
+
+
+class TestPanelLoads(unittest.TestCase):
+    def test_the_three_panels_are_read_together_after_the_job_flags_took_the_present_state(self):
+        body = function_body("loadCarPanels")
+        self.assertIn("const running = jobRunning();", body)
+        for flag in ("garageJobRunning", "turboJobRunning", "soundsJobRunning"):
+            with self.subTest(flag):
+                self.assertIn("%s = running;" % flag, body)
+        self.assertRegex(body, r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
+        self.assertLess(body.index("soundsJobRunning = running;"), body.index("loadGarage();"))
+        # besides the helper only the job-end hook and the failed write read one panel alone
+        self.assertEqual(len(re.findall(r"\bloadGarage\(\);", CODE)), 3)
+        self.assertEqual(len(re.findall(r"\bloadTurbo\(\);", CODE)), 3)
+        self.assertEqual(len(re.findall(r"\bloadSounds\(\);", CODE)), 3)
+
+    def test_every_site_that_read_the_three_panels_calls_the_helper_and_a_donor_choice_skips_them(self):
+        self.assertEqual(len(re.findall(r"\bloadCarPanels\(\);", CODE)), 4)
+        self.assertEqual(re.findall(r"async function loadSettings\((.*?)\) \{", CODE), ["withPanels = true"])
+        self.assertIn("if (withPanels) loadCarPanels();", function_body("loadSettings"))
+        self.assertEqual(re.findall(r"\bloadSettings\(([^)]*)\)", function_body("turboChanged")), ["false"])
+        self.assertEqual(re.findall(r"\bloadSettings\(([^)]*)\)", function_body("resetAll")), [""])
+        self.assertEqual(re.findall(r"\bloadSettings\(([^)]*)\)", function_body("refresh")), [""])
+
+    def test_a_job_that_is_still_running_after_the_start_waits_for_its_end_instead_of_reading_the_panels(self):
+        for name in ("startJob", "submitDialog"):
+            with self.subTest(name):
+                self.assertIn("if (serverState && !jobRunning()) loadCarPanels();", function_body(name))
+        self.assertIn('if (tabs[i] === $("tab-car")) loadCarPanels();', function_body("selectTab"))
+        self.assertIn('if (tabs[i] === $("tab-tyres")) loadTyres(true);', function_body("selectTab"))
 
 
 class TestJobRunning(unittest.TestCase):
     # page part: no edits while a job runs, the server answers them with 409 anyway
     def test_the_value_fields_and_reset_buttons_are_disabled_while_a_job_runs(self):
         body = function_body("renderButtons")
-        self.assertIn('const running = !!serverState && serverState.job.state === "running";', body)
+        self.assertIn("const running = jobRunning();", body)
         self.assertIn("r.field.disabled = running;", body)
         self.assertIn("r.reset.disabled = running;", body)
         self.assertIn('$("btn-reset-all").disabled = running;', body)
+
+    def test_one_helper_says_whether_a_job_runs_and_one_says_why_the_car_panels_are_locked(self):
+        self.assertIn('return !!serverState && serverState.job.state === "running";', function_body("jobRunning"))
+        others = CODE.replace('serverState.job.kind === "init" && serverState.job.state === "running"', "")
+        self.assertEqual(len(re.findall(r'serverState\.job\.state === "running"', others)), 1)
+        body = function_body("panelLockReason")
+        self.assertIn('if (!serverState) return serverError || "server not reachable";', body)
+        self.assertIn('if (jobRunning()) return "a job is running";', body)
+        self.assertIn('if (!serverState.base_present) return "extract the stock car first";', body)
+        self.assertIn('return "";', body)
+        self.assertLess(body.index("server not reachable"), body.index("a job is running"))
+        self.assertLess(body.index("a job is running"), body.index("extract the stock car first"))
+        for name in ("lockGarage", "lockTurbo", "lockSounds"):
+            with self.subTest(name):
+                self.assertRegex(function_body(name), r"(?:let|const) why = panelLockReason\(\);")
+                self.assertNotIn("extract the stock car first", function_body(name))
 
     def test_the_header_row_is_disabled_with_the_table_rows(self):
         self.assertIn("headerRow ? rows.concat(headerRow) : rows", function_body("renderButtons"))
@@ -1179,7 +1234,7 @@ class TestModdedCars(unittest.TestCase):
         self.assertIn("showDialogError(e.message);", failure)
         self.assertNotIn("closeDialog", failure)
         self.assertIn("mine.busy = false;", failure)
-        self.assertIn('$("dialog-error").textContent = text;', function_body("showDialogError"))
+        self.assertIn('showText("dialog-error", text);', function_body("showDialogError"))
 
     def test_create_selects_the_new_car_when_the_job_has_created_it(self):
         body = function_body("submitDialog")
@@ -1381,25 +1436,24 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn('<p id="tyre-error" class="msg err" role="alert" hidden></p>', self.PANEL)
         self.assertLess(self.PANEL.index('id="tyre-dialog"'), self.PANEL.index('id="tyre-error"'))
         body = function_body("renderTyres")
-        self.assertIn('$("tyre-error").textContent = tyreError;', body)
-        self.assertIn('$("tyre-error").hidden = tyreError === "";', body)
+        self.assertIn('showText("tyre-error", tyreError);', body)
         self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
 
     def test_every_tyre_route_is_called_with_the_fields_of_the_server(self):
         calls = {
             "/api/tyre_new": r'api\("/api/tyre_new", \{ name: name, source: source \}, selection\)',
             "/api/tyre_rename": r'api\("/api/tyre_rename", \{ id: mine\.id, name: name \}, selection\)',
-            "/api/tyre_source": r'api\("/api/tyre_source", \{ id: entry\.id, source: key \}, selection\)',
+            "/api/tyre_source": r'writeTyre\("/api/tyre_source", \{ id: entry\.id, source: key \}\)',
             "/api/tyre_set": r'api\("/api/tyre_set", \{ id: r\.tyre, setting: r\.data\.id, value: text \}, selection\)',
             "/api/tyre_unset": r'api\("/api/tyre_unset", \{ id: r\.tyre, setting: r\.data\.id \}, selection\)',
-            "/api/tyre_reset": r'api\("/api/tyre_reset", \{ id: entry\.id \}, selection\)',
+            "/api/tyre_reset": r'writeTyre\("/api/tyre_reset", \{ id: entry\.id \}\)',
             "/api/tyre_delete": r'api\("/api/tyre_delete", \{ id: mine\.id \}, selection\)',
         }
         for route, call in calls.items():
             with self.subTest(route):
                 self.assertIn(route, ts.POST_ROUTES)
                 self.assertEqual(len(re.findall(call, CODE)), 1)
-                fields = set(re.findall(r'\b(\w+):', re.search(r'api\("%s", (\{[^}]*\})' % route, CODE).group(1)))
+                fields = set(re.findall(r'\b(\w+):', re.search(r'(?:api|writeTyre)\("%s", (\{[^}]*\})' % route, CODE).group(1)))
                 handler = inspect.getsource(ts.POST_ROUTES[route])
                 self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', handler)))
         self.assertEqual(len(re.findall(r'api\("/api/tyres", undefined, selection\)', CODE)), 1)
@@ -1420,10 +1474,11 @@ class TestTyreCreator(unittest.TestCase):
 
     def test_the_library_is_loaded_when_the_tab_is_shown_after_every_write_and_when_a_job_ends(self):
         self.assertIn('if (tabs[i] === $("tab-tyres")) loadTyres(true);', function_body("selectTab"))
-        self.assertIn("loadTyres(false);", function_body("sendTyreSet"))
-        self.assertIn("loadTyres(false);", function_body("sendTyreUnset"))
-        self.assertIn("await loadTyres(true);", function_body("changeTyreSource"))
-        self.assertIn("await loadTyres(true);", function_body("resetTyre"))
+        self.assertNotIn("loadTyres(", function_body("sendTyreSet"))
+        self.assertNotIn("loadTyres(", function_body("sendTyreUnset"))
+        self.assertIn("await loadTyres(true);", function_body("writeTyre"))
+        self.assertIn('writeTyre("/api/tyre_source", { id: entry.id, source: key });', function_body("changeTyreSource"))
+        self.assertIn('writeTyre("/api/tyre_reset", { id: entry.id });', function_body("resetTyre"))
         self.assertIn("await loadTyres(mine.kind !== \"rename\");", function_body("submitTyreDialog"))
         body = function_body("syncTyres")
         self.assertIn('if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);', body)
@@ -1450,7 +1505,7 @@ class TestTyreCreator(unittest.TestCase):
 
     def test_new_is_off_without_a_source_or_while_a_job_runs_and_rename_and_delete_without_a_tyre_or_while_a_job_runs(self):
         body = function_body("syncTyres")
-        self.assertIn('const running = !!serverState && serverState.job.state === "running";', body)
+        self.assertIn("const running = jobRunning();", body)
         self.assertIn('if (running) whyNew = "a job is running";', body)
         self.assertIn('else if (tyreSources.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";', body)
         self.assertIn('if (running) whyEdit = "a job is running";', body)
@@ -1535,8 +1590,8 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("tyreId = res.tyre.id;", body)
         self.assertIn("tyreId = neighbourOf(mine.id);", body)
         self.assertIn("if (tyreDialog === mine) closeTyreDialog(true);", body)
-        self.assertIn('$("tyre-dialog-error").textContent = text;', function_body("showTyreDialogError"))
-        self.assertIn('if (!tyreDialog || tyreDialog.busy || (serverState && serverState.job.state === "running")) return;', body)
+        self.assertIn('showText("tyre-dialog-error", text);', function_body("showTyreDialogError"))
+        self.assertIn("if (!tyreDialog || tyreDialog.busy || jobRunning()) return;", body)
 
     def test_enter_confirms_and_escape_cancels_and_the_focus_goes_into_the_dialog_and_back(self):
         key = function_body("tyreDialogKey")
@@ -1563,9 +1618,12 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("window.confirm(", function_body("resetTyre"))
 
     def test_writes_to_the_library_go_through_the_one_queue_of_the_edits(self):
+        self.assertIn("queue = queue.then(async () => {", function_body("writeTyre"))
+        self.assertIn("await api(route, body, selection);", function_body("writeTyre"))
         for name in ("changeTyreSource", "resetTyre"):
             with self.subTest(name):
-                self.assertIn("queue = queue.then(async () => {", function_body(name))
+                self.assertIn("writeTyre(", function_body(name))
+                self.assertNotIn("queue", function_body(name))
 
     def test_the_tab_neither_polls_nor_adds_a_second_fetch(self):
         self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
@@ -1677,15 +1735,15 @@ class TestGarage(unittest.TestCase):
         self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
 
     def test_the_garage_is_loaded_with_the_table_after_a_tab_change_after_a_job_and_after_create_and_apply(self):
-        self.assertIn("loadGarage();", function_body("loadSettings"))
-        self.assertLess(function_body("loadSettings").index("tableLoaded = true;"), function_body("loadSettings").index("loadGarage();"))
-        self.assertIn('if (tabs[i] === $("tab-car")) loadGarage();', function_body("selectTab"))
+        self.assertIn("loadGarage();", function_body("loadCarPanels"))
+        self.assertLess(function_body("loadSettings").index("tableLoaded = true;"), function_body("loadSettings").index("loadCarPanels();"))
+        self.assertIn('if (tabs[i] === $("tab-car")) loadCarPanels();', function_body("selectTab"))
         body = function_body("syncGarage")
         self.assertIn('if (garageJobRunning && !running && !$("panel-car").hidden) loadGarage();', body)
         self.assertIn("garageJobRunning = running;", body)
         self.assertIn("syncGarage();", function_body("renderButtons"))
-        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);")
-        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);")
+        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
+        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
         self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Gg]arage", CODE), [])
@@ -1741,16 +1799,13 @@ class TestGarage(unittest.TestCase):
         self.assertIn('"No longer available, Apply is refused until you change the tyre list or reset it: " + missing.join(", ")', body)
         self.assertIn("garage ? garage.missing : []", body)
         self.assertIn('$("garage-missing").hidden = missing.length === 0;', body)
-        self.assertIn('$("garage-error").textContent = garageError;', body)
-        self.assertIn('$("garage-error").hidden = garageError === "";', body)
+        self.assertIn('showText("garage-error", garageError);', body)
         self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
         self.assertNotIn("aria-live", self.PANEL)
 
     def test_the_checkboxes_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car(self):
         body = function_body("lockGarage")
-        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
+        self.assertIn("let why = panelLockReason();", body)
         self.assertIn("for (const g of garageRows) g.input.disabled = locked;", body)
         self.assertIn("lockGarage();", function_body("renderGarage"))
         self.assertIn("lockGarage();", function_body("syncGarage"))
@@ -1907,8 +1962,7 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_error_line_shows_the_message_of_a_failed_write(self):
         body = function_body("renderTurboLines")
-        self.assertIn('$("turbo-error").textContent = turboError;', body)
-        self.assertIn('$("turbo-error").hidden = turboError === "";', body)
+        self.assertIn('showText("turbo-error", turboError);', body)
         failed = function_body("turboFailed")
         self.assertLess(failed.index("await loadTurbo();"), failed.index("turboError = e.message;"))
         self.assertIn("renderTurboLines();", failed)
@@ -1929,15 +1983,16 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_kit_is_loaded_with_the_table_after_a_tab_change_after_a_job_and_after_create_and_apply(self):
         body = function_body("loadSettings")
-        self.assertIn("loadTurbo();", body)
-        self.assertLess(body.index("tableLoaded = true;"), body.index("loadTurbo();"))
-        self.assertIn('if (tabs[i] === $("tab-car")) loadTurbo();', function_body("selectTab"))
+        self.assertIn("loadTurbo();", function_body("loadCarPanels"))
+        self.assertIn("turboJobRunning = running;", function_body("loadCarPanels"))
+        self.assertLess(body.index("tableLoaded = true;"), body.index("loadCarPanels();"))
+        self.assertIn('if (tabs[i] === $("tab-car")) loadCarPanels();', function_body("selectTab"))
         controls = function_body("syncTurbo")
         self.assertIn('if (turboJobRunning && !running && !$("panel-car").hidden) loadTurbo();', controls)
         self.assertIn("turboJobRunning = running;", controls)
         self.assertIn("syncTurbo();", function_body("renderButtons"))
-        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
-        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
+        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
+        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
         self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Tt]urbo", CODE), [])
@@ -1967,8 +2022,8 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_settings_table_is_read_again_after_a_write_and_the_open_groups_are_kept(self):
         body = function_body("turboChanged")
-        self.assertIn("if (done && target === selection) await loadSettings();", body)
-        self.assertLess(body.index("sendTurboSet(donor, target)"), body.index("await loadSettings();"))
+        self.assertIn("if (done && target === selection) await loadSettings(false);", body)
+        self.assertLess(body.index("sendTurboSet(donor, target)"), body.index("await loadSettings(false);"))
         self.assertNotIn("expanded", body)
         self.assertNotIn("tableLoaded", body)
         self.assertNotIn("clearTable", body)
@@ -1981,9 +2036,7 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_select_is_off_while_a_job_runs_without_a_base_car_and_with_nothing_to_choose_from(self):
         body = function_body("lockTurbo")
-        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
+        self.assertIn("const why = panelLockReason();", body)
         self.assertIn("const nothing = !turbo || (turbo.donors.length === 0 && !turbo.donor);", body)
         self.assertIn('$("turbo-donor").disabled = why !== "" || nothing;', body)
         self.assertIn('$("turbo-donor").title = why;', body)
@@ -2170,17 +2223,20 @@ class TestSounds(unittest.TestCase):
 
     def test_the_sounds_are_loaded_wherever_the_garage_is(self):
         settings = function_body("loadSettings")
-        self.assertIn("loadSounds();", settings)
-        self.assertLess(settings.index("tableLoaded = true;"), settings.index("loadSounds();"))
-        self.assertRegex(settings, r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
-        self.assertIn('if (tabs[i] === $("tab-car")) loadSounds();', function_body("selectTab"))
+        self.assertIn("if (withPanels) loadCarPanels();", settings)
+        self.assertLess(settings.index("tableLoaded = true;"), settings.index("loadCarPanels();"))
+        self.assertRegex(function_body("loadCarPanels"), r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
+        self.assertIn("loadSounds();", function_body("loadCarPanels"))
+        self.assertIn('if (tabs[i] === $("tab-car")) loadCarPanels();', function_body("selectTab"))
         controls = function_body("syncSounds")
         self.assertIn('if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();', controls)
         self.assertIn("soundsJobRunning = running;", controls)
         self.assertIn("syncSounds();", function_body("renderButtons"))
-        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
-        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
-        # Reset all reads the settings again, and that reads the garage, the kit and the sounds again
+        self.assertIn("soundsJobRunning = running;", function_body("loadCarPanels"))
+        self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
+        self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
+        # Reset all reads the settings again, and that reads the garage, the kit and the sounds again; a donor choice reads the
+        # settings again without them (the answer of the write carries the kit and the sounds)
         self.assertIn("await loadSettings();", function_body("resetAll"))
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Ss]ound", CODE), [])
         self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
@@ -2228,14 +2284,11 @@ class TestSounds(unittest.TestCase):
         self.assertIn('missing.map((m) => m.slot + ": " + soundShortName(m.key)).join(", ")', body)
         self.assertIn("sounds ? sounds.missing : []", body)
         self.assertIn('$("sounds-missing").hidden = missing.length === 0;', body)
-        self.assertIn('$("sounds-error").textContent = soundsError;', body)
-        self.assertIn('$("sounds-error").hidden = soundsError === "";', body)
+        self.assertIn('showText("sounds-error", soundsError);', body)
 
     def test_the_selects_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car_or_an_answer(self):
         body = function_body("lockSounds")
-        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
+        self.assertIn("let why = panelLockReason();", body)
         self.assertIn("SOUND_SELECTS[slot].disabled = locked || !sounds;", body)
         self.assertIn("SOUND_SELECTS[slot].title = why;", body)
         self.assertIn("lockSounds();", function_body("renderSounds"))
@@ -2819,7 +2872,7 @@ class TestLogging(unittest.TestCase):
         self.assertLess(end.index("await pollLogStatus();"), end.rindex("renderLoggerButtons();"))
         self.assertEqual(end.count("pollLogStatus()"), 1)
         self.assertNotIn("startLogPoll", end)
-        self.assertEqual(len(re.findall(r"\bpollLogStatus\(\)", CODE)), 3)
+        self.assertEqual(len(re.findall(r"\bpollLogStatus\(\)", CODE)), 4)
 
     def test_a_failed_or_refused_start_or_stop_shows_its_message_in_the_error_line_and_a_409_too(self):
         for name in ("startLogger", "stopLogger"):
@@ -2877,8 +2930,7 @@ class TestLogging(unittest.TestCase):
         self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
         body = function_body("renderLogLines")
         self.assertIn('const text = logError || logSessionsError;', body)
-        self.assertIn('$("log-error").textContent = text;', body)
-        self.assertIn('$("log-error").hidden = text === "";', body)
+        self.assertIn('showText("log-error", text);', body)
         self.assertIn("logSessionsError = e.message;", function_body("loadLogSessions"))
         self.assertIn("logError = e.message;", function_body("loadLog"))
         self.assertIn('logError = "";', function_body("saveLog"))
@@ -2907,7 +2959,8 @@ class TestLogging(unittest.TestCase):
                 self.assertNotRegex(function_body(name), r"\.html\b|innerHTML")
         for name in ("renderLogLines", "renderLogControls"):
             with self.subTest(name):
-                self.assertTrue("textContent" in function_body(name) or 'el("option"' in function_body(name))
+                self.assertTrue("showText(" in function_body(name) or 'el("option"' in function_body(name))
+        self.assertIn("$(id).textContent = text;", function_body("showText"))
         self.PANEL.encode("ascii")
         "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
 
@@ -2986,6 +3039,8 @@ class TestLoggingCopy(unittest.TestCase):
         pc = function_body("copyFileOnPc")
         self.assertRegex(pc, r"try \{\s*await api\(\"/api/log_copy\", \{ file: name \}, selection\);\s*\} catch \(e\) \{")
         self.assertIn('return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;', pc)
+        self.assertIn('throw new Error(e2.message + " The file itself could not be copied either: " + e.message);', pc)
+        self.assertRegex(pc, r"(?s)\} catch \(e\) \{\s*try \{\s*return \(await copyFileAsText\(name\)\).*?\} catch \(e2\) \{\s*throw new Error\(")
         self.assertIn('return name + " copied: paste it into the chat with Ctrl+V";', pc)
         self.assertLess(pc.index("catch (e)"), pc.index("copyFileAsText(name)"))
         self.assertNotIn("copyText(", pc)
@@ -3007,8 +3062,7 @@ class TestLoggingCopy(unittest.TestCase):
         self.assertIn('showCopyMsg("");', begin)
         self.assertIn("renderLogLines();", begin)
         show = function_body("showCopyMsg")
-        self.assertIn('$("log-copy-msg").textContent = text;', show)
-        self.assertIn('$("log-copy-msg").hidden = text === "";', show)
+        self.assertIn('showText("log-copy-msg", text);', show)
         for name in ("copyAiCommand", "copySessionFile"):
             with self.subTest(name):
                 body = function_body(name)

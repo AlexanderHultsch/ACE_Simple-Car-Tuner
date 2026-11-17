@@ -9,12 +9,13 @@ import json
 import ntpath
 import os
 import re
+import subprocess
 import sys
 import tempfile
 import unittest
 from unittest import mock
 
-from support import ROOT, run_tool
+from support import ROOT, TOOLS, run_tool
 
 import ace_shm
 import clone_car
@@ -188,6 +189,16 @@ class TestWaiting(LoggerCase):
         self.assertEqual(self.status()["updated"], BASE_TS + 1.0)
 
 
+class TestConnectErrors(LoggerCase):
+    def test_an_error_other_than_a_missing_game_is_not_taken_for_a_game_that_is_not_running(self):
+        denied = PermissionError(5, "Access is denied", "Local\\acevo_pmf_physics")
+        self.logger = self.make(open_source=mock.Mock(side_effect=denied))
+        with self.assertRaises(PermissionError):
+            self.logger.step()
+        self.assertEqual(self.lines, [])
+        self.assertIsNone(self.logger.source)
+
+
 class TestSessionStart(LoggerCase):
     def test_a_session_needs_live_status_a_car_and_a_track(self):
         for status, car, track in ((3, b"BMW M4 CSL", b"Monza"), (0, b"BMW M4 CSL", b"Monza"), (1, b"BMW M4 CSL", b"Monza"),
@@ -266,6 +277,18 @@ class TestSessionStart(LoggerCase):
         self.assertEqual(calls[0][1]["track"], "Monza")
         self.assertEqual(calls[0][1]["status_name"], "live")
         self.assertEqual(self.records()[0]["tuner"], {"matched": True, "tune": "ax01"})
+
+    def test_the_home_folder_is_shortened_in_the_error_of_the_facts(self):
+        home = os.path.join(os.path.dirname(self.work), "home")
+
+        def facts(car, info):
+            raise RuntimeError("cannot read %s" % os.path.join(home, "work", "x.json"))
+
+        self.logger = self.make(facts=facts)
+        with mock.patch.dict(os.environ, {"HOME": home, "USERPROFILE": home}):
+            self.logger.step()
+        error = self.records()[0]["tuner"]["error"]
+        self.assertEqual(error, "cannot read %s" % os.path.join("~", "work", "x.json"))
 
     def test_facts_that_raise_are_stored_as_an_error_and_logging_goes_on(self):
         def facts(car, info):
@@ -597,11 +620,13 @@ class TestSessionBoundaries(LoggerCase):
     def test_stale_packets_and_no_game_end_the_session_and_go_back_to_waiting(self):
         name = self.names()[0]
         count = len(self.samples())
+        last_packet = self.logger.changed
         self.game.running = False
         self.clock.now += 5.1
         at = self.clock.now
         self.assertEqual(self.logger.step(), logger.WAIT_S)
-        self.assertEqual(self.records(name)[-1], {"type": "end", "reason": "game closed", "duration_s": round(at - T0, 3), "samples": count})
+        self.assertEqual(self.records(name)[-1], {"type": "end", "reason": "game closed", "duration_s": round(last_packet - T0, 3), "samples": count})
+        self.assertLess(last_packet, at - logger.STALE_S)
         self.assertIsNone(self.logger.source)
         self.assertIsNone(self.logger.session)
         self.assertEqual(self.game.opened[0].closed, 1)
@@ -638,6 +663,48 @@ class TestSessionBoundaries(LoggerCase):
         self.logger.close()
         self.assertEqual(self.game.opened[0].closed, 1)
         self.assertEqual([r["type"] for r in self.records(name)].count("end"), 1)
+
+    def test_a_write_error_in_close_raises_once_and_still_closes_everything(self):
+        self.logger.step()
+        session, source = self.logger.session, self.game.opened[0]
+        self.assertTrue(os.path.isfile(self.status_path))
+        real = session.file.write
+
+        def full(text):
+            raise OSError(28, "No space left on device")
+
+        session.file.write = full
+        try:
+            with self.assertRaises(OSError) as raised:
+                self.logger.close()
+        finally:
+            session.file.write = real
+        self.assertEqual(raised.exception.errno, 28)
+        self.assertIsNone(raised.exception.__context__)
+        self.assertTrue(session.file.closed)
+        self.assertIsNone(self.logger.session)
+        self.assertIsNone(self.logger.source)
+        self.assertEqual(source.closed, 1)
+        self.assertFalse(os.path.exists(self.status_path))
+        self.logger.close()
+        self.assertEqual(source.closed, 1)
+
+    def test_a_write_error_in_run_still_restores_the_timer(self):
+        self.logger.step()
+        session = self.logger.session
+
+        def full(text):
+            raise OSError(28, "No space left on device")
+
+        session.file.write = full
+        patch = mock.patch.object(logger, "timer_resolution")
+        timer = patch.start()
+        self.addCleanup(patch.stop)
+        self.logger.step = mock.Mock(side_effect=KeyboardInterrupt())
+        with self.assertRaises(OSError):
+            self.logger.run()
+        self.assertEqual(timer.call_args_list, [mock.call(True), mock.call(False)])
+        self.assertTrue(session.file.closed)
 
     def test_close_while_waiting_removes_the_status_file(self):
         self.logger.close()
@@ -695,6 +762,40 @@ class TestStatusFile(LoggerCase):
         got = self.status()
         self.assertEqual((got["state"], got["file"], got["samples"]), ("logging", self.names()[-1], 1))
         self.assertNotEqual(got["file"], FIRST_FILE)
+
+    def test_a_status_file_that_cannot_be_replaced_does_not_end_the_session(self):
+        self.logger.step()
+        name = self.names()[0]
+        self.clock.now += 1.5
+        self.game.tick()
+        with mock.patch("os.replace", side_effect=PermissionError(13, "Access is denied")):
+            self.logger.step()
+            self.clock.now += 1.5
+            self.game.tick()
+            self.logger.step()
+        self.assertIsNotNone(self.logger.session)
+        self.assertEqual(self.names(), [name])
+        self.assertFalse([n for n in os.listdir(self.logs) if n.endswith(".tmp")])
+        self.clock.now += 1.5
+        self.game.tick()
+        self.logger.step()
+        self.assertEqual(self.status()["state"], "logging")
+        self.assertGreaterEqual(len(self.samples()), 3)
+
+    def test_a_status_file_that_cannot_be_replaced_still_looks_for_the_stop_file(self):
+        self.logger.step()
+        logconf.request_stop(self.logs)
+        self.clock.now += 1.5
+        self.game.tick()
+        with mock.patch("os.replace", side_effect=PermissionError(13, "Access is denied")):
+            self.logger.step()
+        self.assertIs(self.logger.stop_requested, True)
+
+    def test_a_status_file_that_cannot_be_replaced_does_not_end_the_wait_for_the_game(self):
+        self.game.running = False
+        with mock.patch("os.replace", side_effect=PermissionError(13, "Access is denied")):
+            self.assertEqual(self.logger.step(), logger.WAIT_S)
+        self.assertFalse(os.path.exists(self.status_path))
 
     def test_the_status_file_is_written_atomically_without_a_leftover_part_file(self):
         self.drive(1.5)
@@ -971,6 +1072,11 @@ class TestTimerResolution(unittest.TestCase):
         dll.assert_not_called()
 
 
+def run_main_process(*args):
+    code = "import sys; sys.path.insert(0, %r); import logger; sys.platform = 'win32'; logger.main(%r)" % (str(TOOLS), list(args))
+    return subprocess.run([sys.executable, "-B", "-I", "-c", code], capture_output=True, text=True)
+
+
 def run_main(*args):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
@@ -1000,9 +1106,9 @@ class TestMain(unittest.TestCase):
             for patch in (mock.patch.dict(os.environ, {"USERPROFILE": os.path.abspath("profile")}), mock.patch.object(os.path, "expandvars", ntpath.expandvars)):
                 patch.start()
                 self.addCleanup(patch.stop)
-        patch = mock.patch.object(logger, "Logger", FakeLogger)
-        patch.start()
-        self.addCleanup(patch.stop)
+        for patch in (mock.patch.object(logger, "Logger", FakeLogger), mock.patch.object(sys, "platform", "win32")):
+            patch.start()
+            self.addCleanup(patch.stop)
 
     def assert_usage(self, *args):
         code, out, err = run_main(*args)
@@ -1021,6 +1127,42 @@ class TestMain(unittest.TestCase):
                      ("--mods", "a", "extra"), ("--port", "8080")):
             with self.subTest(args=args):
                 self.assert_usage(*args)
+
+    def test_elsewhere_than_on_windows_it_is_an_error_line_and_exit_1_before_anything_starts(self):
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform):
+                code, out, err = run_main("--work", "w", "--logs", "l")
+                self.assertEqual(code, "error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)")
+                self.assertEqual((out, err, FakeLogger.made), ("", "", []))
+
+    def test_bad_arguments_are_usage_and_exit_2_even_elsewhere_than_on_windows(self):
+        with mock.patch.object(sys, "platform", "linux"):
+            self.assert_usage("--bogus")
+            self.assert_usage("extra")
+
+    def test_no_status_file_is_written_elsewhere_than_on_windows(self):
+        with tempfile.TemporaryDirectory() as d, mock.patch.object(sys, "platform", "linux"), mock.patch.object(logger, "Logger") as cls:
+            code, out, err = run_main("--work", os.path.join(d, "w"), "--logs", os.path.join(d, "l"))
+            self.assertEqual(os.listdir(d), [])
+        self.assertTrue(code.startswith("error: the session logger needs Windows"), code)
+        cls.assert_not_called()
+
+    def test_a_logs_folder_with_characters_outside_the_code_page_does_not_stop_the_logger(self):
+        raw = io.BytesIO()
+        out = io.TextIOWrapper(raw, encoding="cp1252", errors="strict", newline="\n")
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
+            logger.main(["--work", "w", "--mods", "m", "--logs", os.path.join("T", "\u0416_\u043b\u043e\u0433\u0438")])
+        out.flush()
+        self.assertEqual(len(FakeLogger.made), 1)
+        self.assertIn("sessions go to ", raw.getvalue().decode("cp1252"))
+        self.assertIn("?_????", raw.getvalue().decode("cp1252"))
+
+    def test_a_stdout_without_reconfigure_is_left_alone(self):
+        out = io.StringIO()
+        self.assertFalse(hasattr(out, "reconfigure"))
+        with contextlib.redirect_stdout(out):
+            logger.main(["--work", "w", "--mods", "m", "--logs", "l"])
+        self.assertEqual(len(FakeLogger.made), 1)
 
     def test_the_usage_is_the_same_through_the_command_line(self):
         for args in (("--help",), ("--bogus",)):
@@ -1071,7 +1213,7 @@ class TestMain(unittest.TestCase):
         self.assertEqual((out, FakeLogger.made), ("", []))
 
     def test_a_runtime_error_is_an_error_line_and_exit_1_through_the_command_line(self):
-        r = run_tool("logger.py", "--work", "%ACET_NO_SUCH_VAR%/w")
+        r = run_main_process("--work", "%ACET_NO_SUCH_VAR%/w")
         self.assertEqual(r.returncode, 1)
         self.assertEqual(r.stdout, "")
         self.assertTrue(r.stderr.startswith("error: cannot expand the work directory"), r.stderr)
@@ -1081,6 +1223,12 @@ class TestMain(unittest.TestCase):
         code, out, err = run_main("--work", "w", "--logs", "l")
         self.assertEqual(code, "error: disk full")
         self.assertEqual(err, "")
+
+    @unittest.skipIf(os.name == "nt", "the error line is for the other systems")
+    def test_the_command_line_elsewhere_than_on_windows_is_the_error_line_and_exit_1(self):
+        r = run_tool("logger.py", "--work", "w", "--logs", "l", "--mods", "m")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertEqual(r.stderr, "error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)\n")
 
     def test_the_real_logger_is_built_with_the_two_folders_and_the_tuner_facts_and_run(self):
         with mock.patch.object(logger, "Logger") as cls, mock.patch.object(logfacts, "make_facts") as make:
@@ -1121,7 +1269,7 @@ class TestMain(unittest.TestCase):
         code, out, err = run_main("--mods", "%ACET_NO_SUCH_VAR%/m")
         self.assertTrue(code.startswith("error: cannot expand the mods directory"), code)
         self.assertEqual((out, FakeLogger.made), ("", []))
-        r = run_tool("logger.py", "--work", "w", "--mods", "%ACET_NO_SUCH_VAR%/m")
+        r = run_main_process("--work", "w", "--mods", "%ACET_NO_SUCH_VAR%/m")
         self.assertEqual((r.returncode, r.stdout), (1, ""))
         self.assertTrue(r.stderr.startswith("error: cannot expand the mods directory"), r.stderr)
 

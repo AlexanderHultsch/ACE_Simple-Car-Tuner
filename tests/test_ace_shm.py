@@ -428,6 +428,49 @@ class RealMapping(unittest.TestCase):
                 ace_shm.open_source()
 
 
+class OpenFileMappingFailure(unittest.TestCase):
+    """SharedMemory on a stubbed kernel32: OpenFileMappingW fails with the Windows error code given."""
+
+    def open(self, code, name="Local\\acevo_pmf_physics"):
+        kernel = mock.Mock()
+        kernel.OpenFileMappingW.return_value = None
+        with mock.patch.object(sys, "platform", "win32"), mock.patch.object(ace_shm, "_kernel32", kernel, create=True), \
+                mock.patch.object(ctypes, "get_last_error", return_value=code, create=True), \
+                mock.patch.object(ctypes, "FormatError", lambda c: "windows error %d" % c, create=True):
+            try:
+                return ace_shm.SharedMemory(name, 16)
+            finally:
+                kernel.OpenFileMappingW.assert_called_once_with(ace_shm.FILE_MAP_READ, False, name)
+
+    def test_file_not_found_and_path_not_found_mean_the_game_is_not_running(self):
+        for code in (2, 3):
+            with self.subTest(code=code), self.assertRaises(FileNotFoundError) as raised:
+                self.open(code)
+            self.assertEqual(raised.exception.args, ("Local\\acevo_pmf_physics",))
+
+    def test_any_other_code_is_an_os_error_with_the_code_the_text_and_the_name(self):
+        for code in (5, 32, 87, 1314, 0):
+            with self.subTest(code=code), self.assertRaises(OSError) as raised:
+                self.open(code)
+            error = raised.exception
+            self.assertNotIsInstance(error, FileNotFoundError)
+            self.assertEqual((error.errno, error.strerror, error.filename), (code, "windows error %d" % code, "Local\\acevo_pmf_physics"))
+
+    def test_access_denied_is_in_the_error_text_the_callers_print(self):
+        with self.assertRaises(OSError) as raised:
+            self.open(5)
+        self.assertEqual(str(raised.exception), "[Errno 5] windows error 5: %r" % "Local\\acevo_pmf_physics")
+
+    def test_a_source_closes_the_blocks_it_opened_when_a_later_one_fails_with_any_os_error(self):
+        first = mock.Mock()
+        for failure in (FileNotFoundError("g"), PermissionError(5, "Access is denied", "g")):
+            first.reset_mock()
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(ace_shm, "SharedMemory", side_effect=[first, failure]):
+                with self.assertRaises(type(failure)):
+                    ace_shm.SharedSource()
+            first.close.assert_called_once_with()
+
+
 class FakeSource:
     def __init__(self):
         ph, gr, st = build()
@@ -464,6 +507,11 @@ def run_main(*args):
 
 
 class Cli(unittest.TestCase):
+    def setUp(self):
+        patch = mock.patch.object(sys, "platform", "win32")
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def assert_usage(self, *args):
         r = run_tool("ace_shm.py", *args)
         self.assertEqual(r.returncode, 2, args)
@@ -495,6 +543,7 @@ class Cli(unittest.TestCase):
             "import sys; sys.path.insert(0, %r); import ace_shm\n"
             "def missing(): raise FileNotFoundError('x')\n"
             "ace_shm.open_source = missing\n"
+            "sys.platform = 'win32'\n"
             "ace_shm.main(['dump', '--wait', '0'])\n"
         ) % str(TOOLS)
         r = subprocess.run([sys.executable, "-B", "-I", "-c", code], capture_output=True, text=True)
@@ -511,6 +560,37 @@ class Cli(unittest.TestCase):
         self.assertEqual(clock.slept, [0.5, 0.5])
         self.assertEqual(source.closed, 1)
         self.assertEqual(set(json.loads(out)), {"info", "channels"})
+
+    def test_elsewhere_than_on_windows_it_is_an_error_line_and_exit_1_without_opening_anything(self):
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform=platform), mock.patch.object(sys, "platform", platform), \
+                    mock.patch.object(ace_shm, "open_source") as opened:
+                code, out, err = run_main("dump", "--wait", "0")
+                self.assertEqual(code, "error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)")
+                self.assertEqual((out, err), ("", ""))
+                opened.assert_not_called()
+
+    def test_bad_arguments_are_usage_and_exit_2_even_elsewhere_than_on_windows(self):
+        with mock.patch.object(sys, "platform", "linux"):
+            for args in (("bogus",), ("dump", "extra"), ("dump", "--wait", "abc"), ()):
+                with self.subTest(args=args):
+                    code, out, err = run_main(*args)
+                    self.assertEqual((code, out.strip(), err), (2, USAGE.strip(), ""))
+
+    @unittest.skipIf(os.name == "nt", "the error line is for the other systems")
+    def test_the_command_line_elsewhere_than_on_windows_is_the_error_line_and_exit_1(self):
+        r = run_tool("ace_shm.py", "dump", "--wait", "1")
+        self.assertEqual((r.returncode, r.stdout), (1, ""))
+        self.assertEqual(r.stderr, "error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)\n")
+
+    def test_an_error_other_than_a_missing_block_is_reported_at_once_and_not_waited_for(self):
+        clock = FakeClock()
+        denied = PermissionError(5, "Access is denied", "Local\\acevo_pmf_physics")
+        with mock.patch.object(ace_shm, "open_source", side_effect=denied), mock.patch.object(ace_shm, "time", clock):
+            code, out, err = run_main("dump", "--wait", "30")
+        self.assertEqual(code, "error: %s" % denied)
+        self.assertIn("Access is denied", code)
+        self.assertEqual((out, err, clock.slept), ("", "", []))
 
     def test_dump_gives_up_after_the_wait(self):
         clock = FakeClock()

@@ -1,6 +1,6 @@
 """Tuner facts of the session header of the logger: which modded car of the tuner the game's car name is, with its effective settings, its garage tyres, turbo kit and sounds, its last build and the start time of the game process.
 
-Library module of tools/logger.py (no command line of its own). find_car(work, mods, car_name) matches the name the game reports (car_model) against the modded cars of tune.list_modded (id first, then label, spaces at the ends and case ignored) and then against the stock cars of the work folder (id or display name): {"matched": True, "modded": True, "stock_car", "tune_id", "default", "name_suffix"}, {"matched": True, "modded": False, "stock_car"} or {"matched": False, "reason"} (plus "error" when the modded cars could not be listed). tuner_facts(work, mods, car_name, game_start) is the dict stored under "tuner" in the header: find_car's keys and "game_process_start" (the argument), and for a modded car also "values" ({setting id: {"value", "default"}} of the applicable settings), "garage" ({"keys"} or None), "turbo_kit" ({"donor"} or None), "sounds" ({slot: option key}) and "build" ({"snapshot_time", "package_time" (the file time of <mods>/<tune id>.kspkg, local time with its UTC offset), "settings", "kit", "garage", "sounds", "changes"} of the snapshot of the last build, all None without one except "package_time"). A part that cannot be read is {"error": text} under its own key, the rest is kept; nothing raises. game_process_start() is the creation time of the game process (ISO text with the local UTC offset), None when it does not run. make_facts(work, mods) gives the function Logger takes as facts.
+Library module of tools/logger.py (no command line of its own). find_car(work, mods, car_name) matches the name the game reports (car_model) against the modded cars of tune.list_modded (id first, then label, spaces at the ends and case ignored) and then against the stock cars of the work folder (id or display name): {"matched": True, "modded": True, "stock_car", "tune_id", "default", "name_suffix"}, {"matched": True, "modded": False, "stock_car"} or {"matched": False, "reason"} (plus "error" when the modded cars could not be listed). tuner_facts(work, mods, car_name, game_start) is the dict stored under "tuner" in the header: find_car's keys and "game_process_start" (the argument), and for a modded car also "values" ({setting id: {"value", "default"}} of the applicable settings), "garage" ({"keys"} or None), "turbo_kit" ({"donor"} or None), "sounds" ({slot: option key}) and "build" ({"snapshot_time", "package_time" (the file time of <mods>/<tune id>.kspkg, local time with its UTC offset), "settings", "kit", "garage", "sounds", "changes"} of the snapshot of the last build, all None without one except "package_time"). A part that cannot be read is {"error": text} (the home folder shortened to ~) under its own key, the rest is kept; nothing raises. game_process_start() is the creation time of the game process (ISO text with the local UTC offset), None when it does not run. make_facts(work, mods) gives the function Logger takes as facts.
 
 Stdlib only.
 """
@@ -112,6 +112,12 @@ def stock_names(work, car_ids):
     return names
 
 
+def error_text(error):
+    """str(error) with the home folder shortened to ~ (the header is shared with AI chats)."""
+    home = os.path.expanduser("~")
+    return str(error).replace(home, "~") if len(home) > 1 else str(error)
+
+
 def find_car(work, mods, car_name):
     """The car the game calls car_name (what car_model reports, trimmed and compared ignoring case): a modded car by id, then by
     label (stock name, space, suffix), then a stock car of the work folder by id or display name. When the list of modded cars cannot
@@ -122,7 +128,7 @@ def find_car(work, mods, car_name):
     try:
         modded = tune.list_modded(work, mods)
     except (ValueError, OSError) as e:
-        error = str(e)
+        error = error_text(e)
     for key in ("id", "label"):
         for row in modded:
             if same_name(wanted, row[key]):
@@ -140,7 +146,7 @@ def part(read, *args):
     try:
         return read(*args)
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": error_text(e)}
 
 
 def effective_values(work, stock_car, tune_arg):
@@ -153,7 +159,7 @@ def state_parts(work, stock_car, tune_arg):
     try:
         state = tune.load_state(work, stock_car, tune_arg)
     except Exception as e:
-        return {key: {"error": str(e)} for key in ("garage", "turbo_kit", "sounds")}
+        return {key: {"error": error_text(e)} for key in ("garage", "turbo_kit", "sounds")}
 
     def garage():
         keys = tune.saved_garage(state)
@@ -193,7 +199,7 @@ def tuner_facts(work, mods, car_name, game_start=None):
             facts.update(state_parts(work, facts["stock_car"], tune_arg))
             facts["build"] = part(build_facts, work, mods, facts["stock_car"], facts["tune_id"])
     except Exception as e:
-        facts = {"matched": False, "error": str(e)}
+        facts = {"matched": False, "error": error_text(e)}
     facts["game_process_start"] = game_start
     return facts
 

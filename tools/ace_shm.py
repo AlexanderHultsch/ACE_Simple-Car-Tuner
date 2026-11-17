@@ -11,8 +11,8 @@ The blocks are opened read-only with OpenFileMappingW: a game that is not runnin
 Layouts follow Kunos' ACE_SharedFileOut_Documentation_v1 (changelog 2026-03-31). The physics page is the Assetto Corsa
 Competizione layout, 800 bytes. Wheel order in every array: front left, front right, rear left, rear right.
 
-Exit code 0 on success, 1 on a runtime error (error: ... on stderr: the game is not running (no shared memory), a block that cannot
-be read), 2 on bad usage (usage block on stdout).
+Exit code 0 on success, 1 on a runtime error (error: ... on stderr: not on Windows, the game is not running (no shared memory), a block
+that cannot be opened or read), 2 on bad usage (usage block on stdout).
 """
 import ctypes
 import json
@@ -32,6 +32,8 @@ RETRY_S = 0.5
 STATUS = {0: "off", 1: "replay", 2: "live", 3: "pause"}
 
 FILE_MAP_READ = 0x0004
+ERROR_FILE_NOT_FOUND = 2
+ERROR_PATH_NOT_FOUND = 3
 
 if sys.platform == "win32":
     _kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
@@ -62,7 +64,10 @@ class SharedMemory:
             raise FileNotFoundError("shared memory needs Windows")
         handle = _kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
         if not handle:
-            raise FileNotFoundError(name)
+            code = ctypes.get_last_error()
+            if code in (ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND):
+                raise FileNotFoundError(name)
+            raise OSError(code, ctypes.FormatError(code), name)
         view = _kernel32.MapViewOfFile(handle, FILE_MAP_READ, 0, 0, 0)   # 0 = the whole block
         if not view:
             _kernel32.CloseHandle(handle)
@@ -293,7 +298,7 @@ class SharedSource:
         try:
             for tag, struct in ((PHYSICS_TAG, Physics), (GRAPHICS_TAG, Graphics), (STATIC_TAG, Static)):
                 self.blocks.append(SharedMemory(tag, sizeof(struct)))
-        except FileNotFoundError:
+        except OSError:
             self.close()
             raise
 
@@ -474,6 +479,8 @@ def main(argv=None):
         usage()
     if pos != ["dump"] or not wait >= 0:
         usage()
+    if sys.platform != "win32":
+        sys.exit("error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)")
     try:
         cmd_dump(wait)
     except OSError as e:

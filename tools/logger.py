@@ -14,7 +14,7 @@ header (tools/logfacts.py) says which modded car of the tuner the game's car nam
 stock defaults, garage tyres, turbo kit, sounds, the data of its last build (snapshot, package file time, changes) and the start time
 of the game process; a car that is not found in the work folder has "matched": false and a reason. While it runs the logger writes
 <logs>/logger_status.json once a second and removes it when it stops; once a second it also looks for the empty file <logs>/logger_stop (the Logging tab creates it) and, when it is there, deletes it and stops like Ctrl+C does. The game's memory is only read, never written.
-Wrong arguments print this usage block and exit 2; a runtime error prints "error: ..." on stderr and exits 1.
+Wrong arguments print this usage block and exit 2; a runtime error, or any system but Windows, prints "error: ..." on stderr and exits 1.
 
 Stdlib only.
 """
@@ -129,7 +129,7 @@ class Logger:
             self.source.close()
             self.source = None
             if not self.connect(now, announce=False):
-                self.end("game closed", now)
+                self.end("game closed", self.changed)
                 self.wait(now)
                 return WAIT_S
             physics, graphics, static = self.source.read()
@@ -178,8 +178,9 @@ class Logger:
         if now - self.status_at < STATUS_EVERY_S:
             return False
         self.status_at = now
-        tune.save_json(self.status_path, {"state": state, "file": name, "samples": samples, "started": started,
-                                          "updated": self.wall().timestamp(), "pid": self.pid})
+        with contextlib.suppress(OSError):
+            tune.save_json(self.status_path, {"state": state, "file": name, "samples": samples, "started": started,
+                                              "updated": self.wall().timestamp(), "pid": self.pid})
         self.check_stop()
         return True
 
@@ -203,7 +204,7 @@ class Logger:
         try:
             return self.facts(car, info)
         except Exception as e:
-            return {"matched": False, "error": str(e)}
+            return {"matched": False, "error": logfacts.error_text(e)}
 
     def begin(self, key, info, now):
         chan = logconf.load_channels()
@@ -229,9 +230,11 @@ class Logger:
         if s is None:
             return
         self.session = None
-        self.line(s, {"type": "end", "reason": reason, "duration_s": round(now - s.start, 3), "samples": s.samples})
-        s.file.flush()
-        s.file.close()
+        try:
+            self.line(s, {"type": "end", "reason": reason, "duration_s": round(now - s.start, 3), "samples": s.samples})
+            s.file.flush()
+        finally:
+            s.file.close()
         self.status_at = float("-inf")
         self.out("session ended: %s, %d samples" % (reason, s.samples))
 
@@ -279,17 +282,21 @@ class Logger:
         except KeyboardInterrupt:
             self.out("stopped")
         finally:
-            self.close()
-            timer_resolution(False)
+            try:
+                self.close()
+            finally:
+                timer_resolution(False)
 
     def close(self):
         """Ends an open session ("logger stopped"), closes the source and removes the status file."""
-        self.end("logger stopped", self.clock())
-        if self.source is not None:
-            self.source.close()
-            self.source = None
-        with contextlib.suppress(FileNotFoundError):
-            os.remove(self.status_path)
+        try:
+            self.end("logger stopped", self.clock())
+        finally:
+            if self.source is not None:
+                self.source.close()
+                self.source = None
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(self.status_path)
 
 
 # Python before 3.11 sleeps in 15 ms steps on Windows; 3.11+ has high-resolution timers and this call is then harmless.
@@ -318,6 +325,8 @@ def usage():
 
 
 def main(argv=None):
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")
     args = sys.argv[1:] if argv is None else list(argv)
     try:
         pos, opts = kspkg.parse_args(args, ("work", "mods", "logs"))
@@ -325,6 +334,8 @@ def main(argv=None):
         usage()
     if pos:
         usage()
+    if sys.platform != "win32":
+        sys.exit("error: the session logger needs Windows (it reads the shared memory of Assetto Corsa EVO)")
     try:
         work = tune.work_dir(opts.get("work"))
         mods = mods_dir(opts.get("mods"))

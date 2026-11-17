@@ -312,6 +312,60 @@ class TestBuildFacts(FactsCase):
         self.assertEqual(list(got), MODDED_KEYS)
 
 
+class TestHomeFolderInErrors(FactsCase):
+    def setUp(self):
+        super().setUp()
+        self.home = str(self.d)
+        patch = mock.patch.dict(os.environ, {"HOME": self.home, "USERPROFILE": self.home})
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def assert_no_home(self, facts):
+        text = json.dumps(facts)
+        self.assertNotIn(self.home, text)
+        self.assertNotIn(json.dumps(self.home)[1:-1], text)
+
+    def test_the_text_has_the_home_folder_shortened(self):
+        self.assertEqual(logfacts.error_text(ValueError("%s%sx.json: bad" % (self.home, os.sep))), "~%sx.json: bad" % os.sep)
+        self.assertEqual(logfacts.error_text(ValueError("nothing personal")), "nothing personal")
+        self.assertEqual(logfacts.error_text(OSError(2, "gone")), "[Errno 2] gone")
+
+    def test_a_home_folder_that_cannot_be_found_leaves_the_text_alone(self):
+        for home in ("~", "/", ""):
+            with self.subTest(home=home), mock.patch.object(os.path, "expanduser", return_value=home):
+                self.assertEqual(logfacts.error_text(ValueError("a/b/c")), "a/b/c")
+
+    def test_a_damaged_state_file_has_no_home_folder_in_any_part(self):
+        tune.save_snapshot(self.work, "ks_alpha", "ax_alpha", snapshot())
+        found = logfacts.find_car(self.work, self.mods, "ax_alpha")
+        with mock.patch.object(logfacts, "find_car", return_value=found):
+            self.write(tune.state_path(self.work, "ks_alpha"), '{"name_suffix": "M')
+            got = self.facts("ax_alpha", START)
+        self.assertIn("~", got["values"]["error"])
+        for key in ("values", "garage", "turbo_kit", "sounds"):
+            self.assertEqual(list(got[key]), ["error"], key)
+        self.assert_no_home(got)
+
+    def test_a_damaged_file_read_by_part_has_no_home_folder(self):
+        path = self.write(os.path.join(self.work, "x.json"), "{")
+        got = logfacts.part(tune.read_json, path)
+        self.assertEqual(list(got), ["error"])
+        self.assertTrue(got["error"].startswith("~"), got)
+        self.assert_no_home(got)
+
+    def test_the_list_of_modded_cars_failing_has_no_home_folder_in_the_error(self):
+        self.write(tune.state_path(self.work, "ks_alpha", "ax_alp01"), "{")
+        got = self.facts("ax_alpha", START)
+        self.assertIn("tune_state.json", got["error"])
+        self.assert_no_home(got)
+
+    def test_any_other_failure_of_the_search_has_no_home_folder_in_the_error(self):
+        with mock.patch.object(tune, "list_modded", side_effect=RuntimeError("cannot read %s" % os.path.join(self.home, "work"))):
+            got = self.facts("ax_alpha", START)
+        self.assertEqual(got["error"], "cannot read %s" % os.path.join("~", "work"))
+        self.assert_no_home(got)
+
+
 class TestDamagedParts(FactsCase):
     def found(self, name="ax_alpha"):
         """The result of find_car for name, to be used while the state file is damaged (list_modded reads every state file itself)."""

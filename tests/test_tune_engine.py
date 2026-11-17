@@ -25,6 +25,8 @@ REAL_RENAME = os.rename
 USAGE = tune.__doc__.split("\n\n")[1]
 GAME_SHARED = "content\\cars\\common_phsx\\"
 NO_CHANGES = {"since": None, "settings": [], "extras": [], "total": 0}
+GAME_MISSING = ("game package not found: %s (is Assetto Corsa EVO installed? if it is in another Steam library, "
+                "pass --game <path of content.kspkg>; start_tuner.bat has a GAME line for it)")
 
 
 def limiter(**kw):
@@ -284,6 +286,19 @@ class TestCoerce(unittest.TestCase):
     def test_int_from_text_and_number(self):
         s = mini_setting("i", type="int")
         self.assertEqual([tune.coerce(s, v) for v in ("5", "+5", " -7 ", 5, "007")], [5, 5, -7, 5, 7])
+
+    def test_int_with_too_many_digits_is_a_message_not_a_python_error(self):
+        if not hasattr(sys, "set_int_max_str_digits"):
+            self.skipTest("this Python has no limit on integer text")
+        self.addCleanup(sys.set_int_max_str_digits, sys.get_int_max_str_digits())
+        sys.set_int_max_str_digits(4300)
+        s = mini_setting("i", type="int")
+        with self.assertRaises(ValueError) as cm:
+            tune.coerce(s, "1" * 5000)
+        self.assertEqual(str(cm.exception), "i expects an integer, got '%s'" % ("1" * 40))
+        with self.assertRaises(ValueError) as cm:
+            tune.coerce(s, "x" * 5000)
+        self.assertEqual(str(cm.exception), "i expects an integer, got '%s'" % ("x" * 40))
 
     def test_int_refuses_floats_and_junk(self):
         s = mini_setting("i", type="int")
@@ -1024,6 +1039,14 @@ class TestResolveCache(CarCase):
         self.resolve()
         self.assertGreater(len(self.reads), reads)
 
+    def test_ensure_tyre_files_without_the_package_says_how_to_pass_it(self):
+        game = os.path.join(self.work, "none.kspkg")
+        self.resolve()
+        os.remove(os.path.join(self.fc.shared, "tyres", "road", "a.tyre"))
+        with self.assertRaises(ValueError) as cm:
+            tune.ensure_tyre_files(self.work, "ks_x", game)
+        self.assertEqual(str(cm.exception), GAME_MISSING % game)
+
     def test_ensure_tyre_files_keeps_the_cached_rows_when_nothing_is_extracted(self):
         game = os.path.join(self.work, "none.kspkg")
         self.resolve()
@@ -1154,6 +1177,12 @@ class TestStockInfo(Base):
         with self.assertRaisesRegex(ValueError, "game package not found"):
             tune.read_game_file(self.work, os.path.join(self.work, "nope.kspkg"), "a\\b")
 
+    def test_read_game_file_without_the_package_says_how_to_pass_it(self):
+        game = os.path.join(self.work, "nope.kspkg")
+        with self.assertRaises(ValueError) as cm:
+            tune.read_game_file(self.work, game, "a\\b")
+        self.assertEqual(str(cm.exception), GAME_MISSING % game)
+
     def test_read_game_file_extracts_through_a_temp_folder_and_cleans_up(self):
         game = self.write(os.path.join(self.work, "g.kspkg"), b"x", binary=True)
 
@@ -1183,6 +1212,7 @@ class TestPickCarAndIndex(Base):
         self.assertEqual(tune.pick_car(self.CARS, "ks_b"), "ks_b")
 
     def test_pick_car_without_index_lists_the_tested_cars(self):
+        tune._index_error.clear()
         with self.assertRaisesRegex(ValueError, r"unknown car 'ks_z', the car list of the game is not available, the tested cars \(tuner/cars.json\) are: ks_a, ks_b"):
             tune.pick_car(self.CARS, "ks_z")
 
@@ -1216,6 +1246,26 @@ class TestPickCarAndIndex(Base):
 
     def test_index_without_cache_and_without_game_is_none(self):
         self.assertIsNone(tune.load_cars_index(self.work, os.path.join(self.work, "none.kspkg")))
+
+    def test_index_without_game_says_how_to_pass_the_package(self):
+        game = os.path.join(self.work, "none.kspkg")
+        self.assertIsNone(tune.load_cars_index(self.work, game))
+        self.assertEqual(tune._index_error, [GAME_MISSING % game])
+        with self.assertRaises(ValueError) as cm:
+            tune.pick_car(self.CARS, "ks_z")
+        self.assertIn("(reason: %s)" % (GAME_MISSING % game), str(cm.exception))
+
+    def test_index_from_a_damaged_package_says_to_pass_the_game(self):
+        game = self.write(os.path.join(self.work, "g.kspkg"), b"x", binary=True)
+        self.patch(tune, "read_game_file", lambda work, game, rel: (_ for _ in ()).throw(ValueError("g.kspkg is not a .kspkg package")))
+        self.assertIsNone(tune.load_cars_index(self.work, game))
+        self.assertEqual(tune._index_error, ["g.kspkg is not a .kspkg package; if this is the wrong file, pass --game <path of content.kspkg>"])
+
+    def test_index_from_a_table_without_cars_says_to_pass_the_game(self):
+        game = self.write(os.path.join(self.work, "g.kspkg"), b"x", binary=True)
+        self.stub_table([{"other": 1}])
+        self.assertIsNone(tune.load_cars_index(self.work, game))
+        self.assertEqual(tune._index_error, ["system\\cars.table lists no cars, pass --game <path of content.kspkg> of Assetto Corsa EVO"])
 
     def stub_table(self, lines):
         self.patch(tune, "read_game_file", lambda work, game, rel: b"table")
@@ -1262,6 +1312,13 @@ class TestListCars(Base):
 
     def extract(self, car_id, size=10, name="f.bin"):
         self.write(os.path.join(tune.car_root_of(tune.base_dir(self.work, car_id), car_id), name), b"x" * size, binary=True)
+
+    def test_an_unexpandable_default_mods_folder_says_what_to_pass(self):
+        bad = "%ACE_TEST_NO_SUCH_VAR%" + os.sep + "m"
+        with mock.patch.object(clone_car, "DEFAULT_MODS", bad), self.assertRaises(ValueError) as cm:
+            tune.list_cars(self.work, game=self.game)
+        self.assertEqual(str(cm.exception), "cannot expand the mods directory %r: the default is %s and this program expects Windows; "
+                         "pass --mods <folder> on other systems" % (bad, bad))
 
     def test_without_index_only_tested_cars_sorted_by_display_name(self):
         rows = tune.list_cars(self.work, self.mods, game=self.game)
@@ -2092,6 +2149,17 @@ class TestWorkFolder(Base):
         with self.assertRaisesRegex(ValueError, "cannot expand the work directory"):
             tune.work_dir("%ACE_TEST_NO_SUCH_VAR%" + os.sep + "w")
 
+    def test_work_dir_error_says_what_to_pass(self):
+        bad = "%ACE_TEST_NO_SUCH_VAR%" + os.sep + "w"
+        with self.assertRaises(ValueError) as cm:
+            tune.work_dir(bad)
+        self.assertEqual(str(cm.exception), "cannot expand the work directory %r: the default is %%USERPROFILE%%\\ace_modded_cars_work and this program "
+                         "expects Windows; pass --work <folder> on other systems" % bad)
+        default = "%ACE_TEST_NO_SUCH_VAR%" + os.sep + "d"
+        with mock.patch.object(tune, "DEFAULT_WORK", default), self.assertRaises(ValueError) as cm:
+            tune.work_dir()
+        self.assertIn("cannot expand the work directory %r: the default is %s and" % (default, default), str(cm.exception))
+
     def test_work_dir_makes_the_path_absolute(self):
         self.assertTrue(os.path.isabs(tune.work_dir("relative_work")))
 
@@ -2187,6 +2255,12 @@ class TestWorkFolder(Base):
     def test_init_without_base_and_without_game(self):
         with self.assertRaisesRegex(ValueError, "game package not found"):
             tune.init(self.work, "ks_x", os.path.join(self.work, "none.kspkg"))
+
+    def test_init_without_the_package_says_how_to_pass_it(self):
+        game = os.path.join(self.work, "none.kspkg")
+        with self.assertRaises(ValueError) as cm:
+            tune.init(self.work, "ks_x", game)
+        self.assertEqual(str(cm.exception), GAME_MISSING % game)
 
     def test_init_extracts_through_a_partial_folder(self):
         game = self.write(os.path.join(self.work, "g.kspkg"), b"x", binary=True)
@@ -3353,7 +3427,17 @@ class TestCommands(CarCase):
         self.assertEqual([c.strip() for c in lines[0].split("|")], ["id", "display name", "extracted", "tested", "new id", "installed", "size"])
         self.assertEqual([c.strip() for c in lines[2].split("|")][:6], ["ks_x", "Car X", "yes", "yes", "ax_x", "yes"])
         self.assertRegex(lines[2], r"\d+\.\d MB$")
-        self.assertEqual(lines[-1], "note: the game package is not available and there is no car index, only the tested cars are listed")
+        self.assertEqual(lines[-1], "note: no car index, only the tested cars are listed: " + GAME_MISSING % os.path.join(self.work, "none.kspkg"))
+
+    def test_cars_note_names_the_schema_step_when_the_schemas_are_missing(self):
+        game = self.write(os.path.join(self.work, "g.kspkg"), b"x", binary=True)
+        real = car_json.load_schema
+        self.patch(tune, "read_game_file", lambda work, game, rel: b"table")
+        self.patch(car_json, "load_schema", lambda path=None: real(os.path.join(self.work, "none.desc")))
+        code, out, err = self.run_main("cars", "--work", self.work, "--mods", str(self.d / "mods"), "--game", game)
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines()[-1], "note: no car index, only the tested cars are listed: missing schema file %s: run once  python tools/extract_protos.py "
+                         "<path of AssettoCorsaEVOEditor.exe in the Assetto Corsa EVO SDK folder> schemas  (see docs/USER_GUIDE.md)" % os.path.join(self.work, "none.desc"))
 
     def test_apply_is_refused_while_the_game_runs(self):
         self.patch(tune, "game_running", lambda: True)

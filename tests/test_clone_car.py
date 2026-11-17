@@ -691,6 +691,15 @@ class TestCli(Base):
         self.assertTrue(r.stderr.startswith("error:"), r.stderr)
         self.assertEqual(os.listdir(self.d / "cwd"), [])
 
+    def test_unexpanded_install_folders_say_what_to_pass(self):
+        pkg = self.write(self.d / "pkg" / "ax_x.kspkg", b"N" * 20)
+        r = self.run_in("install", pkg, "--mods", "%ACE_TEST_NO_SUCH_VAR%/mods", "--backups", self.d / "backups")
+        self.assertEqual(r.stderr, "error: cannot expand the mods directory '%ACE_TEST_NO_SUCH_VAR%/mods': the default is %USERPROFILE%\\Saved Games\\ACE\\mods "
+                         "and this program expects Windows; pass --mods <folder> on other systems\n")
+        r = self.run_in("install", pkg, "--mods", self.d / "mods", "--backups", "%ACE_TEST_NO_SUCH_VAR%/backups")
+        self.assertEqual(r.stderr, "error: cannot expand the backups directory '%ACE_TEST_NO_SUCH_VAR%/backups': the default is "
+                         "%USERPROFILE%\\ace_modded_cars_work\\backups and this program expects Windows; pass --backups <folder> on other systems\n")
+
     def test_unexpanded_backups_path_is_an_error_and_creates_nothing(self):
         pkg = self.write(self.d / "pkg" / "ax_x.kspkg", b"N" * 20)
         self.write(self.d / "mods" / "ax_x.kspkg", b"old")

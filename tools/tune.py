@@ -258,6 +258,8 @@ CATALOGUE = REPO / "tuner" / "catalogue.json"
 CARS_JSON = REPO / "tuner" / "cars.json"
 DEFAULT_WORK = "%USERPROFILE%\\ace_modded_cars_work"
 DEFAULT_GAME = "C:\\Program Files (x86)\\Steam\\steamapps\\common\\Assetto Corsa EVO\\content.kspkg"
+GAME_MISSING = ("game package not found: %s (is Assetto Corsa EVO installed? if it is in another Steam library, "
+                "pass --game <path of content.kspkg>; start_tuner.bat has a GAME line for it)")
 GAME_EXE = "AssettoCorsaEVO.exe"
 OLD_LAYOUT = ("base", "build", "tune_state.json", "stock_info.json", "defaults.json")
 TUNES = "tunes"
@@ -326,10 +328,7 @@ def quietly(func, *args):
 
 
 def work_dir(arg=None):
-    try:
-        return clone_car.expand(arg or DEFAULT_WORK)
-    except ValueError:
-        raise ValueError("cannot expand the work directory %r" % (arg or DEFAULT_WORK)) from None
+    return clone_car.expand_dir(arg, DEFAULT_WORK, "work directory", "--work")
 
 
 def game_running():
@@ -651,6 +650,15 @@ def zero(s):
     return {"int": 0, "float": 0.0, "bool": False}.get(s["type"], "")
 
 
+def int_from_text(setting_id, text):
+    try:
+        if not re.fullmatch(r"[+-]?\d+", text.strip()):
+            raise ValueError
+        return int(text)
+    except ValueError:
+        raise ValueError("%s expects an integer, got %r" % (setting_id, text[:40])) from None
+
+
 def coerce(s, v):
     """The value v of setting s as its type (bool, int, float, text, enum choice, name suffix); ValueError with the setting id in the text when it does not fit."""
     t = s["type"]
@@ -663,9 +671,7 @@ def coerce(s, v):
         return BOOL_WORDS[word]
     if t == "int":
         if isinstance(v, str):
-            if not re.fullmatch(r"[+-]?\d+", v.strip()):
-                raise ValueError("%s expects an integer, got %r" % (s["id"], v))
-            v = int(v)
+            v = int_from_text(s["id"], v)
         if type(v) is not int:
             raise ValueError("%s expects an integer, got %r" % (s["id"], v))
     elif t == "float":
@@ -920,7 +926,7 @@ def load_stock_info(work, car_id):
 def read_game_file(work, game, rel):
     """Bytes of one file of the game package, extracted through <work>/stock_tmp."""
     if not os.path.isfile(game):
-        raise ValueError("game package not found: %s" % game)
+        raise ValueError(GAME_MISSING % game)
     tmp = os.path.join(work, "stock_tmp")
     os.makedirs(work, exist_ok=True)
     if os.path.exists(tmp):
@@ -947,6 +953,13 @@ def ensure_stock_loc(work, game=DEFAULT_GAME):
     with open(path, "wb") as f:
         f.write(data)
     return "written"
+
+
+def read_game_package_table(work, game):
+    try:
+        return read_game_file(work, game, CARS_TABLE)
+    except (ValueError, OSError) as e:
+        raise ValueError("%s; if this is the wrong file, pass --game <path of content.kspkg>" % e) from None
 
 
 def cars_table_lines(data):
@@ -1012,9 +1025,10 @@ def load_cars_index(work, game=DEFAULT_GAME):
         if valid_cars_index(index):
             return index
     if not os.path.isfile(game):
+        _index_error[:] = [GAME_MISSING % game]
         return None
     try:
-        lines = cars_table_lines(read_game_file(work, game, CARS_TABLE))
+        lines = cars_table_lines(read_game_package_table(work, game))
     except (ValueError, OSError) as e:
         _index_error[:] = [str(e)]
         return None
@@ -1026,6 +1040,7 @@ def load_cars_index(work, game=DEFAULT_GAME):
                                "brand": c.get("brand", ""), "year": c.get("year")}
     index = sorted(rows.values(), key=lambda c: (c["display_name"].lower(), c["id"]))
     if not valid_cars_index(index):
+        _index_error[:] = ["%s lists no cars, pass --game <path of content.kspkg> of Assetto Corsa EVO" % CARS_TABLE]
         return None
     save_json(path, index)
     return index
@@ -1054,7 +1069,7 @@ def init(work, car_id, game=DEFAULT_GAME):
         res = dict(present, present=True, dir=car_root)
     else:
         if not os.path.isfile(game):
-            raise ValueError("game package not found: %s" % game)
+            raise ValueError(GAME_MISSING % game)
         # extract next to base and rename, so an interrupted extraction never leaves a half-filled base that count_tree would accept
         part = base + ".partial"
         os.makedirs(kspkg.long_path(car_work(work, car_id)), exist_ok=True)
@@ -1246,7 +1261,7 @@ def ensure_tyre_files(work, car_id, game=DEFAULT_GAME, cache=None):
         if not missing:
             return "present"
         if not os.path.isfile(game):
-            raise ValueError("game package not found: %s" % game)
+            raise ValueError(GAME_MISSING % game)
         for p in missing:
             quietly(kspkg.cmd_extract, game, root, p)
         forget_resolved(work, car_id)
@@ -1503,7 +1518,7 @@ def plan_target(work, car_id, new_id, install, mods_dir):
     root = base_dir(work, car_id)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("no base car in %s, run init first" % root)
-    mods = clone_car.expand(mods_dir or clone_car.DEFAULT_MODS) if install else None
+    mods = clone_car.expand_dir(mods_dir, clone_car.DEFAULT_MODS, "mods directory", "--mods") if install else None
     # ids only: the "unused" folder never exists, an old build of the same id is replaced below
     clone_car.validate(car_id, new_id, os.path.join(build_dir(work, car_id), "unused"))
     if (not is_default_tune(car_id, new_id) and not os.path.isdir(kspkg.long_path(tune_dir(work, car_id, new_id)))
@@ -1843,7 +1858,7 @@ def list_cars(work, mods_dir=None, tested_only=False, game=DEFAULT_GAME, sizes=T
     """Every car of the game (the tested cars only when the car index is not available or tested_only), sorted by
     display name. sizes=False leaves bytes None without walking the car folders."""
     cars = load_cars()
-    mods = clone_car.expand(mods_dir or clone_car.DEFAULT_MODS)
+    mods = clone_car.expand_dir(mods_dir, clone_car.DEFAULT_MODS, "mods directory", "--mods")
     labels = {c["id"]: c["label"] for c in cars["cars"]}
     names = index_names(work, game)
     rows = []
@@ -2035,7 +2050,7 @@ def list_modded(work, mods_dir=None):
     default, installed (<id>.kspkg in the mods folder), built (build/<id>/<id>.kspkg)}, sorted by label. Stock cars without
     tunes give nothing; a damaged stock_info.json falls back to the cached car index, the tested label or the car id."""
     s = name_suffix_setting()
-    mods = clone_car.expand(mods_dir or clone_car.DEFAULT_MODS)
+    mods = clone_car.expand_dir(mods_dir, clone_car.DEFAULT_MODS, "mods directory", "--mods")
     labels = {c["id"]: c["label"] for c in load_cars()["cars"]}
     names = index_names(work)
     rows = []
@@ -3478,8 +3493,7 @@ def cmd_cars():
                   "%.1f MB" % (r["bytes"] / (1 << 20)) if r["extracted"] else "-"]
                  for r in list_cars(work, mods_arg(opts), "tested" in opts, game)]))
     if "tested" not in opts and load_cars_index(work, game) is None:
-        print("note: the game package is not available and there is no car index, "
-              "only the tested cars are listed")
+        print("note: no car index, only the tested cars are listed: %s" % _index_error[0])
 
 
 def cmd_init():

@@ -1057,6 +1057,17 @@ class TestMain(unittest.TestCase):
         self.assertTrue(code.startswith("error: cannot expand the work directory"), code)
         code, out, err = run_main("--logs", "%ACET_NO_SUCH_VAR%/l")
         self.assertTrue(code.startswith("error: cannot expand the logs directory"), code)
+
+    def test_an_unexpandable_folder_says_what_to_pass(self):
+        code, out, err = run_main("--work", "%ACET_NO_SUCH_VAR%/w")
+        self.assertEqual(code, "error: cannot expand the work directory '%ACET_NO_SUCH_VAR%/w': the default is %USERPROFILE%\\ace_modded_cars_work "
+                         "and this program expects Windows; pass --work <folder> on other systems")
+        code, out, err = run_main("--logs", "%ACET_NO_SUCH_VAR%/l")
+        self.assertEqual(code, "error: cannot expand the logs directory '%ACET_NO_SUCH_VAR%/l': the default is " + logconf.default_logs_dir()
+                         + " and this program expects Windows; pass --logs <folder> on other systems")
+        code, out, err = run_main("--mods", "%ACET_NO_SUCH_VAR%/m")
+        self.assertEqual(code, "error: cannot expand the mods directory '%ACET_NO_SUCH_VAR%/m': the default is %USERPROFILE%\\Saved Games\\ACE\\mods "
+                         "and this program expects Windows; pass --mods <folder> on other systems")
         self.assertEqual((out, FakeLogger.made), ("", []))
 
     def test_a_runtime_error_is_an_error_line_and_exit_1_through_the_command_line(self):

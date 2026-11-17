@@ -305,17 +305,11 @@ def timer_resolution(on):
 
 
 def logs_dir(arg=None):
-    try:
-        return clone_car.expand(arg or logconf.default_logs_dir())
-    except ValueError:
-        raise ValueError("cannot expand the logs directory %r" % (arg or logconf.default_logs_dir())) from None
+    return clone_car.expand_dir(arg, logconf.default_logs_dir(), "logs directory", "--logs")
 
 
 def mods_dir(arg=None):
-    try:
-        return clone_car.expand(arg or clone_car.DEFAULT_MODS)
-    except ValueError:
-        raise ValueError("cannot expand the mods directory %r" % (arg or clone_car.DEFAULT_MODS)) from None
+    return clone_car.expand_dir(arg, clone_car.DEFAULT_MODS, "mods directory", "--mods")
 
 
 def usage():

@@ -78,6 +78,15 @@ def expand(path):
     return full
 
 
+def expand_dir(arg, default, what, flag):
+    """expand(arg or default) for a folder the command line can name; the error says what to pass when it cannot be expanded."""
+    try:
+        return expand(arg or default)
+    except ValueError:
+        raise ValueError("cannot expand the %s %r: the default is %s and this program expects Windows; pass %s <folder> on other systems"
+                         % (what, arg or default, default, flag)) from None
+
+
 def check_id(old_id, new_id):
     if not re.fullmatch(r"[a-z0-9_]+", new_id):
         raise ValueError("new id %r may only contain lowercase a-z, 0-9 and underscore" % new_id)
@@ -259,7 +268,8 @@ def install(pkg, mods_dir, backups):
     """Returns the path of the backup made of the replaced package, None when there was no previous install."""
     if not pkg.lower().endswith(".kspkg") or not os.path.isfile(pkg):
         raise ValueError("%s is not an existing .kspkg file" % pkg)
-    mods_dir, backups = expand(mods_dir), expand(backups)
+    mods_dir, backups = (expand_dir(mods_dir, DEFAULT_MODS, "mods directory", "--mods"),
+                         expand_dir(backups, DEFAULT_BACKUPS, "backups directory", "--backups"))
     os.makedirs(mods_dir, exist_ok=True)
     target = os.path.join(mods_dir, os.path.basename(pkg))
     backup = None

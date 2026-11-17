@@ -94,6 +94,7 @@ def copy_renamed(src, dst, old_id, new_id):
     pat = re.compile(re.escape(old_id.encode()), re.IGNORECASE)
     content_pat = content_pattern(old_id)
     repl = replacer(new_id)
+    old_low = old_id.encode().lower()
 
     def rename(name):
         return pat.sub(repl, name.encode()).decode()
@@ -107,7 +108,10 @@ def copy_renamed(src, dst, old_id, new_id):
         os.makedirs(out, exist_ok=True)
         for n in names:
             with open(os.path.join(root, n), "rb") as f:
-                data, hits = content_pat.subn(repl, f.read())
+                data = f.read()
+            hits = 0
+            if old_low in data.lower():   # a plain scan is 20x faster than the IGNORECASE regex, which only runs on files that hold the id
+                data, hits = content_pat.subn(repl, data)
             target = os.path.join(out, rename(n))
             with open(target, "wb") as f:
                 f.write(data)
@@ -120,11 +124,13 @@ def copy_renamed(src, dst, old_id, new_id):
 def kept_audio_references(root, old_id):
     """(occurrences, files) of the old id after an audio prefix in the copied tree under root."""
     pat = audio_pattern(old_id)
+    old_low = old_id.encode().lower()
     refs = files = 0
     for dp, _, names in os.walk(kspkg.long_path(root)):
         for n in names:
             with open(os.path.join(dp, n), "rb") as f:
-                hits = len(pat.findall(f.read()))
+                data = f.read()
+            hits = len(pat.findall(data)) if old_low in data.lower() else 0
             refs += hits
             files += bool(hits)
     return refs, files
@@ -180,6 +186,7 @@ def self_check(out_dir, old_id, modded):
     new_id = os.path.basename(path)[:-len("." + MODDED_TYPE)]
     pat = re.compile(re.escape(old_id.encode()), re.IGNORECASE)
     content_pat, audio_pat = content_pattern(old_id), audio_pattern(new_id)
+    old_low, new_low = old_id.encode().lower(), new_id.encode().lower()
     bad_names, bad_content, bad_audio = [], [], []
     for root, dirs, names in os.walk(kspkg.long_path(out_dir)):
         for n in dirs + names:
@@ -188,9 +195,10 @@ def self_check(out_dir, old_id, modded):
         for n in names:
             with open(os.path.join(root, n), "rb") as f:
                 data = f.read()
-            if content_pat.search(data):
+            low = data.lower()
+            if old_low in low and content_pat.search(data):
                 bad_content.append(kspkg.plain_path(os.path.join(root, n)))
-            if audio_pat.search(data):
+            if new_low in low and audio_pat.search(data):
                 bad_audio.append(kspkg.plain_path(os.path.join(root, n)))
     with open(kspkg.long_path(path), "rb") as f:
         decoded = car_json.decode_msg(sch, msg, f.read())

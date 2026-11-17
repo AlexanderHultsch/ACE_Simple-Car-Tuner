@@ -129,6 +129,13 @@ class Primitives(unittest.TestCase):
         for n in (0, 1, 7, 8, 9, 1000):
             self.assertEqual(kspkg.xor(kspkg.xor(data[:n], KEY), KEY), data[:n])
 
+    def test_xor_with_alternating_keys_and_lengths_matches_the_reference(self):
+        data = bytes(range(256)) * 4
+        keys = (KEY, bytes.fromhex("0011223344556677"), bytes(8), b"\xff" * 8)
+        for n in (8, 9, 256, 8, 1000, 9, 256):
+            for key in keys:
+                self.assertEqual(kspkg.xor(data[:n], key), bytes(b ^ key[i % 8] for i, b in enumerate(data[:n])))
+
     def test_xor_empty_input_gives_empty_bytes(self):
         self.assertEqual(kspkg.xor(b"", KEY), b"")
 

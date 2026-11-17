@@ -82,8 +82,20 @@ RESERVED = ("_order", "_packed", "_unknown")
 
 
 class F32(float):
-    """float32 value carrying its shortest decimal text."""
-    __slots__ = ("text",)
+    """float32 value; its shortest decimal text is computed on first use (a decode that only reads the numbers never pays for it)."""
+    __slots__ = ("_text",)
+
+    @property
+    def text(self):
+        try:
+            return self._text
+        except AttributeError:
+            self._text = f32_text(float(self))
+            return self._text
+
+    @text.setter
+    def text(self, value):
+        self._text = value
 
 
 def load_schema(path=DESC):
@@ -182,9 +194,7 @@ def dec_scalar(sch, f, raw):
         x = struct.unpack("<f", raw.to_bytes(4, "little"))[0]
         if x != x or abs(x) == float("inf"):
             return str(x)
-        v = F32(x)
-        v.text = f32_text(x)
-        return v
+        return F32(x)
     if t == 8:
         if raw > 1:
             raise ValueError("bool value %d" % raw)

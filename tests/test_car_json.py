@@ -1,5 +1,6 @@
 """Tests for tools/car_json.py on a synthetic schema: scalar/repeated/nested round trips, unknown fields, NaN, JSON text, seeded random messages, CLI."""
 import ast
+import copy
 import json
 import math
 import pathlib
@@ -202,6 +203,17 @@ class Scalars(SchemaCase):
                 obj = self.decode(one("f", x32))
                 self.assertEqual(obj["f"].text, text)
                 self.assertIn('"f": %s' % text, cj.dumps(obj))
+
+    def test_float32_text_is_computed_on_first_use_and_can_be_assigned(self):
+        obj = self.decode(one("f", struct.unpack("<f", struct.pack("<f", 0.1))[0]))
+        before = copy.deepcopy(obj["f"])
+        self.assertEqual(obj["f"].text, "0.1")
+        self.assertEqual(copy.deepcopy(obj["f"]).text, "0.1")
+        self.assertEqual(before.text, "0.1")
+        obj["f"].text = "0.10"
+        self.assertEqual(obj["f"].text, "0.10")
+        self.assertIn('"f": 0.10', cj.dumps(obj))
+        self.assertEqual(cj.F32(0.25).text, "0.25")
 
     def test_float32_text_is_stable_and_parses_back_to_the_same_bits(self):
         rnd = random.Random(99)

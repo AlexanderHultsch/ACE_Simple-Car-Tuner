@@ -22,6 +22,7 @@ Long paths: on Windows every file operation on an extracted or built car tree go
 returns the extended-length form (\\\\?\\ prefix) so paths over 260 characters work. The other tools import
 long_path and plain_path (the reverse, for printing) from here.
 """
+import functools
 import hashlib
 import os
 import struct
@@ -56,12 +57,16 @@ def plain_path(path):
     return path[len(LONG_PREFIX):] if path.startswith(LONG_PREFIX) else path
 
 
+@functools.lru_cache(maxsize=4)
+def key_int(key, n):
+    return int.from_bytes((key * (n // 8 + 1))[:n], "little")
+
+
 def xor(buf, key):
     n = len(buf)
     if n == 0:
         return b""
-    k = (key * (n // 8 + 1))[:n]
-    return (int.from_bytes(buf, "little") ^ int.from_bytes(k, "little")).to_bytes(n, "little")
+    return (int.from_bytes(buf, "little") ^ key_int(bytes(key), n)).to_bytes(n, "little")
 
 
 def path_hash(p):
@@ -191,13 +196,14 @@ def cmd_pack(indir, pkg):
         out.write(b"\0" * pad)
         entries += [(d, FLAG_DIR, 0, 0) for d in dirs]
         entries.sort(key=lambda e: path_hash(e[0]))
-        table = bytearray(TBL)
+        table = bytearray(min(len(entries) * ENTRY, TBL))
         for i, (rel, flags, size, o) in enumerate(entries):
             pb = rel.encode()
             base = i * ENTRY
             table[base:base + len(pb)] = pb
             struct.pack_into("<ihhQqq", table, base + 0xE0, 0, flags, len(pb), path_hash(rel), size, o)
         out.write(xor(bytes(table), KEY))
+        out.write(KEY * ((TBL - len(table)) // 8))
     print(f"packed {len(files)} files + {len(dirs)} dirs -> {pkg}")
 
 

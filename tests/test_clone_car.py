@@ -124,6 +124,21 @@ class TestCopyRenamed(Base):
         os.makedirs(src / "empty")
         return src, files
 
+    def test_only_files_holding_the_id_in_any_case_change_and_the_rest_is_copied_byte_for_byte(self):
+        src = self.d / "ks_x"
+        blob = bytes(range(256)) * 50
+        no_id = {"a.bin": blob, "b.bin": blob[::-1], "empty.bin": b"", "k.bin": b"k"}
+        for rel, data in no_id.items():
+            self.write(src / rel, data)
+        self.write(src / "c.bin", blob + b"kS_x" + blob)
+        dst = self.d / "out"
+        n, counts = clone_car.copy_renamed(str(src), str(dst), "ks_x", "ax_x")
+        self.assertEqual((n, counts), (5, {"c.bin": 1}))
+        for rel, data in no_id.items():
+            self.assertEqual(self.read(dst / rel), data)
+        self.assertEqual(self.read(dst / "c.bin"), blob + b"ax_x" + blob)
+        self.assertEqual(clone_car.kept_audio_references(str(dst), "ks_x"), (0, 0))
+
     def test_names_folders_and_contents_are_renamed(self):
         src, files = self.make_src()
         dst = self.d / "out"

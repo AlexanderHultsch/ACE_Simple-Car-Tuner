@@ -50,11 +50,16 @@ body {
 }
 .bar h1 { margin: 0; font-size: 22px; }
 .title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
-.carpick { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text-muted); }
-.carpick select {
-  font: inherit; padding: 6px 8px; max-width: 100%; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg-elevated); color: var(--color-text);
+.selectrow { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--color-text-muted); }
+input:not([type="checkbox"]), select, .valuewrap input {
+  font: inherit; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); color: var(--color-text);
 }
+.selectrow select { padding: 6px 8px; max-width: 100%; background: var(--color-bg-elevated); }
+.namefield input { width: 9em; padding: 3px 6px; }
+.dialog .field input { width: 16em; max-width: 100%; padding: 5px 8px; }
+.dialog .field select, .garage select { max-width: 100%; padding: 5px 8px; }
+.toolbar input[type="search"] { padding: 7px 10px; min-width: 260px; background: var(--color-bg-alt); }
+.valuewrap input, .valuewrap select { width: 8.5em; padding: 5px 8px; }
 .untested { margin: 0 0 8px; font-size: 13px; color: var(--color-text-muted); }
 .namerow {
   display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 0 0 10px; padding: 4px 0;
@@ -64,10 +69,6 @@ body {
 .namerow .label { font-size: 13px; color: var(--color-text-muted); white-space: pre; }
 .namefield { display: inline-flex; align-items: center; gap: 2px; }
 .stockname { font-weight: 600; white-space: pre; }
-.namefield input {
-  font: inherit; width: 9em; padding: 3px 6px; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-text);
-}
 .namerow .msg { flex: 1 0 100%; margin-top: 0; }
 .tunenote { font-size: 13px; color: var(--color-text-muted); }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -124,23 +125,14 @@ input[type="checkbox"] { accent-color: var(--color-accent); }
 .panel summary:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 .dialog .field { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; margin: 6px 0; }
 .dialog .field label { min-width: 12em; }
-.dialog .field input {
-  font: inherit; width: 16em; max-width: 100%; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-text);
-}
-.dialog .field select {
-  font: inherit; max-width: 100%; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-text);
-}
 .dialog .hint { font-size: 13px; color: var(--color-text-muted); }
 .toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-bottom: 10px; }
-.toolbar input[type="search"] {
-  font: inherit; padding: 7px 10px; min-width: 260px; border: 1px solid var(--color-border);
-  border-radius: 6px; background: var(--color-bg-alt); color: var(--color-text);
-}
 .toolbar label { display: flex; align-items: center; gap: 6px; }
 .toolbar .spacer { flex: 1; }
 .tablewrap { border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-bg-alt); }
+.sessions { overflow-x: auto; }
+.sessions table { table-layout: auto; min-width: 640px; }
+.sessions td { overflow-wrap: normal; white-space: nowrap; }
 table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
 thead th {
   position: sticky; top: 0; z-index: 2; text-align: left; font-size: 13px; padding: 9px 12px;
@@ -204,15 +196,11 @@ tr.off td { color: var(--color-text-muted); font-style: italic; }
 .name b { display: block; }
 .name .id { display: block; font-size: 12px; color: var(--color-text-muted); }
 .valuewrap { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.valuewrap input, .valuewrap select {
-  font: inherit; width: 8.5em; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-text);
-}
 .valuewrap select { width: auto; max-width: 100%; }
 .valuewrap label.flag { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .valuewrap input[type="checkbox"] { width: auto; padding: 0; margin: 0; }
 .unit { color: var(--color-text-muted); font-size: 13px; }
-button.reset { padding: 2px 8px; font-size: 12px; }
+button.small { padding: 2px 8px; font-size: 12px; }
 .msg { margin-top: 4px; font-size: 12.5px; }
 .msg.warn { color: var(--color-warning); }
 .msg.err { color: var(--color-error); }
@@ -220,7 +208,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   display: inline-block; margin-left: 6px; padding: 0 7px; border: 1px solid var(--color-border); border-radius: 10px;
   font-size: 11.5px; background: transparent; color: var(--color-text-muted); cursor: help; white-space: nowrap;
 }
-.badge.amber {
+.badge.accent {
   display: block; width: fit-content; margin: 4px 0 0; white-space: normal; border-color: var(--color-accent);
   color: var(--color-accent);
 }
@@ -233,10 +221,6 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 .garage fieldset { min-width: 0; margin: 0 0 8px; padding: 0; border: 0; }
 .garage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 3px 0; }
 .garage-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
-.garage select {
-  font: inherit; max-width: 100%; padding: 5px 8px; border: 1px solid var(--color-border); border-radius: 6px;
-  background: var(--color-bg); color: var(--color-text);
-}
 .empty { padding: 18px 14px; color: var(--color-text-muted); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
@@ -250,6 +234,8 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   td, thead th, button.grouptoggle, tr.group th.plain { padding-left: 8px; padding-right: 8px; }
   .gdesc { padding-left: 31px; padding-right: 8px; }
   .valuewrap input { width: 7em; }
+  .valuewrap input, .valuewrap select { max-width: 100%; min-width: 0; }
+  .valuewrap input[type="checkbox"] { max-width: none; }
   .toolbar input[type="search"] { min-width: 180px; }
 }
 @media (max-width: 600px) {
@@ -275,7 +261,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
   <div id="panel-car" role="tabpanel" aria-labelledby="tab-car">
     <div class="bar">
       <div class="title">
-        <label class="carpick">Car
+        <label class="selectrow">Car
           <select id="car-select" aria-label="Car" disabled></select>
         </label>
       </div>
@@ -314,7 +300,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 
     <section id="init-panel" class="panel" hidden>
       <h2>Car not installed yet</h2>
-      <p id="init-text">The tuner needs the car's files from the game as its starting point. Installing pulls them once (about 20 seconds).</p>
+      <p>The tuner needs the car's files from the game as its starting point. Installing pulls them once (about 20 seconds).</p>
       <button id="btn-init" class="primary" type="button">Install car (pull game files)</button>
     </section>
 
@@ -415,7 +401,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
     </section>
 
     <div class="toolbar">
-      <label class="carpick">Tyre
+      <label class="selectrow">Tyre
         <select id="tyre-select" aria-label="Tyre" disabled></select>
       </label>
       <button id="btn-tyre-new" class="primary" type="button" disabled>New tyre&hellip;</button>
@@ -446,7 +432,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
 
     <section id="tyre-editor" hidden>
       <div class="namerow">
-        <label class="carpick">Source:
+        <label class="selectrow">Source:
           <select id="tyre-source" aria-label="Source tyre"></select>
         </label>
         <button id="btn-tyre-reset" type="button">Reset all values</button>
@@ -481,7 +467,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
     </section>
 
     <div class="toolbar">
-      <label class="carpick">Sample rate
+      <label class="selectrow">Sample rate
         <select id="log-rate" aria-label="Sample rate" disabled></select>
       </label>
       <button id="btn-log-all" type="button" disabled>Tick all</button>
@@ -498,7 +484,7 @@ button.reset { padding: 2px 8px; font-size: 12px; }
         <button id="btn-log-ai" type="button">Copy AI command</button>
       </div>
       <p id="log-copy-msg" class="garage-help" role="status" hidden></p>
-      <div class="tablewrap">
+      <div class="tablewrap sessions">
         <table>
           <caption class="sr-only">Recent session files</caption>
           <thead>
@@ -541,14 +527,14 @@ function el(tag, cls, text) {
   return n;
 }
 
-let info = null;
+let serverState = null;
 let serverError = "";
 let localError = "";
 let rows = [];
 let groups = [];
 // the groups of the catalogue as the server lists them, in display order ({name, description}); null until read, then the
 // table falls back to the order of the settings and shows no descriptions
-let groupInfo = null;
+let catalogueGroups = null;
 // names of the groups the user opened; every group starts collapsed, the set is cleared when another car is selected
 const expanded = new Set();
 // the box "show advanced settings": kept for the life of the page, not reset when another car is selected
@@ -679,7 +665,7 @@ function choiceOf(value) {
 }
 
 function moddedList() {
-  return info && info.modded ? info.modded : [];
+  return serverState && serverState.modded ? serverState.modded : [];
 }
 
 function moddedEntry() {
@@ -687,12 +673,12 @@ function moddedEntry() {
 }
 
 function carEntry() {
-  return info && info.cars ? info.cars.find((c) => c.id === selection.car) || null : null;
+  return serverState && serverState.cars ? serverState.cars.find((c) => c.id === selection.car) || null : null;
 }
 
 function carName() {
   const c = carEntry();
-  return c ? c.display_name || c.label : "the car";
+  return c ? optionText(c) : "the car";
 }
 
 function shownName() {
@@ -753,25 +739,25 @@ function addStat(box, label, value, cls, mono) {
 }
 
 function renderStatus() {
-  const sig = JSON.stringify([serverError, info && [info.work, info.base_present, info.game_running, info.tune, info.installed, info.settings_hidden]]);
+  const sig = JSON.stringify([serverError, serverState && [serverState.work, serverState.base_present, serverState.game_running, serverState.tune, serverState.installed, serverState.settings_hidden]]);
   if (sig === statusSig) return;
   statusSig = sig;
   const box = $("status");
   box.replaceChildren();
-  if (!info) {
+  if (!serverState) {
     addStat(box, "Server", serverError || "not reachable", "bad");
     return;
   }
-  addStat(box, "Work folder", info.work, "", true);
-  addStat(box, "Base car present", info.base_present ? "yes" : "no", info.base_present ? "ok" : "bad");
-  addStat(box, "Game running", info.game_running ? "yes" : "no", info.game_running ? "warn" : "");
-  const inst = info.installed;
-  if (info.tune !== DRAFT) {
-    addStat(box, "Installed package", info.tune + ": " +
+  addStat(box, "Work folder", serverState.work, "", true);
+  addStat(box, "Base car present", serverState.base_present ? "yes" : "no", serverState.base_present ? "ok" : "bad");
+  addStat(box, "Game running", serverState.game_running ? "yes" : "no", serverState.game_running ? "warn" : "");
+  const inst = serverState.installed;
+  if (serverState.tune !== DRAFT) {
+    addStat(box, "Installed package", serverState.tune + ": " +
       (inst.exists ? fmtBytes(inst.bytes) + ", " + fmtTime(inst.modified) : "not installed"), "", true);
   }
-  if (info.settings_hidden > 0) {
-    box.appendChild(el("span", "note", info.settings_hidden + (info.settings_hidden === 1 ? " setting is" : " settings are") +
+  if (serverState.settings_hidden > 0) {
+    box.appendChild(el("span", "note", serverState.settings_hidden + (serverState.settings_hidden === 1 ? " setting is" : " settings are") +
       " not available for this car (hidden)"));
   }
 }
@@ -782,18 +768,18 @@ function optionText(c) {
 
 function renderCars() {
   const select = $("car-select");
-  const list = info && info.cars ? info.cars : [];
-  const byName = (a, b) => (a.display_name || a.label).localeCompare(b.display_name || b.label);
-  const groupsOf = [
+  const list = serverState && serverState.cars ? serverState.cars : [];
+  const byName = (a, b) => optionText(a).localeCompare(optionText(b));
+  const optionGroups = [
     ["Modded Cars", moddedList().map((m) => ["mod:" + m.id, m.label + (m.installed ? " - installed" : " - not installed")])],
     ["Installed Cars", list.filter((c) => c.extracted).sort(byName).map((c) => ["base:" + c.id, optionText(c)])],
     ["Other Cars", list.filter((c) => !c.extracted).sort(byName).map((c) => ["base:" + c.id, optionText(c)])]
   ];
-  const sig = JSON.stringify([groupsOf, selection]);
+  const sig = JSON.stringify([optionGroups, selection]);
   if (sig === carsSig) return;
   carsSig = sig;
   select.replaceChildren();
-  for (const [title, options] of groupsOf) {
+  for (const [title, options] of optionGroups) {
     if (!options.length) continue;
     const g = el("optgroup");
     g.label = title;
@@ -810,23 +796,19 @@ function renderCars() {
   $("untested").hidden = !entry || entry.tested;
   $("untested").textContent = entry && !entry.tested ?
     "This car has not been tested with the tuner yet; check the results before you trust them." : "";
-  if (entry) {
-    $("caption").textContent = "Settings of " + shownName();
-    $("init-text").textContent = "The tuner needs the car's files from the game as its starting point. " +
-      "Installing pulls them once (about 20 seconds).";
-  }
+  if (entry) $("caption").textContent = "Settings of " + shownName();
 }
 
 function renderButtons() {
-  const running = !!info && info.job.state === "running";
+  const running = !!serverState && serverState.job.state === "running";
   const draft = selection.tune === DRAFT;
   let why = "";
-  if (!info) why = serverError || "server not reachable";
+  if (!serverState) why = serverError || "server not reachable";
   else if (running) why = "a job is running";
-  else if (info.game_running) why = "close the game first";
-  else if (!info.base_present) why = "extract the stock car first";
+  else if (serverState.game_running) why = "close the game first";
+  else if (!serverState.base_present) why = "extract the stock car first";
   let whyDuplicate = why;
-  if (why === "close the game first") whyDuplicate = info.base_present ? "" : "extract the stock car first";
+  if (why === "close the game first") whyDuplicate = serverState.base_present ? "" : "extract the stock car first";
   if (whyDuplicate === "" && draft) whyDuplicate = "select a modded car to duplicate it";
   $("btn-apply").textContent = draft ? "Create modded car\u2026" : "Apply (update this car)";
   $("btn-apply").disabled = why !== "";
@@ -836,20 +818,20 @@ function renderButtons() {
   const locked = running || (dialog !== null && dialog.busy);
   for (const id of ["dialog-id", "dialog-suffix", "dialog-ok"]) $(id).disabled = locked;
   $("dialog-cancel").disabled = dialog !== null && dialog.busy;
-  $("btn-init").disabled = !info || running;
+  $("btn-init").disabled = !serverState || running;
   $("btn-reset-all").disabled = running;
   for (const r of headerRow ? rows.concat(headerRow) : rows) {
     r.field.disabled = running;
     r.reset.disabled = running;
   }
-  const baseOk = !!info && info.base_present;
-  $("init-panel").hidden = !info || baseOk;
+  const baseOk = !!serverState && serverState.base_present;
+  $("init-panel").hidden = !serverState || baseOk;
   $("tuner").hidden = !baseOk || !tableLoaded;
   $("name-host").hidden = !baseOk || !tableLoaded || !headerRow;
-  renderTyreControls();
-  renderGarageControls();
-  renderTurboControls();
-  renderSoundsControls();
+  syncTyres();
+  syncGarage();
+  syncTurbo();
+  syncSounds();
 }
 
 function addLine(box, text, cls) {
@@ -880,15 +862,6 @@ function summaryApply(box, res) {
       details.appendChild(ul);
       box.appendChild(details);
     }
-  } else if (res.applied.length) {
-    const details = el("details");
-    details.appendChild(el("summary", "", "Settings applied (" + res.applied.length + ")"));
-    const ul = el("ul");
-    for (const a of res.applied) {
-      ul.appendChild(el("li", "", a.id + ": " + fmtVal("", a.old) + " -> " + fmtVal("", a.new)));
-    }
-    details.appendChild(ul);
-    box.appendChild(details);
   }
   addLine(box, "Package: " + res.package + " (" + fmtBytes(res.size) + ")");
   addLine(box, "Installed to: " + (res.installed || "-"));
@@ -898,9 +871,9 @@ function summaryApply(box, res) {
 
 function renderProgress() {
   const box = $("progress");
-  const job = info ? info.job : { state: "idle", log: [], result: null, error: null, kind: null };
+  const job = serverState ? serverState.job : { state: "idle", log: [], result: null, error: null, kind: null };
   const errors = localError ? [localError] : [];
-  if (info && info.modded_error) errors.push("The modded cars cannot be read: " + info.modded_error);
+  if (serverState && serverState.modded_error) errors.push("The modded cars cannot be read: " + serverState.modded_error);
   // rebuild the panel only when the job or the errors changed, so the log keeps its scroll position
   const sig = JSON.stringify([job, errors]);
   if (sig === jobSig) return;
@@ -949,7 +922,7 @@ async function refresh() {
   clearTimeout(pollTimer);
   const want = selection;
   try {
-    info = await api("/api/state", undefined, want);
+    serverState = await api("/api/state", undefined, want);
     serverError = "";
   } catch (e) {
     // the stored car or modded car may no longer exist: fall back to the draft of the default car once
@@ -957,22 +930,22 @@ async function refresh() {
       selection = { car: null, tune: DRAFT };
       return refresh();
     }
-    info = null;
+    serverState = null;
     serverError = e.message;
   }
   if (want !== selection) return;
-  if (info && !carConfirmed) {
-    selection = { car: info.car, tune: info.tune };
+  if (serverState && !carConfirmed) {
+    selection = { car: serverState.car, tune: serverState.tune };
     carConfirmed = true;
   }
   if (createdCar()) return;
-  const extracting = !!info && info.job.kind === "init" && info.job.state === "running";
-  if (info && info.base_present && !tableLoaded && !extracting) await loadSettings();
+  const extracting = !!serverState && serverState.job.kind === "init" && serverState.job.state === "running";
+  if (serverState && serverState.base_present && !tableLoaded && !extracting) await loadSettings();
   renderCars();
   renderStatus();
   renderButtons();
   renderProgress();
-  const busy = info && info.job.state === "running";
+  const busy = serverState && serverState.job.state === "running";
   // a hidden tab polls rarely and refreshes at once when it is shown again
   pollTimer = setTimeout(refresh, document.hidden ? POLL_HIDDEN_MS : (busy ? POLL_BUSY_MS : POLL_IDLE_MS));
 }
@@ -1094,7 +1067,7 @@ function copiesTip(data) {
 }
 
 function buildReset(r) {
-  const b = el("button", "reset", "reset");
+  const b = el("button", "small", "reset");
   b.type = "button";
   b.title = "Back to the default";
   b.setAttribute("aria-label", "Reset " + r.data.label);
@@ -1185,7 +1158,7 @@ function buildRow(data, target, withRange) {
 
   const defCell = el("td", "default mono", fmtVal(data.type, data.default) + (data.unit ? " " + data.unit : ""));
   if (data.copies_differ) {
-    const b = el("span", "badge amber", "copies differ in stock");
+    const b = el("span", "badge accent", "copies differ in stock");
     b.title = copiesTip(data);
     b.appendChild(el("span", "sr-only", ": " + copiesTip(data)));
     defCell.appendChild(b);
@@ -1231,7 +1204,7 @@ function buildTable(list, target) {
   }
   // the groups follow the list of the server (the settings of one group may be spread over the list), groups it does not
   // know come last in the order they appeared; each header is followed by the rows of its group
-  const listed = (groupInfo || []).map((x) => x.name);
+  const listed = (catalogueGroups || []).map((x) => x.name);
   const rank = (g) => (listed.includes(g.name) ? listed.indexOf(g.name) : listed.length);
   groups.sort((a, b) => rank(a) - rank(b));
   for (const g of groups) {
@@ -1255,7 +1228,7 @@ function buildGroup(name) {
   g.btn.append(chev, el("span", "gname", name), g.count);
   g.btn.addEventListener("click", () => toggleGroup(g));
   th.appendChild(g.btn);
-  const known = (groupInfo || []).find((x) => x.name === name);
+  const known = (catalogueGroups || []).find((x) => x.name === name);
   if (known && known.description) {
     // shown only while the group is open (applyFilter); groups.length is the index this group gets in buildTable
     g.desc = el("div", "gdesc", known.description);
@@ -1326,12 +1299,12 @@ function applyFilter() {
 // the group list is the same for every car: read once, again with the next table load only when that read failed; a failure
 // is no error of the table, which then shows the groups in the order of the settings without descriptions
 async function loadGroupInfo(target) {
-  if (groupInfo) return;
+  if (catalogueGroups) return;
   try {
     const res = await api("/api/groups", undefined, target);
-    groupInfo = res.groups;
+    catalogueGroups = res.groups;
   } catch (e) {
-    groupInfo = null;
+    catalogueGroups = null;
   }
 }
 
@@ -1369,8 +1342,8 @@ async function startJob(path, body) {
 
 // Create has started its job: when it ends with a new modded car, that car is selected
 function createdCar() {
-  if (!awaitCreated || !info) return false;
-  const job = info.job;
+  if (!awaitCreated || !serverState) return false;
+  const job = serverState.job;
   if (job.kind !== "apply") return false;
   if (job.state === "error") {
     awaitCreated = null;
@@ -1388,15 +1361,15 @@ function showDialogError(text) {
 }
 
 function openDialog(kind) {
-  if (!info) return;
+  if (!serverState) return;
   const create = kind === "create";
   const opener = dialog ? dialog.opener : document.activeElement;
   dialog = { kind: kind, opener: opener, busy: false };
   $("dialog-title").textContent = create ? "Create a modded car from " + carName() : "Duplicate " + shownName();
-  $("dialog-id").value = info.proposed_new_id || "";
-  $("dialog-suffix").value = create ? info.proposed_suffix || "" : "";
+  $("dialog-id").value = serverState.proposed_new_id || "";
+  $("dialog-suffix").value = create ? serverState.proposed_suffix || "" : "";
   $("dialog-suffix").placeholder = create ? "" : "automatic";
-  $("dialog-hint").textContent = "The id has exactly " + info.stock_id_length +
+  $("dialog-hint").textContent = "The id has exactly " + serverState.stock_id_length +
     " characters: lower case letters, digits, underscore";
   showDialogError("");
   $("dialog").hidden = false;
@@ -1417,7 +1390,7 @@ function closeDialog(restoreFocus) {
 }
 
 async function submitDialog() {
-  if (!dialog || dialog.busy || !info || info.job.state === "running") return;
+  if (!dialog || dialog.busy || !serverState || serverState.job.state === "running") return;
   const mine = dialog;
   const create = mine.kind === "create";
   const target = selection;
@@ -1531,8 +1504,9 @@ function neighbourOf(id) {
   return next ? next.id : null;
 }
 
-function renderTyreControls() {
-  const running = !!info && info.job.state === "running";
+// locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
+function syncTyres() {
+  const running = !!serverState && serverState.job.state === "running";
   // a job that ends may have installed a car, so the game tyres are read again
   if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);
   tyreJobRunning = running;
@@ -1602,7 +1576,7 @@ function renderTyres() {
     }
     box.value = key;
   }
-  renderTyreControls();
+  syncTyres();
 }
 
 function clearTyreRows() {
@@ -1770,7 +1744,7 @@ function openTyreDialog(kind) {
   $("tyre-dialog-ok").textContent = remove ? "Delete" : "OK";
   showTyreDialogError("");
   $("tyre-dialog").hidden = false;
-  renderTyreControls();
+  syncTyres();
   if (remove) {
     $("tyre-dialog-cancel").focus();
   } else {
@@ -1784,7 +1758,7 @@ function closeTyreDialog(restoreFocus) {
   const opener = tyreDialog.opener;
   tyreDialog = null;
   $("tyre-dialog").hidden = true;
-  renderTyreControls();
+  syncTyres();
   if (restoreFocus) {
     const back = [opener, $("tyre-select"), $("btn-tyre-new")].find((n) => n && document.contains(n) && !n.disabled);
     (back || $("tab-tyres")).focus();
@@ -1792,13 +1766,13 @@ function closeTyreDialog(restoreFocus) {
 }
 
 async function submitTyreDialog() {
-  if (!tyreDialog || tyreDialog.busy || (info && info.job.state === "running")) return;
+  if (!tyreDialog || tyreDialog.busy || (serverState && serverState.job.state === "running")) return;
   const mine = tyreDialog;
   const name = $("tyre-dialog-name").value.trim();
   const source = $("tyre-dialog-source").value;
   mine.busy = true;
   showTyreDialogError("");
-  renderTyreControls();
+  syncTyres();
   try {
     if (mine.kind === "new") {
       const res = await api("/api/tyre_new", { name: name, source: source }, selection);
@@ -1815,7 +1789,7 @@ async function submitTyreDialog() {
       showTyreDialogError(e.message);
       (mine.kind === "delete" ? $("tyre-dialog-cancel") : $("tyre-dialog-name")).focus();
     }
-    renderTyreControls();
+    syncTyres();
     return;
   }
   await loadTyres(mine.kind !== "rename");
@@ -1859,9 +1833,9 @@ function renderGarageLines() {
 // the checkboxes are off while a job runs and while the page has no base car; the reset button is off for the same reasons and while the car offers its stock tyres already
 function lockGarage() {
   let why = "";
-  if (!info) why = serverError || "server not reachable";
-  else if (info.job.state === "running") why = "a job is running";
-  else if (!info.base_present) why = "extract the stock car first";
+  if (!serverState) why = serverError || "server not reachable";
+  else if (serverState.job.state === "running") why = "a job is running";
+  else if (!serverState.base_present) why = "extract the stock car first";
   const locked = why !== "";
   for (const g of garageRows) g.input.disabled = locked;
   if (!locked && !(garage && garage.custom)) why = "the car offers its stock tyres already";
@@ -1895,8 +1869,9 @@ function renderGarage() {
   if (back && !back.input.disabled) back.input.focus();
 }
 
-function renderGarageControls() {
-  const running = !!info && info.job.state === "running";
+// locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
+function syncGarage() {
+  const running = !!serverState && serverState.job.state === "running";
   // a job that ends may have changed the library or the car, so the garage is read again
   if (garageJobRunning && !running && !$("panel-car").hidden) loadGarage();
   garageJobRunning = running;
@@ -2044,9 +2019,9 @@ function renderTurboLines() {
 // loaded, or no donor exists and no saved donor is left to take away)
 function lockTurbo() {
   let why = "";
-  if (!info) why = serverError || "server not reachable";
-  else if (info.job.state === "running") why = "a job is running";
-  else if (!info.base_present) why = "extract the stock car first";
+  if (!serverState) why = serverError || "server not reachable";
+  else if (serverState.job.state === "running") why = "a job is running";
+  else if (!serverState.base_present) why = "extract the stock car first";
   const nothing = !turbo || (turbo.donors.length === 0 && !turbo.donor);
   $("turbo-donor").disabled = why !== "" || nothing;
   $("turbo-donor").title = why;
@@ -2079,8 +2054,9 @@ function renderTurbo() {
   if (focused && !select.disabled) select.focus();
 }
 
-function renderTurboControls() {
-  const running = !!info && info.job.state === "running";
+// locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
+function syncTurbo() {
+  const running = !!serverState && serverState.job.state === "running";
   // a job that ends may have installed or changed a car, so the kit is read again
   if (turboJobRunning && !running && !$("panel-car").hidden) loadTurbo();
   turboJobRunning = running;
@@ -2181,7 +2157,7 @@ function soundShortName(key) {
 
 // at most two names of the cars that offer a sound, the rest as a count
 function soundCarNames(ids) {
-  const list = info && info.cars ? info.cars : [];
+  const list = serverState && serverState.cars ? serverState.cars : [];
   const names = ids.map((id) => {
     const c = list.find((x) => x.id === id);
     return c ? optionText(c) : id;
@@ -2222,9 +2198,9 @@ function renderSoundsLines() {
 // first two reasons and while the car has its own sounds already
 function lockSounds() {
   let why = "";
-  if (!info) why = serverError || "server not reachable";
-  else if (info.job.state === "running") why = "a job is running";
-  else if (!info.base_present) why = "extract the stock car first";
+  if (!serverState) why = serverError || "server not reachable";
+  else if (serverState.job.state === "running") why = "a job is running";
+  else if (!serverState.base_present) why = "extract the stock car first";
   const locked = why !== "";
   for (const slot of SOUND_SLOTS) {
     SOUND_SELECTS[slot].disabled = locked || !sounds;
@@ -2260,8 +2236,9 @@ function renderSounds() {
   if (focused && !SOUND_SELECTS[focused].disabled) SOUND_SELECTS[focused].focus();
 }
 
-function renderSoundsControls() {
-  const running = !!info && info.job.state === "running";
+// locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
+function syncSounds() {
+  const running = !!serverState && serverState.job.state === "running";
   // a job that ends may have installed a car or changed the car, so the sounds are read again
   if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();
   soundsJobRunning = running;
@@ -2454,7 +2431,7 @@ function renderLogSessions() {
       fmtBytes(s.size), new Date(s.modified * 1000).toLocaleString()];
     for (const text of cells) tr.appendChild(el("td", "", text));
     const copy = el("td");
-    const button = el("button", "reset", "Copy file");
+    const button = el("button", "small", "Copy file");
     button.type = "button";
     button.setAttribute("aria-label", "Copy file " + s.file);
     button.addEventListener("click", () => copySessionFile(s.file, button));
@@ -2666,24 +2643,24 @@ function buildLogGroup(g) {
     th.appendChild(desc);
   }
   tr.append(tick, th);
-  const rows = g.rows.map((r, i) => {
+  const trs = g.rows.map((r, i) => {
     const row = buildLogRow(r);
     row.id = "logrow-" + n + "-" + i;
     return row;
   });
-  btn.setAttribute("aria-controls", rows.map((row) => row.id).join(" "));
+  btn.setAttribute("aria-controls", trs.map((row) => row.id).join(" "));
   const show = () => {
     const open = logOpen.has(g.id);
     btn.setAttribute("aria-expanded", open ? "true" : "false");
     if (desc) desc.hidden = !open;
-    for (const row of rows) row.hidden = !open;
+    for (const row of trs) row.hidden = !open;
   };
   btn.addEventListener("click", () => {
     if (!logOpen.delete(g.id)) logOpen.add(g.id);
     show();
   });
   show();
-  return [tr, ...rows];
+  return [tr, ...trs];
 }
 
 function renderLogControls() {

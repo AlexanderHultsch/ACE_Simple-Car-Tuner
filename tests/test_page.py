@@ -154,7 +154,7 @@ class TestDomIds(unittest.TestCase):
 
     def test_the_script_looks_up_a_known_set_of_ids(self):
         self.assertTrue({"status", "progress", "init-panel", "tuner", "rows", "car-select", "btn-apply", "btn-duplicate", "btn-init",
-                         "btn-reset-all", "search", "changed-only", "name-host", "untested", "caption", "empty", "init-text",
+                         "btn-reset-all", "search", "changed-only", "name-host", "untested", "caption", "empty",
                          "dialog", "dialog-title", "dialog-id", "dialog-suffix", "dialog-hint", "dialog-error", "dialog-ok",
                          "dialog-cancel"}
                         <= referenced_ids(), sorted(referenced_ids()))
@@ -284,7 +284,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_the_state_fields_the_page_reads_are_sent_by_the_server(self):
         sent = quoted_words(ts.api_state, ts.installed_info, ts.modded_cars, ts.tune_proposals) | set(ts.JOB)
-        read = set(re.findall(r"\binfo\.(\w+)", CODE)) | set(re.findall(r"\binst\.(\w+)", CODE)) | set(re.findall(r"\bjob\.(\w+)", CODE))
+        read = set(re.findall(r"\bserverState\.(\w+)", CODE)) | set(re.findall(r"\binst\.(\w+)", CODE)) | set(re.findall(r"\bjob\.(\w+)", CODE))
         self.assertTrue({"base_present", "game_running", "job", "installed", "cars", "car", "work", "tune", "modded", "modded_error",
                          "proposed_new_id", "proposed_suffix", "stock_id_length"} <= read, sorted(read))
         self.assertEqual(sorted(read - sent), [])
@@ -306,7 +306,7 @@ class TestApiContract(unittest.TestCase):
         self.assertIn("setTimeout(refresh, document.hidden ? POLL_HIDDEN_MS : (busy ? POLL_BUSY_MS : POLL_IDLE_MS))", CODE)
 
     def test_the_page_polls_faster_while_a_job_runs(self):
-        self.assertIn('const busy = info && info.job.state === "running";', CODE)
+        self.assertIn('const busy = serverState && serverState.job.state === "running";', CODE)
 
 
 class TestCssClasses(unittest.TestCase):
@@ -322,7 +322,7 @@ class TestCssClasses(unittest.TestCase):
                 self.assertIn('"%s"' % cls, CODE)
 
     def test_the_class_collectors_see_the_main_classes(self):
-        self.assertTrue({"panel", "strip", "namerow", "mono", "badge", "amber", "reset", "changed", "valuewrap", "page", "sr-only"}
+        self.assertTrue({"panel", "strip", "namerow", "mono", "badge", "accent", "small", "changed", "valuewrap", "page", "sr-only"}
                         <= used_classes(), sorted(used_classes()))
 
     def test_every_css_custom_property_that_is_defined_is_used(self):
@@ -411,7 +411,7 @@ class TestTexts(unittest.TestCase):
             with self.subTest(label):
                 self.assertIn(">%s</button>" % label, MARKUP)
         self.assertIn("changed only", MARKUP)
-        self.assertIn('el("button", "reset", "reset")', CODE)
+        self.assertIn('el("button", "small", "reset")', CODE)
         for label in ("Install car (pull game files)", "Tyre Creator", "Garage tyres", "Expand all", "changed only",
                       "show advanced settings", "reset", "Reset all", "Create modded car", "Duplicate"):
             self.assertIn(label, USER_GUIDE)
@@ -428,7 +428,7 @@ class TestTexts(unittest.TestCase):
 
     def test_the_dialog_tells_the_id_rules_of_the_server(self):
         body = function_body("openDialog")
-        self.assertIn('"The id has exactly " + info.stock_id_length +', body)
+        self.assertIn('"The id has exactly " + serverState.stock_id_length +', body)
         self.assertIn('" characters: lower case letters, digits, underscore"', body)
 
 
@@ -671,9 +671,9 @@ class TestGroupList(unittest.TestCase):
     def test_the_group_list_is_read_once_with_the_selection_and_without_a_body(self):
         body = function_body("loadGroupInfo")
         self.assertIn('const res = await api("/api/groups", undefined, target);', body)
-        self.assertIn("groupInfo = res.groups;", body)
-        self.assertIn("if (groupInfo) return;", body)
-        self.assertRegex(CODE, r"(?m)^let groupInfo = null;")
+        self.assertIn("catalogueGroups = res.groups;", body)
+        self.assertIn("if (catalogueGroups) return;", body)
+        self.assertRegex(CODE, r"(?m)^let catalogueGroups = null;")
         self.assertEqual(len(re.findall(r'"/api/groups"', CODE)), 1)
 
     def test_it_is_read_before_the_table_is_built_and_read_again_only_after_a_failed_read(self):
@@ -682,10 +682,10 @@ class TestGroupList(unittest.TestCase):
         self.assertLess(body.index("await loadGroupInfo(target);"), body.index('api("/api/settings"'))
         self.assertLess(body.index("await loadGroupInfo(target);"), body.index("buildTable(list, target);"))
         self.assertEqual(CODE.count("loadGroupInfo("), 2)
-        self.assertEqual(len(re.findall(r"groupInfo = ", CODE)), 3)
-        self.assertIn("groupInfo = null;", function_body("loadGroupInfo")[function_body("loadGroupInfo").index("catch"):])
-        self.assertNotIn("groupInfo", function_body("switchCar"))
-        self.assertNotIn("groupInfo", function_body("clearTable"))
+        self.assertEqual(len(re.findall(r"catalogueGroups = ", CODE)), 3)
+        self.assertIn("catalogueGroups = null;", function_body("loadGroupInfo")[function_body("loadGroupInfo").index("catch"):])
+        self.assertNotIn("catalogueGroups", function_body("switchCar"))
+        self.assertNotIn("catalogueGroups", function_body("clearTable"))
 
     def test_a_failed_read_is_no_error_of_the_table(self):
         body = function_body("loadGroupInfo")
@@ -698,7 +698,7 @@ class TestGroupList(unittest.TestCase):
 
     def test_the_groups_follow_the_list_of_the_server_and_unknown_groups_come_last_in_the_order_they_appeared(self):
         body = function_body("buildTable")
-        self.assertIn("const listed = (groupInfo || []).map((x) => x.name);", body)
+        self.assertIn("const listed = (catalogueGroups || []).map((x) => x.name);", body)
         self.assertIn("const rank = (g) => (listed.includes(g.name) ? listed.indexOf(g.name) : listed.length);", body)
         self.assertIn("groups.sort((a, b) => rank(a) - rank(b));", body)
 
@@ -716,7 +716,7 @@ class TestGroupList(unittest.TestCase):
 
     def test_the_description_is_a_text_element_in_the_header_cell_below_the_toggle(self):
         body = function_body("buildGroup")
-        self.assertIn("const known = (groupInfo || []).find((x) => x.name === name);", body)
+        self.assertIn("const known = (catalogueGroups || []).find((x) => x.name === name);", body)
         self.assertIn("if (known && known.description) {", body)
         self.assertIn('g.desc = el("div", "gdesc", known.description);', body)
         self.assertIn('g.desc.id = "gdesc-" + groups.length;', body)
@@ -831,7 +831,7 @@ class TestJobRunning(unittest.TestCase):
     # page part: no edits while a job runs, the server answers them with 409 anyway
     def test_the_value_fields_and_reset_buttons_are_disabled_while_a_job_runs(self):
         body = function_body("renderButtons")
-        self.assertIn('const running = !!info && info.job.state === "running";', body)
+        self.assertIn('const running = !!serverState && serverState.job.state === "running";', body)
         self.assertIn("r.field.disabled = running;", body)
         self.assertIn("r.reset.disabled = running;", body)
         self.assertIn('$("btn-reset-all").disabled = running;', body)
@@ -863,6 +863,12 @@ class TestFullWidth(unittest.TestCase):
             with self.subTest(rule):
                 self.assertNotIn("max-width", rule)
                 self.assertNotRegex(rule, r"(?<![\w-])width:")
+
+    def test_on_a_phone_the_value_fields_shrink_to_their_cell_and_a_checkbox_keeps_its_size(self):
+        phone = re.search(r"@media \(max-width: 1000px\) \{(.*?)\n\}", STYLE, re.S).group(1)
+        self.assertIn("\n  .valuewrap input, .valuewrap select { max-width: 100%; min-width: 0; }", phone)
+        self.assertIn('\n  .valuewrap input[type="checkbox"] { max-width: none; }', phone)
+        self.assertNotRegex(STYLE.replace(phone, ""), r"\.valuewrap[^{}]*\{[^}]*min-width")
 
     def test_the_readable_width_of_the_descriptions_stays(self):
         self.assertRegex(re.search(r"\n\.gdesc \{([^}]*)\}", STYLE).group(1), r"max-width: 80ch;")
@@ -904,7 +910,7 @@ class TestInstallCars(unittest.TestCase):
         self.assertIn("<h2>Car not installed yet</h2>", panel)
         self.assertIn("The tuner needs the car's files from the game as its starting point. Installing pulls them once (about 20 seconds).", panel)
         self.assertIn('<button id="btn-init" class="primary" type="button">Install car (pull game files)</button>', panel)
-        self.assertIn("Installing pulls them once (about 20 seconds).", function_body("renderCars"))
+        self.assertEqual(HTML.count("Installing pulls them once"), 1)
         for old in ("Extract stock car", "not extracted yet", "stock car from the game files"):
             with self.subTest(old):
                 self.assertNotIn(old, HTML)
@@ -924,7 +930,7 @@ class TestInstallCars(unittest.TestCase):
 
     def test_the_table_is_not_loaded_while_the_install_job_runs(self):
         body = function_body("refresh")
-        self.assertIn('const extracting = !!info && info.job.kind === "init" && info.job.state === "running";', body)
+        self.assertIn('const extracting = !!serverState && serverState.job.kind === "init" && serverState.job.state === "running";', body)
         self.assertIn("!tableLoaded && !extracting", body)
 
     def test_every_job_kind_the_progress_panel_knows_is_started_by_the_server(self):
@@ -936,7 +942,7 @@ class TestInstallCars(unittest.TestCase):
 class TestProgressDetails(unittest.TestCase):
     def test_the_changes_since_the_last_build_are_an_open_details_with_the_count_in_the_summary(self):
         body = function_body("summaryApply")
-        fresh = body[:body.index("} else if (res.applied.length) {")]
+        fresh = body[:body.index('addLine(box, "Package: "')]
         self.assertIn("if (res.changes) {", fresh)
         self.assertIn("const count = ch.settings.length + ch.extras.length;", fresh)
         self.assertIn('const details = el("details");', fresh)
@@ -948,7 +954,7 @@ class TestProgressDetails(unittest.TestCase):
 
     def test_the_changes_list_has_one_item_per_setting_then_one_per_extra(self):
         fresh = function_body("summaryApply")
-        fresh = fresh[:fresh.index("} else if (res.applied.length) {")]
+        fresh = fresh[:fresh.index('addLine(box, "Package: "')]
         setting = 'ul.appendChild(el("li", "", c.id + ": " + fmtVal("", c.from) + " -> " + fmtVal("", c.to)));'
         extra = 'for (const e of ch.extras) ul.appendChild(el("li", "", e.text));'
         self.assertIn("for (const c of ch.settings) {", fresh)
@@ -960,7 +966,7 @@ class TestProgressDetails(unittest.TestCase):
 
     def test_the_heading_line_tells_the_first_build_the_changes_or_no_change(self):
         fresh = function_body("summaryApply")
-        fresh = fresh[:fresh.index("} else if (res.applied.length) {")]
+        fresh = fresh[:fresh.index('addLine(box, "Package: "')]
         self.assertIn("if (ch.since === null) {", fresh)
         self.assertIn('addLine(box, "First build of this car: " + ch.total + (ch.total === 1 ? " changed setting" : " changed settings") +', fresh)
         self.assertIn('" compared to the stock car.");', fresh)
@@ -970,15 +976,6 @@ class TestProgressDetails(unittest.TestCase):
         self.assertLess(fresh.index("since the last build."), fresh.index("No change since the last build."))
         self.assertNotIn("No setting was changed", HTML)
         self.assertNotIn("the stock values were built", HTML)
-
-    def test_a_result_without_changes_falls_back_to_the_applied_settings_list(self):
-        body = function_body("summaryApply")
-        fallback = body[body.index("} else if (res.applied.length) {"):body.index('addLine(box, "Package: "')]
-        self.assertIn('el("summary", "", "Settings applied (" + res.applied.length + ")")', fallback)
-        self.assertIn("for (const a of res.applied) {", fallback)
-        self.assertIn('a.id + ": " + fmtVal("", a.old) + " -> " + fmtVal("", a.new)', fallback)
-        self.assertNotRegex(fallback, r"\bopen\b")
-        self.assertNotIn("Settings applied:", HTML)
 
     def test_the_closing_lines_stay_outside_the_changes_details(self):
         body = function_body("summaryApply")
@@ -1059,7 +1056,7 @@ class TestModdedCars(unittest.TestCase):
         self.assertNotIn("selectedIndex", body)
         self.assertNotIn("firstChild", body)
         self.assertNotIn("options[0]", body)
-        self.assertIn("selection = { car: info.car, tune: info.tune };", function_body("refresh"))
+        self.assertIn("selection = { car: serverState.car, tune: serverState.tune };", function_body("refresh"))
 
     def test_the_installed_group_holds_the_extracted_cars_and_the_other_group_the_rest(self):
         body = function_body("renderCars")
@@ -1097,13 +1094,13 @@ class TestModdedCars(unittest.TestCase):
         body = function_body("renderCars")
         self.assertIn("moddedList().map(", body)
         self.assertIn("if (!options.length) continue;", body)
-        self.assertIn("info && info.modded ? info.modded : []", function_body("moddedList"))
+        self.assertIn("serverState && serverState.modded ? serverState.modded : []", function_body("moddedList"))
 
     def test_the_selection_survives_a_poll_and_is_part_of_the_selector_signature(self):
         body = function_body("renderCars")
-        self.assertIn("JSON.stringify([groupsOf, selection])", body)
+        self.assertIn("JSON.stringify([optionGroups, selection])", body)
         self.assertIn("select.value = choiceValue(selection);", body)
-        self.assertIn("selection = { car: info.car, tune: info.tune };", function_body("refresh"))
+        self.assertIn("selection = { car: serverState.car, tune: serverState.tune };", function_body("refresh"))
 
     def test_the_selection_is_one_object_with_car_and_tune(self):
         self.assertRegex(CODE, r"(?m)^let selection = storedSelection\(\);")
@@ -1116,7 +1113,7 @@ class TestModdedCars(unittest.TestCase):
 
     def test_a_damaged_modded_state_is_shown_in_the_message_area(self):
         body = function_body("renderProgress")
-        self.assertIn("info.modded_error", body)
+        self.assertIn("serverState.modded_error", body)
         self.assertIn("errors.push(", body)
         self.assertIn("for (const text of errors) addLine(box, text);", body)
         self.assertIn("JSON.stringify([job, errors])", body)
@@ -1134,7 +1131,7 @@ class TestModdedCars(unittest.TestCase):
         self.assertIn('draft ? "Create modded car\\u2026" : "Apply (update this car)"', body)
         self.assertIn('$("btn-duplicate").disabled = whyDuplicate !== "";', body)
         self.assertIn('whyDuplicate = "select a modded car to duplicate it"', body)
-        self.assertIn('whyDuplicate = info.base_present ? "" : "extract the stock car first"', body)
+        self.assertIn('whyDuplicate = serverState.base_present ? "" : "extract the stock car first"', body)
 
     def test_the_old_copy_flow_is_gone(self):
         for old in ("btn-copy", "askNewCopy", "Save as new copy", "new_copy", "window.prompt", "Apply (update my car)"):
@@ -1157,8 +1154,8 @@ class TestModdedCars(unittest.TestCase):
 
     def test_the_dialog_is_prefilled_from_the_proposals_of_the_server(self):
         body = function_body("openDialog")
-        self.assertIn('$("dialog-id").value = info.proposed_new_id || "";', body)
-        self.assertIn('create ? info.proposed_suffix || "" : ""', body)
+        self.assertIn('$("dialog-id").value = serverState.proposed_new_id || "";', body)
+        self.assertIn('create ? serverState.proposed_suffix || "" : ""', body)
         self.assertIn('create ? "" : "automatic"', body)
 
     def test_enter_confirms_and_escape_cancels_the_dialog(self):
@@ -1372,7 +1369,7 @@ class TestTyreCreator(unittest.TestCase):
     def test_the_editor_is_hidden_until_a_tyre_is_selected_and_has_the_source_the_reset_button_and_its_own_table(self):
         self.assertRegex(self.tag("tyre-editor"), r"\bhidden>$")
         editor = re.search(r'<section id="tyre-editor".*?</section>', self.PANEL, re.S).group(0)
-        self.assertRegex(editor, r'<label class="carpick">Source:\s*<select id="tyre-source" aria-label="Source tyre"></select>')
+        self.assertRegex(editor, r'<label class="selectrow">Source:\s*<select id="tyre-source" aria-label="Source tyre"></select>')
         self.assertIn('<button id="btn-tyre-reset" type="button">Reset all values</button>', editor)
         self.assertIn('<tbody id="tyre-rows"></tbody>', editor)
         self.assertIn('<caption class="sr-only">Settings of the selected tyre</caption>', editor)
@@ -1428,9 +1425,9 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("await loadTyres(true);", function_body("changeTyreSource"))
         self.assertIn("await loadTyres(true);", function_body("resetTyre"))
         self.assertIn("await loadTyres(mine.kind !== \"rename\");", function_body("submitTyreDialog"))
-        body = function_body("renderTyreControls")
+        body = function_body("syncTyres")
         self.assertIn('if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);', body)
-        self.assertIn("renderTyreControls();", function_body("renderButtons"))
+        self.assertIn("syncTyres();", function_body("renderButtons"))
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Tt]yre", CODE), [])
         self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
 
@@ -1452,8 +1449,8 @@ class TestTyreCreator(unittest.TestCase):
         self.assertRegex(MARKUP, r'<div id="tyre-notes"></div>')
 
     def test_new_is_off_without_a_source_or_while_a_job_runs_and_rename_and_delete_without_a_tyre_or_while_a_job_runs(self):
-        body = function_body("renderTyreControls")
-        self.assertIn('const running = !!info && info.job.state === "running";', body)
+        body = function_body("syncTyres")
+        self.assertIn('const running = !!serverState && serverState.job.state === "running";', body)
         self.assertIn('if (running) whyNew = "a job is running";', body)
         self.assertIn('else if (tyreSources.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";', body)
         self.assertIn('if (running) whyEdit = "a job is running";', body)
@@ -1539,7 +1536,7 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("tyreId = neighbourOf(mine.id);", body)
         self.assertIn("if (tyreDialog === mine) closeTyreDialog(true);", body)
         self.assertIn('$("tyre-dialog-error").textContent = text;', function_body("showTyreDialogError"))
-        self.assertIn('if (!tyreDialog || tyreDialog.busy || (info && info.job.state === "running")) return;', body)
+        self.assertIn('if (!tyreDialog || tyreDialog.busy || (serverState && serverState.job.state === "running")) return;', body)
 
     def test_enter_confirms_and_escape_cancels_and_the_focus_goes_into_the_dialog_and_back(self):
         key = function_body("tyreDialogKey")
@@ -1683,10 +1680,10 @@ class TestGarage(unittest.TestCase):
         self.assertIn("loadGarage();", function_body("loadSettings"))
         self.assertLess(function_body("loadSettings").index("tableLoaded = true;"), function_body("loadSettings").index("loadGarage();"))
         self.assertIn('if (tabs[i] === $("tab-car")) loadGarage();', function_body("selectTab"))
-        body = function_body("renderGarageControls")
+        body = function_body("syncGarage")
         self.assertIn('if (garageJobRunning && !running && !$("panel-car").hidden) loadGarage();', body)
         self.assertIn("garageJobRunning = running;", body)
-        self.assertIn("renderGarageControls();", function_body("renderButtons"))
+        self.assertIn("syncGarage();", function_body("renderButtons"))
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
@@ -1751,12 +1748,12 @@ class TestGarage(unittest.TestCase):
 
     def test_the_checkboxes_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car(self):
         body = function_body("lockGarage")
-        self.assertIn('if (!info) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (info.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!info.base_present) why = "extract the stock car first";', body)
+        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
+        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
+        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
         self.assertIn("for (const g of garageRows) g.input.disabled = locked;", body)
         self.assertIn("lockGarage();", function_body("renderGarage"))
-        self.assertIn("lockGarage();", function_body("renderGarageControls"))
+        self.assertIn("lockGarage();", function_body("syncGarage"))
 
     def test_the_focus_goes_back_to_the_toggled_checkbox_by_its_key_after_the_redraw(self):
         body = function_body("renderGarage")
@@ -1795,7 +1792,7 @@ class TestTurboKit(unittest.TestCase):
     CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
     PANEL = re.search(r'<div id="turbo" class="panel garage" hidden>.*?\n      </div>\n', MARKUP, re.S).group(0)
     FUNCTIONS = ("boostText", "turboBoostText", "turboOptionText", "turboSummary", "turboPickedText", "renderTurboToggle", "renderTurboLines", "lockTurbo",
-                 "renderTurbo", "renderTurboControls", "loadTurbo", "showTurbo", "turboFailed", "sendTurboSet", "sendTurboReset",
+                 "renderTurbo", "syncTurbo", "loadTurbo", "showTurbo", "turboFailed", "sendTurboSet", "sendTurboReset",
                  "turboChanged", "toggleTurbo")
 
     @staticmethod
@@ -1935,10 +1932,10 @@ class TestTurboKit(unittest.TestCase):
         self.assertIn("loadTurbo();", body)
         self.assertLess(body.index("tableLoaded = true;"), body.index("loadTurbo();"))
         self.assertIn('if (tabs[i] === $("tab-car")) loadTurbo();', function_body("selectTab"))
-        controls = function_body("renderTurboControls")
+        controls = function_body("syncTurbo")
         self.assertIn('if (turboJobRunning && !running && !$("panel-car").hidden) loadTurbo();', controls)
         self.assertIn("turboJobRunning = running;", controls)
-        self.assertIn("renderTurboControls();", function_body("renderButtons"))
+        self.assertIn("syncTurbo();", function_body("renderButtons"))
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
@@ -1984,14 +1981,14 @@ class TestTurboKit(unittest.TestCase):
 
     def test_the_select_is_off_while_a_job_runs_without_a_base_car_and_with_nothing_to_choose_from(self):
         body = function_body("lockTurbo")
-        self.assertIn('if (!info) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (info.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!info.base_present) why = "extract the stock car first";', body)
+        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
+        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
+        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
         self.assertIn("const nothing = !turbo || (turbo.donors.length === 0 && !turbo.donor);", body)
         self.assertIn('$("turbo-donor").disabled = why !== "" || nothing;', body)
         self.assertIn('$("turbo-donor").title = why;', body)
         self.assertIn("lockTurbo();", function_body("renderTurbo"))
-        self.assertIn("lockTurbo();", function_body("renderTurboControls"))
+        self.assertIn("lockTurbo();", function_body("syncTurbo"))
 
     def test_the_focus_stays_on_the_select_after_the_redraw(self):
         body = function_body("renderTurbo")
@@ -2019,9 +2016,10 @@ class TestTurboKit(unittest.TestCase):
         for cls in ("garage", "garage-body", "garage-help", "garage-row", "grouptoggle", "gname", "gcount", "chev"):
             self.assertIn(cls, css_classes())
         self.assertIn("garage-help", self.PANEL)
-        rule = re.search(r"\n\.garage select \{([^}]*)\}", STYLE).group(1)
-        for part in ("max-width: 100%;", "border: 1px solid var(--color-border);", "background: var(--color-bg);", "color: var(--color-text);"):
+        rule = re.search(r'\ninput:not\(\[type="checkbox"\]\), select, \.valuewrap input \{([^}]*)\}', STYLE).group(1)
+        for part in ("border: 1px solid var(--color-border);", "background: var(--color-bg);", "color: var(--color-text);"):
             self.assertIn(part, rule)
+        self.assertRegex(STYLE, r"\n\.dialog \.field select, \.garage select \{[^}]*max-width: 100%;")
 
     def test_the_help_text_reads_on_the_panel_background(self):
         tokens = dict(re.findall(r"--([\w-]+): (#[0-9a-fA-F]{6});", STYLE))
@@ -2042,7 +2040,7 @@ class TestSounds(unittest.TestCase):
     CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
     PANEL = re.search(r'<div id="sounds" class="panel garage">.*?\n      </div>\n', MARKUP, re.S).group(0)
     FUNCTIONS = ("soundShortName", "soundCarNames", "soundOptionText", "soundsChosen", "soundsSummary", "renderSoundsToggle",
-                 "renderSoundsLines", "lockSounds", "renderSounds", "renderSoundsControls", "loadSounds", "showSounds", "soundsFailed",
+                 "renderSoundsLines", "lockSounds", "renderSounds", "syncSounds", "loadSounds", "showSounds", "soundsFailed",
                  "sendSoundSet", "sendSoundReset", "soundChanged", "resetSounds", "toggleSounds")
 
     @staticmethod
@@ -2133,7 +2131,7 @@ class TestSounds(unittest.TestCase):
     def test_an_option_is_the_short_name_and_the_names_of_at_most_two_cars_and_a_count(self):
         self.assertIn('soundShortName(option.key) + " - " + soundCarNames(option.cars)', function_body("soundOptionText"))
         body = function_body("soundCarNames")
-        self.assertIn("info && info.cars ? info.cars : []", body)
+        self.assertIn("serverState && serverState.cars ? serverState.cars : []", body)
         self.assertIn("list.find((x) => x.id === id)", body)
         self.assertIn("c ? optionText(c) : id", body)
         self.assertIn('names.slice(0, 2).join(", ") + (names.length > 2 ? " +" + (names.length - 2) + " more" : "")', body)
@@ -2176,10 +2174,10 @@ class TestSounds(unittest.TestCase):
         self.assertLess(settings.index("tableLoaded = true;"), settings.index("loadSounds();"))
         self.assertRegex(settings, r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
         self.assertIn('if (tabs[i] === $("tab-car")) loadSounds();', function_body("selectTab"))
-        controls = function_body("renderSoundsControls")
+        controls = function_body("syncSounds")
         self.assertIn('if (soundsJobRunning && !running && !$("panel-car").hidden) loadSounds();', controls)
         self.assertIn("soundsJobRunning = running;", controls)
-        self.assertIn("renderSoundsControls();", function_body("renderButtons"))
+        self.assertIn("syncSounds();", function_body("renderButtons"))
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
         # Reset all reads the settings again, and that reads the garage, the kit and the sounds again
@@ -2235,13 +2233,13 @@ class TestSounds(unittest.TestCase):
 
     def test_the_selects_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car_or_an_answer(self):
         body = function_body("lockSounds")
-        self.assertIn('if (!info) why = serverError || "server not reachable";', body)
-        self.assertIn('else if (info.job.state === "running") why = "a job is running";', body)
-        self.assertIn('else if (!info.base_present) why = "extract the stock car first";', body)
+        self.assertIn('if (!serverState) why = serverError || "server not reachable";', body)
+        self.assertIn('else if (serverState.job.state === "running") why = "a job is running";', body)
+        self.assertIn('else if (!serverState.base_present) why = "extract the stock car first";', body)
         self.assertIn("SOUND_SELECTS[slot].disabled = locked || !sounds;", body)
         self.assertIn("SOUND_SELECTS[slot].title = why;", body)
         self.assertIn("lockSounds();", function_body("renderSounds"))
-        self.assertIn("lockSounds();", function_body("renderSoundsControls"))
+        self.assertIn("lockSounds();", function_body("syncSounds"))
 
     def test_the_focus_goes_back_to_the_changed_select_after_the_redraw(self):
         body = function_body("renderSounds")
@@ -2305,8 +2303,7 @@ class TestSounds(unittest.TestCase):
         self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
                          {"panel garage", "grouptoggle", "chev", "gname", "gcount", "garage-body", "garage-help", "garage-row", "actions",
                           "msg err", "msg warn"})
-        rule = re.search(r"\n\.garage select \{([^}]*)\}", STYLE).group(1)
-        self.assertIn("max-width: 100%;", rule)
+        self.assertRegex(STYLE, r"\n\.dialog \.field select, \.garage select \{[^}]*max-width: 100%;")
 
     def test_the_text_of_the_panel_enters_the_page_as_text_and_the_markup_and_code_are_ascii(self):
         for name in self.FUNCTIONS + ("turboSoundText", "showTurboSound"):
@@ -2454,7 +2451,7 @@ class TestLogging(unittest.TestCase):
 
     def test_the_toolbar_has_the_rate_select_and_the_two_buttons_for_all_rows(self):
         bar = re.search(r'<div class="toolbar">.*?</div>', self.PANEL, re.S).group(0)
-        self.assertRegex(bar, r'<label class="carpick">Sample rate\s*<select id="log-rate" aria-label="Sample rate" disabled></select>')
+        self.assertRegex(bar, r'<label class="selectrow">Sample rate\s*<select id="log-rate" aria-label="Sample rate" disabled></select>')
         self.assertIn('<button id="btn-log-all" type="button" disabled>Tick all</button>', bar)
         self.assertIn('<button id="btn-log-none" type="button" disabled>Clear all</button>', bar)
         self.assertIn('$("btn-log-all").addEventListener("click", () => setAllLog(true));', CODE)
@@ -2534,7 +2531,7 @@ class TestLogging(unittest.TestCase):
         self.assertIn('btn.append(chev, el("span", "gname", g.name), el("span", "gcount", "(" + ticked + " of " + g.tickable + " ticked)"));', body)
         self.assertIn("th.appendChild(btn);", body)
         self.assertIn("tr.append(tick, th);", body)
-        self.assertIn("return [tr, ...rows];", body)
+        self.assertIn("return [tr, ...trs];", body)
         self.assertNotIn("details", body)
         self.assertNotIn("summary", body)
         self.assertNotIn("<details", MARKUP)
@@ -2565,15 +2562,15 @@ class TestLogging(unittest.TestCase):
         self.assertRegex(CODE, r"(?m)^const logOpen = new Set\(\);")
         self.assertNotRegex(CODE, r"logOpen = new Set\([^)]")
         self.assertIn("const open = logOpen.has(g.id);", body)
-        self.assertIn("for (const row of rows) row.hidden = !open;", body)
+        self.assertIn("for (const row of trs) row.hidden = !open;", body)
         self.assertNotIn("remove(", body)
         self.assertNotIn("open = true", body)
-        self.assertRegex(body, r"\n  show\(\);\n  return \[tr, \.\.\.rows\];")
+        self.assertRegex(body, r"\n  show\(\);\n  return \[tr, \.\.\.trs\];")
 
     def test_the_toggle_names_its_rows_and_says_whether_they_are_shown(self):
         body = function_body("buildLogGroup")
         self.assertIn('row.id = "logrow-" + n + "-" + i;', body)
-        self.assertIn('btn.setAttribute("aria-controls", rows.map((row) => row.id).join(" "));', body)
+        self.assertIn('btn.setAttribute("aria-controls", trs.map((row) => row.id).join(" "));', body)
         self.assertIn('btn.setAttribute("aria-expanded", open ? "true" : "false");', body)
         self.assertIn("const n = logData.groups.indexOf(g);", body)
         self.assertNotRegex(body, r"id = \"[^\"]*\" \+ g\.id")
@@ -2700,11 +2697,12 @@ class TestLogging(unittest.TestCase):
         self.assertRegex(STYLE, r"\ntable \{[^}]*table-layout: fixed;")
         self.assertRegex(STYLE, r"\ntd \{[^}]*overflow-wrap: anywhere;")
         self.assertNotIn("logtable", STYLE)
-        self.assertNotRegex(STYLE, r"table[^{}]*\{[^}]*min-width")
+        self.assertNotRegex(STYLE, r"(?<!\.sessions )table[^{}]*\{[^}]*min-width")
 
     def test_the_unit_cells_and_header_of_the_log_table_never_break_inside_a_word_and_the_car_table_is_not_touched(self):
         self.assertIn("\n#log-groups thead th:nth-child(3), #log-groups td.unit { white-space: nowrap; }", STYLE)
-        self.assertEqual(STYLE.count("white-space: nowrap"), 2)
+        self.assertIn("\n.sessions td { overflow-wrap: normal; white-space: nowrap; }", STYLE)
+        self.assertEqual(STYLE.count("white-space: nowrap"), 3)
         self.assertEqual(re.findall(r'"Unit"', function_body("buildLogTable")), ['"Unit"'])
         self.assertIn('["Tick", "Setting", "Unit", "Once", "Live"]', function_body("buildLogTable"))
         self.assertIn('el("td", "unit", r.unit || "")', function_body("buildLogRow"))
@@ -2757,10 +2755,11 @@ class TestLogging(unittest.TestCase):
         self.assertLess(STYLE.index("col.c-unit { width: 9%; }"), STYLE.index("@media (max-width: 600px)"))
         self.assertLess(STYLE.index("#panel-logging col.c-name { width: 32%; }"), STYLE.index("@media (max-width: 600px)"))
 
-    def test_the_header_of_the_log_table_is_the_sticky_one_of_the_car_table_and_no_wrapper_scrolls(self):
+    def test_the_header_of_the_log_table_is_the_sticky_one_of_the_car_table_and_only_the_sessions_wrapper_scrolls(self):
         self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
         self.assertEqual(STYLE.count("position: sticky"), 1)
-        self.assertNotIn("overflow-x", STYLE)
+        self.assertEqual(STYLE.count("overflow-x"), 1)
+        self.assertIn("\n.sessions { overflow-x: auto; }", STYLE)
         self.assertNotRegex(STYLE, r"\.tablewrap[^{}]*\{[^}]*overflow(?!-wrap)")
         self.assertNotIn(".scroll", STYLE)
         self.assertNotIn("scroll", function_body("buildLogTable"))
@@ -2770,7 +2769,7 @@ class TestLogging(unittest.TestCase):
             with self.subTest(name):
                 self.assertNotRegex(function_body(name), r"\.sort\(|\.reverse\(|localeCompare")
         self.assertIn("for (const g of logData.groups) body.append(...buildLogGroup(g));", function_body("buildLogTable"))
-        self.assertIn("const rows = g.rows.map((r, i) => {", function_body("buildLogGroup"))
+        self.assertIn("const trs = g.rows.map((r, i) => {", function_body("buildLogGroup"))
         self.assertEqual(ts.logconf.tree.__doc__.count("tickable rows come first"), 1)
 
     def test_the_start_and_stop_buttons_sit_in_the_first_panel_after_the_status_line_and_start_disabled(self):
@@ -2913,14 +2912,14 @@ class TestLogging(unittest.TestCase):
         "".join(function_body(n) for n in self.FUNCTIONS).encode("ascii")
 
     def test_the_panel_reuses_the_styles_of_the_car_table_and_adds_the_ones_for_greyed_rows_the_box_cell_and_the_log_columns(self):
-        for cls in ("panel", "toolbar", "carpick", "msg", "err", "empty", "tablewrap", "sr-only", "garage-help", "gname",
+        for cls in ("panel", "toolbar", "selectrow", "msg", "err", "empty", "tablewrap", "sr-only", "garage-help", "gname",
                     "gcount", "gdesc", "grouptoggle", "chev", "group", "unit", "badge", "name", "id", "mono", "actions", "off",
                     "c-tick", "c-name", "c-unit", "c-once"):
             with self.subTest(cls):
                 self.assertIn(cls, css_classes())
                 self.assertIn(cls, used_classes() | DYNAMIC_CLASSES)
         self.assertEqual(set(re.findall(r'class="([^"]+)"', self.PANEL)),
-                         {"panel", "actions", "toolbar", "carpick", "msg err", "garage-help", "tablewrap", "sr-only", "empty"})
+                         {"panel", "actions", "toolbar", "selectrow", "msg err", "garage-help", "tablewrap sessions", "sr-only", "empty"})
         for cls in ("scroll", "logtable"):
             with self.subTest(cls):
                 self.assertNotIn(cls, css_classes())
@@ -3032,14 +3031,14 @@ class TestLoggingCopy(unittest.TestCase):
 
     def test_every_session_row_has_a_small_copy_file_button_in_the_last_cell(self):
         body = function_body("renderLogSessions")
-        self.assertIn('const button = el("button", "reset", "Copy file");', body)
+        self.assertIn('const button = el("button", "small", "Copy file");', body)
         self.assertIn('button.type = "button";', body)
         self.assertIn('button.setAttribute("aria-label", "Copy file " + s.file);', body)
         self.assertIn('button.addEventListener("click", () => copySessionFile(s.file, button));', body)
-        self.assertLess(body.index("for (const text of cells)"), body.index('el("button", "reset", "Copy file")'))
+        self.assertLess(body.index("for (const text of cells)"), body.index('el("button", "small", "Copy file")'))
         self.assertLess(body.index("copy.appendChild(button);"), body.index("tr.appendChild(copy);"))
         self.assertLess(body.index("tr.appendChild(copy);"), body.index("body.appendChild(tr);"))
-        self.assertRegex(STYLE, r"button\.reset \{[^}]*font-size: 12px;")
+        self.assertRegex(STYLE, r"button\.small \{[^}]*font-size: 12px;")
 
     def test_the_text_copy_uses_the_clipboard_api_on_a_secure_page_and_a_hidden_text_box_with_the_copy_command_otherwise(self):
         body = function_body("copyText")

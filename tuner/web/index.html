@@ -2525,7 +2525,7 @@ async function copyFileOnPc(name) {
     try {
       return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;
     } catch (e2) {
-      throw new Error(e2.message + " The file itself could not be copied either: " + e.message);
+      throw new Error(e2.message + ". The file itself could not be copied either: " + e.message);
     }
   }
   return name + " copied: paste it into the chat with Ctrl+V";

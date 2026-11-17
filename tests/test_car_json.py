@@ -11,7 +11,7 @@ import subprocess
 import sys
 import unittest
 
-from support import (TOOLS, desc_enum, desc_field, desc_file, desc_message, desc_set, pb_bytes, pb_int, pb_key, pb_msg,
+from support import (TOOLS, desc_enum, desc_field, desc_file, desc_message, desc_set, pb_bytes, pb_key, pb_msg,
                      pb_str, pb_varint, pb_vint, run_tool, tmp)
 
 import car_json as cj

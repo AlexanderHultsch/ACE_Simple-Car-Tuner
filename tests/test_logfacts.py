@@ -9,7 +9,6 @@ import json
 import os
 import re
 import sys
-import types
 import unittest
 from unittest import mock
 

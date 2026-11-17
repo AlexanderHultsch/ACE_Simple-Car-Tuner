@@ -160,8 +160,7 @@ class TestDomIds(unittest.TestCase):
                          "dialog-cancel"}
                         <= referenced_ids(), sorted(referenced_ids()))
 
-    # no id may be left without a reader
-    def test_ids_nobody_references_are_only_the_known_ones(self):
+    def test_every_id_in_the_markup_is_referenced_by_the_script(self):
         self.assertLessEqual(set(dom_ids()) - referenced_ids(), set())
 
 
@@ -3039,7 +3038,7 @@ class TestLoggingCopy(unittest.TestCase):
         pc = function_body("copyFileOnPc")
         self.assertRegex(pc, r"try \{\s*await api\(\"/api/log_copy\", \{ file: name \}, selection\);\s*\} catch \(e\) \{")
         self.assertIn('return (await copyFileAsText(name)) + ". The file itself could not be copied: " + e.message;', pc)
-        self.assertIn('throw new Error(e2.message + " The file itself could not be copied either: " + e.message);', pc)
+        self.assertIn('throw new Error(e2.message + ". The file itself could not be copied either: " + e.message);', pc)
         self.assertRegex(pc, r"(?s)\} catch \(e\) \{\s*try \{\s*return \(await copyFileAsText\(name\)\).*?\} catch \(e2\) \{\s*throw new Error\(")
         self.assertIn('return name + " copied: paste it into the chat with Ctrl+V";', pc)
         self.assertLess(pc.index("catch (e)"), pc.index("copyFileAsText(name)"))

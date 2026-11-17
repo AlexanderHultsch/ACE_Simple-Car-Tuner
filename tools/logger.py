@@ -68,7 +68,7 @@ def utc_offset(moment):
     return "%s%02d:%02d" % (sign, seconds // 3600, seconds % 3600 // 60)
 
 
-def no_facts(car, info):
+def no_facts(car):
     return {"matched": False}
 
 
@@ -90,7 +90,7 @@ class Session:
 
 
 class Logger:
-    """One tick per step(). open_source() returns an object with read() (the three blocks) and close(); facts(car, info) gives
+    """One tick per step(). open_source() returns an object with read() (the three blocks) and close(); facts(car) gives
     the tuner facts of the header; clock() is a monotonic time in seconds, wall() an aware local datetime, out(text) prints a line."""
 
     def __init__(self, work, logs, open_source=ace_shm.open_source, facts=None, clock=time.monotonic, wall=None,
@@ -119,7 +119,7 @@ class Logger:
         now = self.clock()
         if self.source is None:
             if not self.connect(now):
-                self.wait(now)
+                self.note_waiting(now)
                 return WAIT_S
         physics, graphics, static = self.source.read()
         ids = ace_shm.packet_ids(physics, graphics)
@@ -129,8 +129,8 @@ class Logger:
             self.source.close()
             self.source = None
             if not self.connect(now, announce=False):
-                self.end("game closed", self.changed)
-                self.wait(now)
+                self.end("game closed", self.changed if self.session is None else max(self.changed, self.session.start))
+                self.note_waiting(now)
                 return WAIT_S
             physics, graphics, static = self.source.read()
             self.ids = ace_shm.packet_ids(physics, graphics)
@@ -142,17 +142,17 @@ class Logger:
                 self.end("car, track or session changed", now)
             if self.session is None:
                 self.begin(key, info, now)
-        s = self.session
-        if s is None:
-            self.status("waiting", None, 0, self.started, now)
+        session = self.session
+        if session is None:
+            self.heartbeat("waiting", None, 0, self.started, now)
             return IDLE_S
         channels = ace_shm.channels(physics, graphics)
-        self.write_static(s, channels, now)
-        self.write_sample(s, channels, ace_shm.packet_ids(physics, graphics)[0], live, now)
-        if self.status("logging", s.name, s.samples, s.epoch, now):
-            s.file.flush()
-        if s.sampling:
-            wait = s.next_sample - now
+        self.write_static(session, channels, now)
+        self.write_sample(session, channels, self.ids[0], live, now)
+        if self.heartbeat("logging", session.name, session.samples, session.epoch, now):
+            session.file.flush()
+        if session.sampling:
+            wait = session.next_sample - now
             return min(MAX_SAMPLE_WAIT_S, wait) if wait > 0 else POLL_S
         return IDLE_S
 
@@ -167,13 +167,13 @@ class Logger:
             self.waiting_noted = False
         return True
 
-    def wait(self, now):
+    def note_waiting(self, now):
         if not self.waiting_noted:
             self.out("waiting for the game ...")
             self.waiting_noted = True
-        self.status("waiting", None, 0, self.started, now)
+        self.heartbeat("waiting", None, 0, self.started, now)
 
-    def status(self, state, name, samples, started, now):
+    def heartbeat(self, state, name, samples, started, now):
         """Writes logger_status.json when STATUS_EVERY_S have passed; True when it did."""
         if now - self.status_at < STATUS_EVERY_S:
             return False
@@ -200,78 +200,78 @@ class Logger:
             name = "%s-%d.jsonl" % (stem, number)
         return name
 
-    def tuner_facts(self, car, info):
+    def tuner_facts(self, car):
         try:
-            return self.facts(car, info)
+            return self.facts(car)
         except Exception as e:
             return {"matched": False, "error": logfacts.error_text(e)}
 
     def begin(self, key, info, now):
-        chan = logconf.load_channels()
-        config = logconf.load_config(self.work, chan)
-        selection = logconf.selected_channels(chan, config)
+        table = logconf.load_channels()
+        config = logconf.load_config(self.work, table)
+        selection = logconf.selected_channels(table, config)
         moment = self.wall()
         os.makedirs(self.logs, exist_ok=True)
         name = self.session_name(moment, info["car"])
         file = open(os.path.join(self.logs, name), "w", encoding="utf-8", newline="\n")
-        s = self.session = Session(key, name, file, now, moment.timestamp(), 1.0 / config["rate_hz"], selection)
-        self.line(s, {"type": "header", "format": "ace-session-log", "version": 1, "car": info["car"], "track": info["track"],
-                      "pc": {"date": moment.strftime("%Y-%m-%d"), "time": moment.strftime("%H:%M:%S"), "utc_offset": utc_offset(moment)},
-                      "software": {"game_version": info["game_version"], "layout_version": info["layout_version"],
-                                   "logger_version": LOGGER_VERSION,
-                                   "config": {"rate_hz": config["rate_hz"], "ticked": config["ticked"],
-                                              "once": s.once, "live": s.live}},
-                      "tuner": self.tuner_facts(info["car"], info)})
+        session = self.session = Session(key, name, file, now, moment.timestamp(), 1.0 / config["rate_hz"], selection)
+        self.write_line(session, {"type": "header", "format": "ace-session-log", "version": 1, "car": info["car"], "track": info["track"],
+                                  "pc": {"date": moment.strftime("%Y-%m-%d"), "time": moment.strftime("%H:%M:%S"), "utc_offset": utc_offset(moment)},
+                                  "software": {"game_version": info["game_version"], "layout_version": info["layout_version"],
+                                               "logger_version": LOGGER_VERSION,
+                                               "config": {"rate_hz": config["rate_hz"], "ticked": config["ticked"],
+                                                          "once": session.once, "live": session.live}},
+                                  "tuner": self.tuner_facts(info["car"])})
         self.status_at = float("-inf")
         self.out("session started: %s" % name)
 
     def end(self, reason, now):
-        s = self.session
-        if s is None:
+        session = self.session
+        if session is None:
             return
         self.session = None
         try:
-            self.line(s, {"type": "end", "reason": reason, "duration_s": round(now - s.start, 3), "samples": s.samples})
-            s.file.flush()
+            self.write_line(session, {"type": "end", "reason": reason, "duration_s": round(now - session.start, 3), "samples": session.samples})
+            session.file.flush()
         finally:
-            s.file.close()
+            session.file.close()
         self.status_at = float("-inf")
-        self.out("session ended: %s, %d samples" % (reason, s.samples))
+        self.out("session ended: %s, %d samples" % (reason, session.samples))
 
-    def line(self, s, data):
-        s.file.write(json.dumps(data, separators=(",", ":"), ensure_ascii=False) + "\n")
+    def write_line(self, session, data):
+        session.file.write(json.dumps(data, separators=(",", ":"), ensure_ascii=False) + "\n")
 
-    def write_static(self, s, channels, now):
-        if s.static_done or not s.once:
+    def write_static(self, session, channels, now):
+        if session.static_done or not session.once:
             return
         speed = channels["speed_kmh"]
         standing = speed is not None and speed < STANDING_KMH
         if not standing:
-            s.standing_since = None
-        elif s.standing_since is None:
-            s.standing_since = now
-        if standing and now - s.standing_since >= STATIC_AFTER_S:
+            session.standing_since = None
+        elif session.standing_since is None:
+            session.standing_since = now
+        if standing and now - session.standing_since >= STATIC_AFTER_S:
             moving = False
-        elif not standing and now >= s.start + STATIC_AFTER_S:
+        elif not standing and now >= session.start + STATIC_AFTER_S:
             moving = True
         else:
             return
-        s.static_done = True
-        self.line(s, {"type": "static", "t": round(now - s.start, 3), "moving": moving,
-                      "values": {n: rounded(channels[n]) for n in s.once}})
+        session.static_done = True
+        self.write_line(session, {"type": "static", "t": round(now - session.start, 3), "moving": moving,
+                                  "values": {n: rounded(channels[n]) for n in session.once}})
 
-    def write_sample(self, s, channels, physics_id, live, now):
-        s.sampling = live and bool(s.live)
-        if not s.sampling or physics_id == s.sample_id or now < s.next_sample:
+    def write_sample(self, session, channels, physics_id, live, now):
+        session.sampling = live and bool(session.live)
+        if not session.sampling or physics_id == session.sample_id or now < session.next_sample:
             return
-        if now - s.next_sample > RESYNC_S:
-            s.next_sample = now
-        sample = {"type": "s", "t": round(now - s.start, 3)}
-        sample.update({n: rounded(channels[n]) for n in s.live})
-        self.line(s, sample)
-        s.samples += 1
-        s.sample_id = physics_id
-        s.next_sample += s.period
+        if now - session.next_sample > RESYNC_S:
+            session.next_sample = now
+        sample = {"type": "s", "t": round(now - session.start, 3)}
+        sample.update({n: rounded(channels[n]) for n in session.live})
+        self.write_line(session, sample)
+        session.samples += 1
+        session.sample_id = physics_id
+        session.next_sample += session.period
 
     def run(self):
         timer_resolution(True)

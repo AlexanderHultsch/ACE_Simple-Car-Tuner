@@ -57,9 +57,9 @@ if sys.platform == "win32":
 class SharedMemory:
     """Read-only view of a named Windows shared memory block. Python's mmap would create a missing block and read
     zeros; OpenFileMappingW fails instead (FileNotFoundError), which tells us the game is not running.
-    size: the bytes read() returns (zero-padded if the block is smaller); 0 = the whole block, read in parts with read_at()."""
+    size: the bytes read() returns (zero-padded if the block is smaller)."""
 
-    def __init__(self, name: str, size: int = 0):
+    def __init__(self, name: str, size: int):
         if sys.platform != "win32":
             raise FileNotFoundError("shared memory needs Windows")
         handle = _kernel32.OpenFileMappingW(FILE_MAP_READ, False, name)
@@ -76,18 +76,12 @@ class SharedMemory:
         _kernel32.VirtualQuery(view, ctypes.byref(info), ctypes.sizeof(info))
         self.handle, self.view = handle, view
         # Never read past the mapped pages (VirtualQuery gives the view size rounded up to 4096 bytes), so a smaller block is only padded when it ends on an earlier page.
-        self.available = min(size, info.RegionSize or size) if size else info.RegionSize
-        self.size = size or self.available
+        self.available = min(size, info.RegionSize or size)
+        self.size = size
 
     def read(self) -> bytes:
         """`size` bytes; zero-padded when the mapped view is smaller (the view size is a whole number of pages)."""
         return ctypes.string_at(self.view, self.available).ljust(self.size, b"\0")
-
-    def read_at(self, offset: int, length: int) -> bytes:
-        """`length` bytes from `offset`; zero-padded where they would lie past the block."""
-        if offset < 0 or length <= 0 or offset >= self.available:
-            return b"\0" * max(0, length)
-        return ctypes.string_at(self.view + offset, min(length, self.available - offset)).ljust(length, b"\0")
 
     def close(self) -> None:
         if self.view:
@@ -281,12 +275,7 @@ class Graphics(Structure):
     ]
 
 
-for _struct, _size in ((TyreState, 256), (DamageState, 128), (PitInfo, 64), (Electronics, 128),
-                       (Instrumentation, 128), (SessionState, 256), (TimingState, 256), (AssistsState, 64), (Physics, 800)):
-    assert sizeof(_struct) == _size, (_struct.__name__, sizeof(_struct))
-
-
-def text(raw: bytes) -> str:
+def decode_text(raw: bytes) -> str:
     return raw.decode("utf-8", "replace").strip()
 
 
@@ -333,7 +322,7 @@ def clean(value):
     return value
 
 
-def degrees(values) -> list:
+def to_degrees(values) -> list:
     return [math.degrees(v) for v in values]
 
 
@@ -372,8 +361,8 @@ def channels(physics_bytes: bytes, graphics_bytes: bytes) -> dict:
         "wheel_load": list(ph.wheelLoad),
         "wheel_speed": list(ph.wheelAngularSpeed),
         "slip_ratio": list(ph.slipRatio),
-        "slip_angle_deg": degrees(ph.slipAngle),
-        "camber_deg": degrees(ph.camberRAD),
+        "slip_angle_deg": to_degrees(ph.slipAngle),
+        "camber_deg": to_degrees(ph.camberRAD),
         "susp_travel": list(ph.suspensionTravel),
         "ride_height": list(ph.rideHeight),
         "tyre_pressure_psi": [t.tyre_pressure for t in tyres],
@@ -401,7 +390,7 @@ def channels(physics_bytes: bytes, graphics_bytes: bytes) -> dict:
         "diff_coast_level": el.diff_coast_level,
         "turbo_level": el.turbo_level,
         "performance_mode": el.active_performance_mode,
-        "performance_mode_name": text(gr.performance_mode_name),
+        "performance_mode_name": decode_text(gr.performance_mode_name),
         "diff_power_pct": gr.diff_power_raw_value,
         "diff_coast_pct": gr.diff_coast_raw_value,
         "damper_levels": [el.front_bump_damper_level, el.front_rebound_damper_level,
@@ -412,8 +401,8 @@ def channels(physics_bytes: bytes, graphics_bytes: bytes) -> dict:
         "tc_in_action": int(ph.tcInAction),
         "abs_in_action": int(ph.absInAction),
         "engine_brake": ph.engineBrake,
-        "tyre_compound_front": text(gr.tyre_lf.tyre_compound_front),
-        "tyre_compound_rear": text(gr.tyre_lf.tyre_compound_rear),
+        "tyre_compound_front": decode_text(gr.tyre_lf.tyre_compound_front),
+        "tyre_compound_rear": decode_text(gr.tyre_lf.tyre_compound_rear),
         "cg_height": ph.cgHeight,
         "ballast": ph.ballast,
         "pad_life": list(ph.padLife),
@@ -432,11 +421,11 @@ def session_info(graphics_bytes: bytes, static_bytes: bytes) -> dict:
     return {
         "status": gr.status,
         "status_name": STATUS.get(gr.status, "unknown"),
-        "car": text(gr.car_model),
-        "track": text(st.track),
-        "session_id": f"{st.event_id}-{st.session_id}-{st.session}-{text(st.session_name)}",
-        "game_version": text(st.ac_evo_version),
-        "layout_version": text(st.sm_version),
+        "car": decode_text(gr.car_model),
+        "track": decode_text(st.track),
+        "session_id": f"{st.event_id}-{st.session_id}-{st.session}-{decode_text(st.session_name)}",
+        "game_version": decode_text(st.ac_evo_version),
+        "layout_version": decode_text(st.sm_version),
         "packet": [gr.packetId],
     }
 

@@ -263,25 +263,22 @@ class TestSessionStart(LoggerCase):
         for line in raw.decode("utf-8").splitlines():
             self.assertEqual(json.dumps(json.loads(line), separators=(",", ":"), ensure_ascii=False), line)
 
-    def test_the_facts_function_gets_the_car_and_the_session_info_and_its_result_is_the_tuner_entry(self):
+    def test_the_facts_function_gets_the_car_and_its_result_is_the_tuner_entry(self):
         calls = []
 
-        def facts(car, info):
-            calls.append((car, info))
+        def facts(car):
+            calls.append(car)
             return {"matched": True, "tune": "ax01"}
 
         self.logger = self.make(facts=facts)
         self.logger.step()
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][0], "BMW M4 CSL")
-        self.assertEqual(calls[0][1]["track"], "Monza")
-        self.assertEqual(calls[0][1]["status_name"], "live")
+        self.assertEqual(calls, ["BMW M4 CSL"])
         self.assertEqual(self.records()[0]["tuner"], {"matched": True, "tune": "ax01"})
 
     def test_the_home_folder_is_shortened_in_the_error_of_the_facts(self):
         home = os.path.join(os.path.dirname(self.work), "home")
 
-        def facts(car, info):
+        def facts(car):
             raise RuntimeError("cannot read %s" % os.path.join(home, "work", "x.json"))
 
         self.logger = self.make(facts=facts)
@@ -291,7 +288,7 @@ class TestSessionStart(LoggerCase):
         self.assertEqual(error, "cannot read %s" % os.path.join("~", "work", "x.json"))
 
     def test_facts_that_raise_are_stored_as_an_error_and_logging_goes_on(self):
-        def facts(car, info):
+        def facts(car):
             raise RuntimeError("no tune here")
 
         self.logger = self.make(facts=facts)
@@ -308,6 +305,23 @@ class TestSessionStart(LoggerCase):
                             (-datetime.timedelta(hours=5, minutes=30), "-05:30"), (datetime.timedelta(hours=5, minutes=45), "+05:45")):
             with self.subTest(want=want):
                 self.assertEqual(logger.utc_offset(BASE.astimezone(zone(delta))), want)
+
+    def test_a_session_that_began_while_the_packets_were_frozen_never_ends_with_a_negative_duration(self):
+        self.game.gr.status = 3
+        self.logger.step()
+        self.clock.now += 4.0
+        self.game.gr.status = 2
+        self.logger.step()
+        name = self.names()[0]
+        self.assertEqual(self.logger.session.start, T0 + 4.0)
+        self.assertLess(self.logger.changed, self.logger.session.start)
+        self.game.running = False
+        self.clock.now += 1.1
+        self.assertEqual(self.logger.step(), logger.WAIT_S)
+        end = self.records(name)[-1]
+        self.assertEqual((end["type"], end["reason"]), ("end", "game closed"))
+        self.assertGreaterEqual(end["duration_s"], 0)
+        self.assertEqual(end["duration_s"], 0.0)
 
 
 class TestFileNames(LoggerCase):
@@ -1262,7 +1276,7 @@ class TestMain(unittest.TestCase):
         [facts] = FakeLogger.facts
         with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call, \
                 mock.patch.object(logfacts, "process_id", return_value=None):
-            self.assertEqual(facts("Some Car", {}), {"matched": False})
+            self.assertEqual(facts("Some Car"), {"matched": False})
         self.assertEqual(call.call_args.args, (os.path.abspath("w"), os.path.abspath("m"), "Some Car", None))
 
     def test_an_unexpandable_mods_folder_is_an_error_line_before_anything_starts(self):

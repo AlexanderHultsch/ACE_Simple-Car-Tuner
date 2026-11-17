@@ -29,8 +29,10 @@ PHYSICS_OFFSETS = {
     "brakeTorque": 716, "padLife": 740, "discLife": 756, "ignitionOn": 772, "absVibrations": 796,
 }
 
+GRAPHICS_OFFSETS = {"status": 4, "electronics": 1872, "car_model": 3086, "car_ids": 3940}
+
 SIZES = {"TyreState": 256, "DamageState": 128, "PitInfo": 64, "Electronics": 128, "Instrumentation": 128,
-         "SessionState": 256, "TimingState": 256, "AssistsState": 64, "Physics": 800}
+         "SessionState": 256, "TimingState": 256, "AssistsState": 64, "Physics": 800, "Graphics": 4900, "Static": 208}
 
 CHANNEL_NAMES = [
     "rpm", "rpm_max", "gas", "brake", "clutch", "gear", "speed_kmh", "steer", "steer_deg", "acc_g", "g_forces",
@@ -165,6 +167,11 @@ class Layout(unittest.TestCase):
         for name, offset in PHYSICS_OFFSETS.items():
             with self.subTest(name):
                 self.assertEqual(getattr(ace_shm.Physics, name).offset, offset)
+
+    def test_graphics_offsets_of_the_fields_the_logger_reads(self):
+        for name, offset in GRAPHICS_OFFSETS.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(ace_shm.Graphics, name).offset, offset)
 
     def test_the_documented_flag_fields_have_names_and_the_sizes_stay(self):
         def names(struct):
@@ -302,7 +309,7 @@ class Channels(unittest.TestCase):
         got = ace_shm.channels(bytes(ph), bytes(gr))
         self.assertEqual(got["tyre_compound_front"], "Slick é")
         self.assertEqual(got["tyre_compound_rear"], "�")
-        self.assertEqual(ace_shm.text(b"  abc \n"), "abc")
+        self.assertEqual(ace_shm.decode_text(b"  abc \n"), "abc")
 
 
 class SessionInfo(unittest.TestCase):
@@ -369,18 +376,13 @@ class RealMapping(unittest.TestCase):
         ctypes.memmove(view, data, len(data))
         self.kernel.UnmapViewOfFile(view)
 
-    def test_read_and_read_at_return_the_bytes_of_the_mapping(self):
+    def test_read_returns_the_bytes_of_the_mapping(self):
         name = "Local\\acet_test_%d" % os.getpid()
         data = bytes(i % 251 for i in range(4096))
         self.make(name, data)
         memory = ace_shm.SharedMemory(name, 4096)
         try:
             self.assertEqual(memory.read(), data)
-            self.assertEqual(memory.read_at(10, 20), data[10:30])
-            self.assertEqual(memory.read_at(4090, 10), data[4090:] + b"\0" * 4)
-            self.assertEqual(memory.read_at(5000, 4), b"\0" * 4)
-            self.assertEqual(memory.read_at(-1, 4), b"\0" * 4)
-            self.assertEqual(memory.read_at(0, 0), b"")
         finally:
             memory.close()
         memory.close()
@@ -391,13 +393,11 @@ class RealMapping(unittest.TestCase):
         data = bytes(i % 251 for i in range(4096))
         self.make(name, data)
         small, big = ace_shm.SharedMemory(name, 16), ace_shm.SharedMemory(name, 5000)
-        whole = ace_shm.SharedMemory(name)
         try:
             self.assertEqual(small.read(), data[:16])
             self.assertEqual(big.read(), data + b"\0" * (5000 - 4096))
-            self.assertEqual(whole.read(), data)
         finally:
-            for memory in (small, big, whole):
+            for memory in (small, big):
                 memory.close()
                 memory.close()
 

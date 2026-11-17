@@ -680,16 +680,16 @@ class TestMakeFacts(FactsCase):
             return START
 
         facts = logfacts.make_facts(self.work, self.mods, start)
-        got = facts("Bravo Stock", {"track": "Monza"})
+        got = facts("Bravo Stock")
         self.assertEqual(got, {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START})
         self.assertEqual(starts, [1])
-        facts("ax_alpha", {})
+        facts("ax_alpha")
         self.assertEqual(starts, [1, 1])
 
     def test_it_hands_the_folders_the_car_and_the_start_to_tuner_facts(self):
         with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call:
             facts = logfacts.make_facts("W", "M", lambda: START)
-            self.assertEqual(facts("Some Car", {"x": 1}), {"matched": False})
+            self.assertEqual(facts("Some Car"), {"matched": False})
         call.assert_called_once_with("W", "M", "Some Car", START)
 
     def test_the_default_start_is_the_game_process_start(self):
@@ -697,7 +697,7 @@ class TestMakeFacts(FactsCase):
 
     def test_the_result_has_the_shape_of_a_logger_facts_function(self):
         facts = logfacts.make_facts(self.work, self.mods, lambda: None)
-        self.assertEqual(list(facts("ax_alpha", {})), MODDED_KEYS)
+        self.assertEqual(list(facts("ax_alpha")), MODDED_KEYS)
 
 
 if __name__ == "__main__":

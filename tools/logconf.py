@@ -38,9 +38,9 @@ ASCII_FIXES = {"°": "deg", "–": "-", "—": "-", "‘": "'", "’": "'", "“
 GREYED_STATUS_WORDS = (("indirect", "judged only through their effect"), ("none", "not published"))
 
 
-def known_channels():
-    """The channel names of ace_shm.channels(), a set."""
-    return set(ace_shm.channels(b"", b""))
+def channel_names():
+    """The channel names of ace_shm.channels() in the order it builds them."""
+    return list(ace_shm.channels(b"", b""))
 
 
 def is_text(value):
@@ -57,6 +57,61 @@ def check_names(where, entry, known):
         unknown = [n for n in names if n not in known]
         if unknown:
             raise ValueError("%s: unknown channel %r in %s" % (where, unknown[0], key))
+
+
+def validate_setting(sid, entry, known):
+    where = "log channels: setting %s" % sid
+    if not isinstance(entry, dict):
+        raise ValueError("%s: expected an object" % where)
+    if entry.get("status") not in STATUSES:
+        raise ValueError("%s: status must be one of %s" % (where, ", ".join(STATUSES)))
+    if not isinstance(entry.get("note"), str):
+        raise ValueError("%s: note must be text" % where)
+    check_names(where, entry, known)
+    if entry["status"] == "direct":
+        if not (entry["once"] or entry["live"]):
+            raise ValueError("%s: a direct setting needs at least one channel in once or live" % where)
+    else:
+        if entry["once"] or entry["live"]:
+            raise ValueError("%s: a setting with status %s has no channels (once and live stay empty)" % (where, entry["status"]))
+        if not is_text(entry["note"]):
+            raise ValueError("%s: a setting with status %s needs a note" % (where, entry["status"]))
+
+
+def validate_extra_row(r, where, row_ids, known):
+    if not isinstance(r, dict) or not is_text(r.get("id")):
+        raise ValueError("%s: every row needs an id (text)" % where)
+    row_where = "%s: row %s" % (where, r["id"])
+    if r["id"] in row_ids:
+        raise ValueError("%s: the id is used twice" % row_where)
+    row_ids.append(r["id"])
+    if not is_text(r.get("label")):
+        raise ValueError("%s: needs a label (text)" % row_where)
+    if not isinstance(r.get("description"), str):
+        raise ValueError("%s: description must be text" % row_where)
+    if type(r.get("default")) is not bool:
+        raise ValueError("%s: default must be true or false" % row_where)
+    check_names(row_where, r, known)
+
+
+def validate_extra_group(g, known, group_ids):
+    if not isinstance(g, dict) or not is_text(g.get("id")):
+        raise ValueError("log channels: every extra group needs an id (text)")
+    where = "log channels: extra group %s" % g["id"]
+    if g["id"] in group_ids:
+        raise ValueError("%s: the id is used twice" % where)
+    group_ids.append(g["id"])
+    if not is_text(g.get("name")):
+        raise ValueError("%s: needs a name (text)" % where)
+    if not isinstance(g.get("description"), str):
+        raise ValueError("%s: description must be text" % where)
+    if "default" in g:
+        raise ValueError("%s: default is not allowed (it is set in every row)" % where)
+    if not isinstance(g.get("rows"), list):
+        raise ValueError("%s: needs rows, a list" % where)
+    row_ids = []
+    for r in g["rows"]:
+        validate_extra_row(r, where, row_ids, known)
 
 
 def validate_channels(chan, catalogue):
@@ -78,58 +133,15 @@ def validate_channels(chan, catalogue):
     extra = [i for i in settings if i not in wanted]
     if extra:
         raise ValueError("log channels: entry %s is not a setting of the catalogue" % ", ".join(map(str, extra)))
-    known = known_channels()
+    known = set(channel_names())
     for sid, entry in settings.items():
-        where = "log channels: setting %s" % sid
-        if not isinstance(entry, dict):
-            raise ValueError("%s: expected an object" % where)
-        if entry.get("status") not in STATUSES:
-            raise ValueError("%s: status must be one of %s" % (where, ", ".join(STATUSES)))
-        if not isinstance(entry.get("note"), str):
-            raise ValueError("%s: note must be text" % where)
-        check_names(where, entry, known)
-        if entry["status"] == "direct":
-            if not (entry["once"] or entry["live"]):
-                raise ValueError("%s: a direct setting needs at least one channel in once or live" % where)
-        else:
-            if entry["once"] or entry["live"]:
-                raise ValueError("%s: a setting with status %s has no channels (once and live stay empty)" % (where, entry["status"]))
-            if not is_text(entry["note"]):
-                raise ValueError("%s: a setting with status %s needs a note" % (where, entry["status"]))
+        validate_setting(sid, entry, known)
     groups = chan.get("extra_groups")
     if not isinstance(groups, list):
         raise ValueError("log channels: needs extra_groups, a list")
     group_ids = []
     for g in groups:
-        if not isinstance(g, dict) or not is_text(g.get("id")):
-            raise ValueError("log channels: every extra group needs an id (text)")
-        where = "log channels: extra group %s" % g["id"]
-        if g["id"] in group_ids:
-            raise ValueError("%s: the id is used twice" % where)
-        group_ids.append(g["id"])
-        if not is_text(g.get("name")):
-            raise ValueError("%s: needs a name (text)" % where)
-        if not isinstance(g.get("description"), str):
-            raise ValueError("%s: description must be text" % where)
-        if "default" in g:
-            raise ValueError("%s: default is not allowed (it is set in every row)" % where)
-        if not isinstance(g.get("rows"), list):
-            raise ValueError("%s: needs rows, a list" % where)
-        row_ids = []
-        for r in g["rows"]:
-            if not isinstance(r, dict) or not is_text(r.get("id")):
-                raise ValueError("%s: every row needs an id (text)" % where)
-            row_where = "%s: row %s" % (where, r["id"])
-            if r["id"] in row_ids:
-                raise ValueError("%s: the id is used twice" % row_where)
-            row_ids.append(r["id"])
-            if not is_text(r.get("label")):
-                raise ValueError("%s: needs a label (text)" % row_where)
-            if not isinstance(r.get("description"), str):
-                raise ValueError("%s: description must be text" % row_where)
-            if type(r.get("default")) is not bool:
-                raise ValueError("%s: default must be true or false" % row_where)
-            check_names(row_where, r, known)
+        validate_extra_group(g, known, group_ids)
 
 
 def load_channels(path=None):
@@ -139,8 +151,17 @@ def load_channels(path=None):
     return chan
 
 
+def extra_row_id(group, row):
+    return "%s.%s" % (group["id"], row["id"])
+
+
+def extra_rows(chan):
+    """[("<group id>.<row id>", row)] of every extra row, in table order."""
+    return [(extra_row_id(g, r), r) for g in chan["extra_groups"] for r in g["rows"]]
+
+
 def extra_ids(chan):
-    return ["%s.%s" % (g["id"], r["id"]) for g in chan["extra_groups"] for r in g["rows"]]
+    return [i for i, _ in extra_rows(chan)]
 
 
 def tickable_ids(chan):
@@ -151,7 +172,7 @@ def tickable_ids(chan):
 def default_config(chan):
     """The choice without a file: 30 Hz and the extra rows whose default is true."""
     return {"version": VERSION, "rate_hz": DEFAULT_RATE,
-            "ticked": ["%s.%s" % (g["id"], r["id"]) for g in chan["extra_groups"] for r in g["rows"] if r["default"]]}
+            "ticked": [i for i, r in extra_rows(chan) if r["default"]]}
 
 
 def config_path(work):
@@ -241,7 +262,7 @@ def tree(chan, catalogue, config):
     for g in chan["extra_groups"]:
         rows = []
         for r in g["rows"]:
-            rid = "%s.%s" % (g["id"], r["id"])
+            rid = extra_row_id(g, r)
             rows.append({"id": rid, "label": r["label"], "description": r["description"], "default": r["default"], "tickable": True,
                          "ticked": rid in ticked, "status": "extra", "note": "", "once": list(r["once"]), "live": list(r["live"])})
         extra.append({"id": g["id"], "name": g["name"], "description": g["description"], "tickable": len(rows), "rows": rows})
@@ -252,7 +273,7 @@ def selected_channels(chan, config):
     """{"once": [...], "live": [...]}: the channel names of the ticked rows without repeats, in the order of tickable_ids()."""
     ticked = set(config["ticked"])
     rows = dict(chan["settings"])
-    rows.update({"%s.%s" % (g["id"], r["id"]): r for g in chan["extra_groups"] for r in g["rows"]})
+    rows.update(extra_rows(chan))
     out = {"once": [], "live": []}
     for i in tickable_ids(chan):
         if i in ticked:
@@ -284,7 +305,7 @@ def clear_stop(logs_dir):
         os.remove(stop_path(logs_dir))
 
 
-def number(value):
+def is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
 
 
@@ -306,7 +327,7 @@ def session_ends(path, size):
     return line_object(first), line_object(lines[-1]) if lines else None
 
 
-def session_info(path, name, st):
+def session_file_info(path, name, st):
     info = {"file": name, "size": st.st_size, "modified": st.st_mtime, "car": None, "track": None, "duration_s": None, "samples": None}
     try:
         first, last = session_ends(path, st.st_size)
@@ -316,7 +337,7 @@ def session_info(path, name, st):
         info["car"] = first["car"] if isinstance(first.get("car"), str) else None
         info["track"] = first["track"] if isinstance(first.get("track"), str) else None
     if last and last.get("type") == "end":
-        if number(last.get("duration_s")):
+        if is_number(last.get("duration_s")):
             info["duration_s"] = last["duration_s"]
         if isinstance(last.get("samples"), int) and not isinstance(last["samples"], bool):
             info["samples"] = last["samples"]
@@ -340,7 +361,7 @@ def list_sessions(logs_dir, limit=20):
         if os.path.isfile(path):
             found.append((st.st_mtime, name, st))
     found.sort(key=lambda f: (f[0], f[1]), reverse=True)
-    return [session_info(os.path.join(logs_dir, name), name, st) for _, name, st in found[:max(0, limit)]]
+    return [session_file_info(os.path.join(logs_dir, name), name, st) for _, name, st in found[:max(0, limit)]]
 
 
 def not_running():
@@ -359,18 +380,13 @@ def logger_status(logs_dir, now=None):
     if not (isinstance(data, dict) and data.get("state") in ("waiting", "logging")
             and "file" in data and (data["file"] is None or isinstance(data["file"], str))
             and isinstance(data.get("samples"), int) and not isinstance(data["samples"], bool)
-            and number(data.get("started")) and number(data.get("updated"))
+            and is_number(data.get("started")) and is_number(data.get("updated"))
             and isinstance(data.get("pid"), int) and not isinstance(data["pid"], bool)):
         return not_running()
     if now - data["updated"] > STATUS_MAX_AGE:
         return not_running()
     return {"running": True, "state": data["state"], "file": data["file"], "samples": data["samples"], "started": data["started"],
             "seconds": now - data["started"] if data["state"] == "logging" else None}
-
-
-def channel_names():
-    """The channel names of ace_shm.channels() in the order it builds them."""
-    return list(ace_shm.channels(b"", b""))
 
 
 def validate_glossary(glossary):
@@ -445,7 +461,7 @@ def row_line(row, setting):
         text = "- %s (row %s): %s Reads once: %s; live: %s" % (row["label"], row["id"], row["description"], names_text(row["once"]), names_text(row["live"]))
     else:
         parts = ["id %s" % row["id"], "unit %s" % (row["unit"] or "-")]
-        if number(setting.get("min")) and number(setting.get("max")):
+        if is_number(setting.get("min")) and is_number(setting.get("max")):
             parts.append("tuner limits %g to %g" % (setting["min"], setting["max"]))
         text = "- %s (%s): reads once: %s; live: %s" % (row["label"], ", ".join(parts), names_text(row["once"]), names_text(row["live"]))
     return one_line(text)

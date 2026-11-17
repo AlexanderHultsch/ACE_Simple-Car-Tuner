@@ -2845,7 +2845,7 @@ class TestLogging(unittest.TestCase):
     def test_the_page_reads_only_fields_the_server_sends(self):
         group_sent = quoted_words(ts.logconf.tree, ts.log_config_json)
         status_sent = quoted_words(ts.logconf.not_running, ts.logconf.logger_status)
-        session_sent = quoted_words(ts.logconf.session_info)
+        session_sent = quoted_words(ts.logconf.session_file_info)
         self.assertEqual(sorted(set(re.findall(r"\blogData\.(\w+)", "".join(function_body(n) for n in self.FUNCTIONS))) - group_sent), [])
         for name, pattern, sent in (("buildLogGroup", r"\bg\.(\w+)", group_sent), ("buildLogRow", r"\br\.(\w+)", group_sent),
                                     ("logStatusText", r"\bs\.(\w+)", status_sent), ("pollLogStatus", r"\bs\.(\w+)", status_sent),

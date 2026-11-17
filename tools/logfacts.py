@@ -205,7 +205,7 @@ def tuner_facts(work, mods, car_name, game_start=None):
 
 
 def make_facts(work, mods, start=game_process_start):
-    """The function Logger takes as facts: facts(car, info) = tuner_facts(work, mods, car, start())."""
-    def facts(car, info):
+    """The function Logger takes as facts: facts(car) = tuner_facts(work, mods, car, start())."""
+    def facts(car):
         return tuner_facts(work, mods, car, start())
     return facts

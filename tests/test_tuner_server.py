@@ -3010,7 +3010,7 @@ class TestLogCopyRoute(CopyCase):
 
     def test_no_part_of_the_path_is_in_the_command_whatever_characters_it_has(self):
         names = ["it's.jsonl", "a`b.jsonl", "$env_x $(y).jsonl", "a;b.jsonl", "O\u2019Brien \u00e9\u4e2d.jsonl", "x'; calc ; '.jsonl",
-                 "\u2018q\u201a.jsonl", "a&b|c.jsonl"]
+                 "\u2018q\u201a.jsonl", "a&b^c.jsonl" if os.name == "nt" else "a&b|c.jsonl"]
         folder = str(self.d / "o'b`r$;\u00e9\u2019")
         ts.CONFIG["logs"] = folder
         for name in names:

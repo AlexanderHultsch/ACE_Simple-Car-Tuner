@@ -2,20 +2,24 @@
 
 Work and mods folders are temp dirs. Everything that needs the game or the schemas is stubbed (support.FakeCar replaces tune.load_msg / save_msg, tune.init / tune.apply are recorders, game_running is a switch, subprocess.run fails the test if called); only the committed tuner/web/index.html is read. Server and job threads are stopped in addCleanup.
 """
+import ast
 import email.message
 import http.client
 import http.server
+import inspect
 import io
 import json
 import ntpath
 import os
 import re
 import shutil
+import socket
 import struct
 import subprocess
 import sys
 import threading
 import time
+import types
 import unittest
 import urllib.parse
 from unittest import mock
@@ -109,6 +113,13 @@ def gated(test, fn):
             raise test.errors[fn]
         return dict(INIT_RESULT) if fn == "init" else dict(APPLY_RESULT, new_id=args[2], tune=args[2])
     return stub
+
+
+def symlink_or_skip(test, target, path):
+    try:
+        os.symlink(target, path)
+    except (OSError, NotImplementedError, AttributeError):
+        test.skipTest("symbolic links cannot be created here")
 
 
 class Env(unittest.TestCase):
@@ -702,6 +713,13 @@ class TestBodies(ServerCase):
                 r = self.set_raw(raw)
                 self.assertEqual((r.status, r.json), (400, {"error": "body is not valid JSON"}))
 
+    def test_a_deeply_nested_body_is_400_and_not_an_internal_error(self):
+        for raw in (b"[" * 60000, b"[" * 30000 + b"]" * 30000):
+            with self.subTest(raw[:6]):
+                r = self.set_raw(raw)
+                self.assertEqual((r.status, r.json), (400, {"error": "body is not valid JSON"}))
+        self.assertNotIn("Traceback", self.err.getvalue())
+
     def test_json_that_is_not_an_object_is_400(self):
         for raw in (b"[1, 2]", b"5", b'"x"', b"null", b"true"):
             with self.subTest(raw):
@@ -1154,6 +1172,69 @@ class TestApplyRoute(TuneCase):
                 self.assertEqual(r.status, 400, r.json)
         self.assertEqual((self.calls, self.tune_ids(), ts.job_snapshot()["state"]), ([], [], "idle"))
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "tunes")))
+
+    def slow_new_tune(self, delay=0.3):
+        real, created = tune.new_tune_from_draft, []
+
+        def slow(*args, **kw):
+            time.sleep(delay)
+            created.append(real(*args, **kw))
+            return created[-1]
+        self.patch(tune, "new_tune_from_draft", slow)
+        return created
+
+    def test_two_draft_applies_at_the_same_time_create_one_modded_car(self):
+        self.hold_jobs()
+        created = self.slow_new_tune()
+        start, results = threading.Barrier(2), []
+
+        def send():
+            start.wait(5)
+            results.append(self.post("/api/apply", {"tune": "draft"}).status)
+        threads = [threading.Thread(target=send) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(10)
+        self.assertEqual(sorted(results), [202, 409])
+        self.assertEqual((len(created), self.tune_ids()), (1, ["ax_x"]))
+        self.finish_held_job()
+
+    def test_a_refused_draft_apply_restores_the_job_state_and_the_next_apply_runs(self):
+        r = self.post("/api/apply", {"tune": "draft", "new_id": "ks_x"})
+        self.assertEqual((r.status, r.json), (400, {"error": "new id equals the old id 'ks_x'"}))
+        self.assertEqual(ts.job_snapshot(), {"kind": None, "state": "idle", "log": [], "result": None, "error": None})
+        self.assertEqual(self.post("/api/apply", {"tune": "draft"}).status, 202)
+        self.assertEqual(self.wait_job()["state"], "done")
+
+    def test_a_refused_apply_keeps_the_previous_finished_job_displayed(self):
+        for state, result, error in (("done", {"new_id": "ax01"}, None), ("error", None, "boom")):
+            with self.subTest(state):
+                ts.JOB.update(kind="init", state=state, log=["a", "b"], result=result, error=error)
+                before = ts.job_snapshot()
+                self.assertEqual(self.post("/api/apply", {"tune": "draft", "new_id": "ks_x"}).status, 400)
+                self.assertEqual(self.post("/api/apply", {"tune": "nope"}).status, 400)
+                self.assertEqual(self.post("/api/apply", {}).status, 400)
+                self.assertEqual(ts.job_snapshot(), before)
+
+    def test_a_running_job_is_never_overwritten_by_a_refused_apply(self):
+        self.make_tune("ax01", {"name_suffix": "_A"})
+        self.make_tune(None, {"name_suffix": "_A"})
+        self.hold_jobs()
+        self.assertEqual(self.post("/api/init").status, 202)
+        before = ts.job_snapshot()
+        for body in ({"tune": "draft"}, {"tune": "ax01"}, {}):
+            with self.subTest(body):
+                self.assertEqual(self.post("/api/apply", body).status, 409)
+        self.assertEqual((ts.job_snapshot()["kind"], ts.job_snapshot()["state"]), (before["kind"], "running"))
+        self.finish_held_job()
+
+    def test_an_unexpected_error_while_the_target_is_made_restores_the_job_and_does_not_leave_it_running(self):
+        self.patch(tune, "new_tune_from_draft", mock.Mock(side_effect=RuntimeError("disk exploded")))
+        r = self.post("/api/apply", {"tune": "draft"})
+        self.assertEqual((r.status, r.json), (500, {"error": "internal error: RuntimeError"}))
+        self.assertEqual(ts.job_snapshot(), {"kind": None, "state": "idle", "log": [], "result": None, "error": None})
+        self.assertEqual(self.calls, [])
 
     def test_the_stock_id_and_the_id_of_an_existing_default_car_are_refused_as_new_ids(self):
         stock = self.post("/api/apply", {"tune": "draft", "new_id": "ks_x"})
@@ -2453,6 +2534,7 @@ class TestLoggerRoutes(LogCase):
         self.spawned = []
         self.proc = mock.Mock(pid=self.PID)
         self.popen = self.patch(ts.subprocess, "Popen", mock.Mock(side_effect=self.fake_popen))
+        self.patch_list(ts.LOGGER_PROC, [None])
         self.stop_file = logconf.stop_path(self.logs)
         self.console = os.path.join(self.logs, "logger_console.log")
 
@@ -2465,11 +2547,11 @@ class TestLoggerRoutes(LogCase):
         now = time.time()
         self.write(self.status_file, {"state": "logging", "file": "x.jsonl", "samples": 40, "started": now - 20, "updated": now, "pid": 7})
 
-    def start_on(self, platform):
+    def start_on(self, platform, body=None):
         with mock.patch.object(sys, "platform", platform), \
                 mock.patch.object(ts.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True), \
                 mock.patch.object(ts.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
-            return self.post("/api/logger_start")
+            return self.post("/api/logger_start", body)
 
     def test_the_logger_route_paths_are_post_routes_without_a_job(self):
         for path in self.ROUTES:
@@ -2479,7 +2561,7 @@ class TestLoggerRoutes(LogCase):
             self.assertNotIn(path, ts.QUERY_ROUTES)
 
     def test_start_runs_the_logger_with_this_servers_folders_and_answers_the_pid(self):
-        r = self.start_on("linux")
+        r = self.start_on("win32")
         self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"started": True, "pid": self.PID}))
         self.popen.assert_called_once()
         args, kw = self.popen.call_args
@@ -2489,6 +2571,57 @@ class TestLoggerRoutes(LogCase):
         self.assertEqual((kw["cwd"], kw["stdin"], kw["stderr"], kw["close_fds"]),
                          (str(tune.REPO), ts.subprocess.DEVNULL, ts.subprocess.STDOUT, True))
 
+    def test_off_windows_start_is_400_and_starts_nothing(self):
+        for platform in ("linux", "darwin"):
+            with self.subTest(platform):
+                r = self.start_on(platform)
+                self.assertEqual((r.status, r.headers.get("Content-Type"), r.json),
+                                 (400, "application/json; charset=utf-8", {"error": "the logger needs Windows"}))
+        self.popen.assert_not_called()
+        self.assertFalse(os.path.exists(self.logs))
+        self.assertIsNone(ts.LOGGER_PROC[0])
+
+    def test_off_windows_the_refusal_comes_before_the_running_check_and_the_stop_file_stays(self):
+        self.running()
+        self.write(self.stop_file, "")
+        self.assertEqual(self.start_on("linux").status, 400)
+        self.assertTrue(os.path.exists(self.stop_file))
+
+    def test_a_logger_started_by_this_server_that_still_lives_is_a_409_without_a_status_file(self):
+        self.proc.poll.return_value = None
+        self.assertEqual(self.start_on("win32").status, 200)
+        self.assertIs(ts.LOGGER_PROC[0], self.proc)
+        self.assertFalse(os.path.exists(self.status_file))
+        r = self.start_on("win32")
+        self.assertEqual((r.status, r.json), (409, {"error": "the logger already runs"}))
+        self.popen.assert_called_once()
+
+    def test_a_logger_that_has_exited_may_be_started_again(self):
+        self.proc.poll.return_value = None
+        self.assertEqual(self.start_on("win32").status, 200)
+        self.proc.poll.return_value = 0
+        self.assertEqual(self.start_on("win32").status, 200)
+        self.assertEqual(self.popen.call_count, 2)
+
+    def test_two_starts_at_the_same_time_start_one_logger(self):
+        self.proc.poll.return_value = None
+        self.popen.side_effect = lambda args, **kw: (time.sleep(0.3), self.proc)[1]
+        start, results = threading.Barrier(2), []
+
+        def send():
+            start.wait(5)
+            results.append(self.post("/api/logger_start").status)
+        with mock.patch.object(sys, "platform", "win32"), \
+                mock.patch.object(ts.subprocess, "CREATE_NEW_PROCESS_GROUP", 0x200, create=True), \
+                mock.patch.object(ts.subprocess, "CREATE_NO_WINDOW", 0x08000000, create=True):
+            threads = [threading.Thread(target=send) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(10)
+        self.assertEqual(sorted(results), [200, 409])
+        self.popen.assert_called_once()
+
     def test_the_logger_script_is_the_logger_of_the_tools_folder(self):
         self.assertEqual(ts.LOGGER, tune.REPO / "tools" / "logger.py")
         self.assertTrue(ts.LOGGER.is_file())
@@ -2496,7 +2629,7 @@ class TestLoggerRoutes(LogCase):
     def test_start_uses_the_work_mods_and_logs_options_of_the_server(self):
         mods, logs = str(self.d / "m2"), str(self.d / "l2")
         ts.CONFIG.update(mods=mods, logs=logs)
-        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.start_on("win32").status, 200)
         args = self.popen.call_args[0][0]
         self.assertEqual(args[4:], ["--work", self.work, "--mods", clone_car.expand(mods), "--logs", clone_car.expand(logs)])
         self.assertTrue(os.path.isfile(os.path.join(logs, "logger_console.log")))
@@ -2504,7 +2637,7 @@ class TestLoggerRoutes(LogCase):
 
     def test_the_console_output_goes_to_the_log_file_opened_for_appending_and_closed_afterwards(self):
         self.write(self.console, "old line")
-        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.start_on("win32").status, 200)
         out = self.popen.call_args[1]["stdout"]
         self.assertEqual((out.name, out.mode), (os.path.join(clone_car.expand(self.logs), "logger_console.log"), "ab"))
         self.assertEqual(self.spawned, [{"stdout_closed": False, "stop_file": False}])
@@ -2514,7 +2647,7 @@ class TestLoggerRoutes(LogCase):
 
     def test_start_creates_the_logs_folder_and_the_log_file(self):
         self.assertFalse(os.path.exists(self.logs))
-        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.start_on("win32").status, 200)
         self.assertTrue(os.path.isfile(self.console))
 
     def test_on_windows_the_logger_gets_its_own_process_group_and_no_console_window(self):
@@ -2525,12 +2658,13 @@ class TestLoggerRoutes(LogCase):
         for platform in ("linux", "darwin"):
             with self.subTest(platform):
                 self.popen.reset_mock()
-                self.assertEqual(self.start_on(platform).status, 200)
+                with mock.patch.object(sys, "platform", platform):
+                    self.assertEqual(ts.spawn_logger(self.work, self.mods, self.logs), self.PID)
                 self.assertEqual(self.popen.call_args[1]["creationflags"], 0)
 
     def test_a_stale_stop_file_is_removed_before_the_logger_starts(self):
         self.write(self.stop_file, "")
-        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.start_on("win32").status, 200)
         self.assertEqual(self.spawned, [{"stdout_closed": False, "stop_file": False}])
         self.assertFalse(os.path.exists(self.stop_file))
 
@@ -2538,7 +2672,7 @@ class TestLoggerRoutes(LogCase):
         for status in ("logging", "waiting"):
             with self.subTest(status):
                 self.write(self.status_file, {"state": status, "file": None, "samples": 0, "started": time.time(), "updated": time.time(), "pid": 7})
-                r = self.start_on("linux")
+                r = self.start_on("win32")
                 self.assertEqual((r.status, r.json), (409, {"error": "the logger already runs"}))
         self.popen.assert_not_called()
         self.assertFalse(os.path.exists(self.console))
@@ -2546,31 +2680,31 @@ class TestLoggerRoutes(LogCase):
     def test_start_while_the_logger_runs_leaves_a_stop_file_alone(self):
         self.running()
         self.write(self.stop_file, "")
-        self.assertEqual(self.start_on("linux").status, 409)
+        self.assertEqual(self.start_on("win32").status, 409)
         self.assertTrue(os.path.exists(self.stop_file))
 
     def test_an_old_or_damaged_status_file_does_not_block_a_start(self):
         for text in (json.dumps({"state": "logging", "file": None, "samples": 0, "started": 1, "updated": time.time() - 30, "pid": 7}), "{not json"):
             with self.subTest(text):
                 self.write(self.status_file, text)
-                self.assertEqual(self.start_on("linux").status, 200)
+                self.assertEqual(self.start_on("win32").status, 200)
 
     def test_a_failing_spawn_is_a_500_with_the_text(self):
         self.popen.side_effect = OSError("cannot start the logger")
-        r = self.start_on("linux")
+        r = self.start_on("win32")
         self.assertEqual((r.status, r.json), (500, {"error": "cannot start the logger"}))
         self.assertTrue(self.popen.call_args[1]["stdout"].closed)
 
     def test_an_unexpandable_folder_is_a_500_and_starts_nothing(self):
         ts.CONFIG["mods"] = "%ACE_TEST_NO_SUCH_VAR%/m"
-        r = self.start_on("linux")
+        r = self.start_on("win32")
         self.assertEqual(r.status, 500)
         self.assertIn("cannot expand", r.json["error"])
         self.popen.assert_not_called()
 
     def test_start_does_not_wait_for_the_logger(self):
         started = time.monotonic()
-        self.assertEqual(self.start_on("linux").status, 200)
+        self.assertEqual(self.start_on("win32").status, 200)
         self.assertLess(time.monotonic() - started, 3)
         self.assertEqual(self.proc.method_calls, [])
 
@@ -2636,7 +2770,7 @@ class TestLoggerRoutes(LogCase):
         self.assertFalse(ts.base_present(self.work, "ks_y"))
         ts.JOB["state"] = "running"
         with ts.STATE_LOCK:
-            self.assertEqual(self.post("/api/logger_start", {"car": "ks_y"}).status, 200)
+            self.assertEqual(self.start_on("win32", {"car": "ks_y"}).status, 200)
             self.running()
             self.assertEqual(self.post("/api/logger_stop", {"car": "ks_y"}).status, 200)
         self.popen.reset_mock()
@@ -2749,6 +2883,20 @@ class TestLogFileRoute(LogCase):
             with self.subTest(path):
                 self.assertEqual((self.get(path).status, self.get(path).json), (400, {"error": "need file (text)"}))
 
+    def test_a_symbolic_link_is_404_and_its_target_is_not_read(self):
+        outside = os.path.join(str(self.d), "outside.txt")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("secret\n")
+        inside = self.put("real.jsonl", "{}\n")
+        symlink_or_skip(self, outside, os.path.join(self.logs, "link.jsonl"))
+        symlink_or_skip(self, inside, os.path.join(self.logs, "inner.jsonl"))
+        for name in ("link.jsonl", "inner.jsonl"):
+            with self.subTest(name):
+                r = self.fetch(name)
+                self.assertEqual((r.status, r.json), (404, {"error": "no session file %s" % name}))
+                self.assertNotIn(b"secret", r.data)
+        self.assertEqual(self.fetch("real.jsonl").status, 200)
+
     def test_a_missing_file_is_404_and_so_is_a_folder_with_such_a_name(self):
         r = self.fetch("nope.jsonl")
         self.assertEqual((r.status, r.json), (404, {"error": "no session file nope.jsonl"}))
@@ -2847,23 +2995,22 @@ class TestLogCopyRoute(CopyCase):
         self.assertEqual((r.status, r.headers.get("Content-Type"), r.json), (200, "application/json; charset=utf-8", {"copied": True, "file": "a.jsonl", "how": "file"}))
         self.run.assert_called_once()
         args, kw = self.run.call_args
-        self.assertEqual(args, (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -LiteralPath '%s'" % path],))
-        self.assertEqual(kw, {"capture_output": True, "text": True, "timeout": 15, "creationflags": self.NO_WINDOW})
+        self.assertEqual(args, (["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE"],))
+        self.assertEqual(kw, {"capture_output": True, "text": True, "timeout": 15, "creationflags": self.NO_WINDOW,
+                              "env": dict(os.environ, TUNER_CLIP_FILE=path)})
         self.assertEqual(ts.CLIPBOARD_TIMEOUT, 15)
 
-    def test_an_apostrophe_in_the_name_or_the_folder_is_doubled_in_the_command(self):
+    def test_an_apostrophe_in_the_name_or_the_folder_reaches_powershell_through_the_environment(self):
         path = self.put("it's.jsonl")
         self.assertEqual(self.copy_on("win32", "it's.jsonl").status, 200)
-        command = self.run.call_args[0][0][4]
-        self.assertEqual(command, "Set-Clipboard -LiteralPath '%s'" % path.replace("'", "''"))
-        self.assertIn("it''s.jsonl'", command)
-        self.assertTrue(command.endswith("'"))
+        self.assertEqual(self.run.call_args[0][0][4], "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE")
+        self.assertEqual(self.run.call_args[1]["env"]["TUNER_CLIP_FILE"], path)
         other = str(self.d / "o'brien")
         ts.CONFIG["logs"] = other
         self.write(os.path.join(other, "b.jsonl"), "{}\n")
         self.assertEqual(self.copy_on("win32", "b.jsonl").status, 200)
-        self.assertIn("o''brien", self.run.call_args[0][0][4])
-        self.assertNotIn("o'brien", self.run.call_args[0][0][4])
+        self.assertEqual(self.run.call_args[0][0][4], "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE")
+        self.assertIn("o'brien", self.run.call_args[1]["env"]["TUNER_CLIP_FILE"])
 
     def test_the_path_is_the_absolute_path_of_the_file_in_the_logs_folder_from_session_file_only(self):
         path = self.put("c.jsonl")
@@ -2871,7 +3018,49 @@ class TestLogCopyRoute(CopyCase):
             self.assertEqual(self.copy_on("win32", "c.jsonl").status, 200)
         spy.assert_called_once_with(clone_car.expand(self.logs), "c.jsonl")
         self.assertTrue(os.path.isabs(path))
-        self.assertIn("'%s'" % path, self.run.call_args[0][0][4])
+        self.assertEqual(self.run.call_args[1]["env"]["TUNER_CLIP_FILE"], path)
+
+    def test_no_part_of_the_path_is_in_the_command_whatever_characters_it_has(self):
+        names = ["it's.jsonl", "a`b.jsonl", "$env_x $(y).jsonl", "a;b.jsonl", "O\u2019Brien \u00e9\u4e2d.jsonl", "x'; calc ; '.jsonl",
+                 "\u2018q\u201a.jsonl", "a&b|c.jsonl"]
+        folder = str(self.d / "o'b`r$;\u00e9\u2019")
+        ts.CONFIG["logs"] = folder
+        for name in names:
+            with self.subTest(name):
+                self.write(os.path.join(folder, name), "{}\n")
+                self.assertEqual(self.copy_on("win32", name).status, 200)
+                args, kw = self.run.call_args
+                self.assertEqual(args[0], ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE"])
+                command = args[0][4]
+                for part in (name, os.path.splitext(name)[0], folder, os.path.basename(folder), "'", "`;"):
+                    self.assertNotIn(part, command)
+                self.assertEqual(kw["env"]["TUNER_CLIP_FILE"], os.path.abspath(os.path.join(folder, name)))
+
+    def test_the_environment_of_the_call_keeps_the_environment_of_the_server(self):
+        path = self.put()
+        with mock.patch.dict(os.environ, {"TUNER_TEST_KEEP": "kept"}):
+            ts.copy_file_to_clipboard(path)
+        env = self.run.call_args[1]["env"]
+        self.assertEqual((env["TUNER_TEST_KEEP"], env["TUNER_CLIP_FILE"]), ("kept", path))
+        self.assertNotIn("TUNER_CLIP_FILE", os.environ)
+
+    def test_a_path_that_is_a_powershell_attack_string_is_only_data(self):
+        path = "C:\\Users\\O\u2019Brien\\x'; Remove-Item -Recurse C:\\ ; `$(calc)\\a.jsonl"
+        ts.copy_file_to_clipboard(path)
+        command = self.run.call_args[0][0][4]
+        self.assertEqual(command, "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE")
+        self.assertEqual(self.run.call_args[1]["env"]["TUNER_CLIP_FILE"], path)
+
+    def test_a_symbolic_link_is_404_and_nothing_runs(self):
+        outside = os.path.join(str(self.d), "outside.txt")
+        with open(outside, "w", encoding="utf-8") as f:
+            f.write("secret\n")
+        self.put()
+        symlink_or_skip(self, outside, os.path.join(self.logs, "link.jsonl"))
+        r = self.copy_on("win32", "link.jsonl")
+        self.assertEqual((r.status, r.json), (404, {"error": "no session file link.jsonl"}))
+        self.run.assert_not_called()
+        self.assertEqual(self.copy_on("win32").status, 200)
 
     def test_the_powershell_call_is_one_small_function_and_no_shell_is_used(self):
         path = self.put()
@@ -4563,6 +4752,91 @@ class TestFramingHeaders(ServerCase):
         self.assertEqual(missing, [])
 
 
+class TestHardeningHeaders(ServerCase):
+    def setUp(self):
+        super().setUp()
+        self.make_car()
+
+    def replies(self):
+        return {"page": self.get("/"), "state": self.get("/api/state"), "404": self.get("/nothing"),
+                "403": self.get("/api/state", host="evil.example"), "400": self.post("/api/set", b"{bad"),
+                "202": self.post("/api/init"), "static": self.get("/favicon.png"), "redirect": self.get("/ACESCT"),
+                "405": self.request("PUT", "/api/state"),
+                "413": self.request("POST", "/api/set", None, headers={"Content-Length": str(ts.MAX_BODY + 1)}),
+                "415": self.post("/api/set", {}, headers={"Content-Type": "text/plain"}),
+                "501": self.request("BREW", "/ACESCT/")}
+
+    def test_every_response_says_nosniff_and_sends_no_referrer(self):
+        replies = self.replies()
+        self.assertEqual({label: r.status for label, r in replies.items()},
+                         {"page": 200, "state": 200, "404": 404, "403": 403, "400": 400, "202": 202, "static": 200, "redirect": 301,
+                          "405": 405, "413": 413, "415": 415, "501": 501})
+        wrong = [label for label, r in replies.items()
+                 if (r.headers.get("X-Content-Type-Options"), r.headers.get("Referrer-Policy")) != ("nosniff", "no-referrer")]
+        self.assertEqual(wrong, [])
+
+    def test_each_header_is_sent_once(self):
+        for label, r in self.replies().items():
+            with self.subTest(label):
+                self.assertEqual(r.headers.get_all("X-Content-Type-Options"), ["nosniff"])
+                self.assertEqual(r.headers.get_all("Referrer-Policy"), ["no-referrer"])
+                self.assertEqual(len(r.headers.get_all("X-Frame-Options")), 1)
+
+    def test_the_server_header_names_no_python_version(self):
+        for label, r in self.replies().items():
+            with self.subTest(label):
+                self.assertEqual(r.headers.get("Server", "").strip(), "TunerServer")
+                self.assertNotIn("Python", r.headers.get("Server", ""))
+        self.assertEqual(ts.Handler.sys_version, "")
+        self.assertEqual(ts.Handler.server_version, "TunerServer")
+
+
+class TestConnectionTimeout(ServerCase):
+    def raw(self, data):
+        sock = socket.create_connection(("127.0.0.1", self.port), timeout=5)
+        self.addCleanup(sock.close)
+        sock.sendall(data)
+        return sock
+
+    def closed_within(self, sock, seconds):
+        """The bytes the server sent until it closed the connection; fails when it is still open after seconds."""
+        sock.settimeout(seconds)
+        start, received = time.monotonic(), b""
+        try:
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return received, time.monotonic() - start
+                received += chunk
+        except socket.timeout:
+            self.fail("the server still holds the connection after %s s" % seconds)
+
+    def test_a_client_that_stops_sending_is_dropped_after_30_seconds(self):
+        self.assertEqual(ts.Handler.timeout, 30)
+
+    def test_a_half_request_line_is_closed_by_the_server_after_the_timeout(self):
+        with mock.patch.object(ts.Handler, "timeout", 0.3):
+            received, elapsed = self.closed_within(self.raw(b"GET /ACESCT/api/sta"), 5)
+        self.assertEqual(received, b"")
+        self.assertGreaterEqual(elapsed, 0.2)
+
+    def test_half_request_headers_are_closed_by_the_server_after_the_timeout(self):
+        with mock.patch.object(ts.Handler, "timeout", 0.3):
+            self.assertEqual(self.closed_within(self.raw(b"GET /ACESCT/ HTTP/1.1\r\nHost: x\r\n"), 5)[0], b"")
+
+    def test_a_short_body_does_not_hold_the_connection_for_ever(self):
+        head = ("POST /ACESCT/api/set HTTP/1.1\r\nHost: %s\r\nX-Tuner: 1\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\nabc"
+                % self.host)
+        with mock.patch.object(ts.Handler, "timeout", 0.3):
+            self.closed_within(self.raw(head.encode("ascii")), 5)
+
+    def test_a_silent_connection_does_not_stop_other_requests(self):
+        with mock.patch.object(ts.Handler, "timeout", 0.5):
+            idle = self.raw(b"")
+            self.assertEqual(self.get("/api/groups").status, 200)
+            self.closed_within(idle, 5)
+
+
 class TestGameRunning(unittest.TestCase):
     def run_with(self, result=None, error=None):
         run = mock.Mock(return_value=result, side_effect=error)
@@ -4953,8 +5227,16 @@ class StubServer:
 
 class TestServerClass(unittest.TestCase):
     def test_the_port_is_not_shared(self):
-        self.assertFalse(ts.Server.allow_reuse_address)
+        self.assertEqual(ts.Server.allow_reuse_address, os.name != "nt")
         self.assertTrue(issubclass(ts.Server, http.server.ThreadingHTTPServer))
+
+    def test_the_reuse_rule_is_false_on_windows_and_the_default_elsewhere(self):
+        tree = ast.parse(inspect.getsource(ts.Server))
+        node = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign) and n.targets[0].id == "allow_reuse_address")
+        expr = compile(ast.Expression(node.value), "<allow_reuse_address>", "eval")
+        for name, wanted in (("nt", False), ("posix", True)):
+            with self.subTest(name):
+                self.assertEqual(eval(expr, {"os": types.SimpleNamespace(name=name)}), wanted)
 
     def bind(self, name):
         server = ts.Server.__new__(ts.Server)
@@ -4990,6 +5272,79 @@ class TestRealServer(Env):
                     self.assertEqual(conn.getresponse().status, status)
                 finally:
                     conn.close()
+
+
+class TestServerRestartAndDisconnects(Env):
+    def serve(self, handler=ts.Handler, port=0):
+        server = ts.Server(("127.0.0.1", port), handler)
+        ts.CONFIG["port"] = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+        self.addCleanup(thread.join, 5)
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return server
+
+    def exchange(self, port):
+        data = ("GET /ACESCT/ HTTP/1.0\r\nHost: 127.0.0.1:%d\r\n\r\n" % port).encode("ascii")
+        sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+        try:
+            sock.sendall(data)
+            received = b""
+            while True:
+                chunk = sock.recv(4096)
+                if not chunk:
+                    return received
+                received += chunk
+        except ConnectionError:
+            return b""
+        finally:
+            sock.close()
+
+    @unittest.skipIf(os.name == "nt", "Windows binds exclusively and does not reuse the address")
+    def test_the_port_can_be_bound_again_at_once_after_a_page_was_served(self):
+        server = ts.Server(("127.0.0.1", 0), ts.Handler)
+        port = ts.CONFIG["port"] = server.server_address[1]
+        thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.02}, daemon=True)
+        thread.start()
+        self.assertTrue(self.exchange(port).startswith(b"HTTP/1.0 200"))
+        server.shutdown()
+        thread.join(5)
+        server.server_close()
+        again = ts.Server(("127.0.0.1", port), ts.Handler)
+        again.server_close()
+
+    def test_a_client_that_disconnects_inside_a_handler_prints_no_traceback(self):
+        for error in (BrokenPipeError("broken pipe"), ConnectionResetError("reset"), ConnectionAbortedError("aborted")):
+            with self.subTest(type(error).__name__):
+                class Dropping(ts.Handler):
+                    def do_GET(self):
+                        raise error
+                port = self.serve(Dropping).server_address[1]
+                self.exchange(port)
+                self.assertEqual(self.err.getvalue(), "")
+
+    def test_a_real_error_inside_a_handler_still_prints_its_traceback(self):
+        class Broken(ts.Handler):
+            def do_GET(self):
+                raise RuntimeError("handler bug")
+        port = self.serve(Broken).server_address[1]
+        self.exchange(port)
+        self.assertIn("Traceback", self.err.getvalue())
+        self.assertIn("RuntimeError: handler bug", self.err.getvalue())
+
+    def test_handle_error_is_quiet_for_connection_errors_only(self):
+        server = ts.Server.__new__(ts.Server)
+        for error, quiet in ((BrokenPipeError(), True), (ConnectionResetError(), True), (ConnectionAbortedError(), True),
+                             (OSError("disk"), False), (ValueError("x"), False), (TimeoutError(), False)):
+            with self.subTest(type(error).__name__):
+                self.err.seek(0)
+                self.err.truncate()
+                try:
+                    raise error
+                except Exception:
+                    server.handle_error(mock.Mock(), ("127.0.0.1", 1))
+                self.assertEqual(self.err.getvalue() == "", quiet)
 
 
 class TestMain(Env):
@@ -5028,6 +5383,26 @@ class TestMain(Env):
         self.assertIsNone(self.run_main(*self.argv, "--bind", "127.0.0.1"))
         self.assertEqual(StubServer.last.address, ("127.0.0.1", 8765))
         self.assertEqual(self.out.getvalue(), "tuner running on http://127.0.0.1:8765/ACESCT/\nstopped\n")
+
+    def test_a_loopback_bind_prints_its_own_address_and_no_home_network_lines(self):
+        self.lan = ["192.168.1.20"]
+        for bind in ("127.0.0.1", "localhost", "127.0.0.2"):
+            with self.subTest(bind):
+                self.out.seek(0)
+                self.out.truncate()
+                self.run_main(*self.argv, "--bind", bind)
+                self.assertEqual(self.out.getvalue(), "tuner running on http://%s:8765/ACESCT/\nstopped\n" % bind)
+
+    def test_a_bind_to_one_private_address_prints_that_address_only(self):
+        self.lan = ["192.168.1.20", "10.0.0.7"]
+        self.run_main(*self.argv, "--bind", "192.168.1.20")
+        self.assertEqual(self.out.getvalue(), "tuner running on http://192.168.1.20:8765/ACESCT/\nstopped\n")
+
+    def test_an_empty_bind_listens_on_every_address_and_prints_like_the_default(self):
+        self.run_main(*self.argv, "--bind", "")
+        self.assertEqual(StubServer.last.address, ("", 8765))
+        self.assertEqual(self.out.getvalue(), "tuner running on http://127.0.0.1:8765/ACESCT/\n"
+                         "reachable in the home network: http://192.168.1.20:8765/ACESCT/\nstopped\n")
 
     def test_bind_takes_any_address_of_the_option(self):
         self.run_main(*self.argv, "--bind", "192.168.1.20")

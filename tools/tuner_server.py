@@ -5,7 +5,7 @@ usage:
 
 Serves tuner/web/index.html at http://127.0.0.1:<port>/ACESCT/ (default port 8080, allowed 1024 to 65535) and, from other
 devices of the home network, at http://<address of the PC>:<port>/ACESCT/; --bind <address> (default 0.0.0.0, all IPv4
-addresses of the PC; 127.0.0.1 serves this PC only) is the address the server listens on. Everything is served below the
+addresses of the PC, as does an empty address; 127.0.0.1 serves this PC only) is the address the server listens on. Everything is served below the
 fixed base path /ACESCT: GET /ACESCT redirects (301) to /ACESCT/, GET / redirects (302) to /ACESCT/, every other path
 outside /ACESCT/ is a 404. Next to the page, GET /ACESCT/<name> serves six static files of tuner/web from a fixed table
 (no other file, no directory access): apple-touch-icon.png, icon-192.png, icon-512.png, favicon.png (image/png),
@@ -106,7 +106,8 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
   POST /api/logger_start  {}                              starts tools/logger.py in the background (own process group, no console
                         window, it outlives the page and the server; its console output is appended to <logs>/logger_console.log)
                         with this server's work, mods and logs folders; answers {"started": true, "pid": ...} at once, without
-                        waiting for the logger; 409 when the logger already runs (per the status file), 500 when it cannot be started
+                        waiting for the logger; 409 when the logger already runs (per the status file, or started by this server and still alive), 400 when the PC is not
+                        Windows, 500 when it cannot be started
   POST /api/logger_stop   {}                              asks the running logger to stop (creates <logs>/logger_stop); answers
                         {"stopping": true}; 409 when the logger is not running
   GET  /api/log_ai_command  the AI command ("text") built from tuner/log_ai_command.txt, tuner/log_glossary.json and the rows of the
@@ -138,8 +139,8 @@ loopback or private (192.168.x.x, 10.x.x.x, 172.16-31.x.x), and when the Host he
 configured port and a name that is localhost, a loopback or private IPv4 address, or the host name of this PC. Every POST
 needs the header X-Tuner: 1 and Content-Type application/json. One background job at a time; its state is kept until the
 next job starts. Apply refuses to run while AssettoCorsaEVO.exe is running.
-At start the server prints http://127.0.0.1:<port>/ACESCT/ and, unless --bind is 127.0.0.1, one line per private IPv4
-address of the PC: the address to open on the phone.
+At start the server prints http://<address>:<port>/ACESCT/ (the --bind address, 127.0.0.1 when it listens on all addresses)
+and, when it listens on all addresses, one line per private IPv4 address of the PC: the address to open on the phone.
 <work> defaults to %USERPROFILE%\\ace_modded_cars_work, <mods> to %USERPROFILE%\\Saved Games\\ACE\\mods, <logs> to the folder
 logs of the repository (the session files of the logger), <game> to the Steam default content.kspkg (see tune.py). Wrong arguments print the usage block and exit 2.
 Ctrl+C while a job runs waits for it; a second Ctrl+C aborts it.
@@ -197,6 +198,9 @@ JOB_LOCK = threading.Lock()
 STATE_LOCK = threading.Lock()
 # the poll path asks for the game at most every GAME_CHECK_SECONDS (longer than the idle poll of the page); Apply always asks fresh: [time of the last check, its result]
 GAME_CHECK = [float("-inf"), False]
+# the logger process this server started (a list so that it can be replaced) and the lock that makes the check and the start of api_logger_start one step
+LOGGER_PROC = [None]
+LOGGER_LOCK = threading.Lock()
 
 
 class ApiError(Exception):
@@ -264,7 +268,14 @@ def claim_job(kind):
     with JOB_LOCK:
         if JOB["state"] == "running":
             raise ApiError(409, "another job is running, wait until it has finished")
+        previous = {k: JOB[k] for k in ("kind", "state", "log", "result", "error")}
         JOB.update(kind=kind, state="running", log=[], result=None, error=None)
+    return previous
+
+
+def release_job(previous):
+    with JOB_LOCK:
+        JOB.update(previous)
 
 
 def log_line(text):
@@ -294,12 +305,16 @@ def job_thread(task):
         finish_job("done", result)
 
 
-def run_job(kind, task):
-    claim_job(kind)
+def start_job(task):
     thread = threading.Thread(target=job_thread, args=(task,), daemon=True)
     with JOB_LOCK:
         JOB["thread"] = thread
     thread.start()
+
+
+def run_job(kind, task):
+    claim_job(kind)
+    start_job(task)
 
 
 def refuse_while_job_runs():
@@ -522,10 +537,13 @@ def api_apply(car, body):
         raise ApiError(409, "close the game first, %s is running" % tune.GAME_EXE)
     if draft:
         refuse_while_job_runs()
-        target = new_target(work, car, new_id, suffix)
-    else:
-        target = update_target(work, car, tune_id)
-    run_job("apply", apply_task(car, target, draft))
+    previous = claim_job("apply")
+    try:
+        target = new_target(work, car, new_id, suffix) if draft else update_target(work, car, tune_id)
+    except Exception:
+        release_job(previous)
+        raise
+    start_job(apply_task(car, target, draft))
     return {"job": "started"}
 
 
@@ -825,11 +843,14 @@ def api_log_ai_command(car, tune_id):
 def log_file_path(name):
     logs = logs_dir()
     try:
-        return logconf.session_file(logs, name)
+        path = logconf.session_file(logs, name)
     except FileNotFoundError as e:
         raise ApiError(404, str(e)) from None
     except ValueError as e:
         raise ApiError(400, str(e)) from None
+    if os.path.islink(path):
+        raise ApiError(404, "no session file %s" % name)
+    return path
 
 
 def api_log_file(car, tune_id, query):
@@ -847,11 +868,12 @@ def api_log_file(car, tune_id, query):
 def copy_file_to_clipboard(path):
     """Puts the file on the Windows clipboard with PowerShell Set-Clipboard (pasting attaches the file); ApiError 500 with the error
     text when that fails."""
-    command = "Set-Clipboard -LiteralPath '%s'" % path.replace("'", "''")
+    command = "Set-Clipboard -LiteralPath $env:TUNER_CLIP_FILE"
     flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         res = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command], capture_output=True, text=True,
-                             timeout=CLIPBOARD_TIMEOUT, creationflags=flags)
+                             timeout=CLIPBOARD_TIMEOUT, creationflags=flags,
+                             env=dict(os.environ, TUNER_CLIP_FILE=path))
     except (subprocess.TimeoutExpired, OSError) as e:
         raise ApiError(500, str(e)) from None
     if res.returncode != 0:
@@ -876,15 +898,19 @@ def spawn_logger(work, mods, logs):
         proc = subprocess.Popen([sys.executable, "-I", "-B", str(LOGGER), "--work", work, "--mods", mods, "--logs", logs],
                                 cwd=str(tune.REPO), stdin=subprocess.DEVNULL, stdout=console, stderr=subprocess.STDOUT,
                                 close_fds=True, creationflags=flags)
+    LOGGER_PROC[0] = proc
     return proc.pid
 
 
 def api_logger_start(car, body):
+    if sys.platform != "win32":
+        raise ApiError(400, "the logger needs Windows")
     logs = logs_dir()
-    if logconf.logger_status(logs)["running"]:
-        raise ApiError(409, "the logger already runs")
-    logconf.clear_stop(logs)
-    return {"started": True, "pid": spawn_logger(CONFIG["work"], mods_dir(), logs)}
+    with LOGGER_LOCK:
+        if logconf.logger_status(logs)["running"] or (LOGGER_PROC[0] is not None and LOGGER_PROC[0].poll() is None):
+            raise ApiError(409, "the logger already runs")
+        logconf.clear_stop(logs)
+        return {"started": True, "pid": spawn_logger(CONFIG["work"], mods_dir(), logs)}
 
 
 def api_logger_stop(car, body):
@@ -995,6 +1021,9 @@ class Redirect(Exception):
 
 class Handler(http.server.BaseHTTPRequestHandler):
     server_version = "TunerServer"
+    sys_version = ""
+    # a client that stops sending is dropped after 30 s instead of holding a thread for ever
+    timeout = 30
     body_read = False
 
     def do_GET(self):
@@ -1023,7 +1052,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return {}
         try:
             body = json.loads(raw.decode("utf-8"))
-        except ValueError:
+        except (ValueError, RecursionError):
             raise ApiError(400, "body is not valid JSON") from None
         if not isinstance(body, dict):
             raise ApiError(400, "body must be a JSON object")
@@ -1092,6 +1121,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def end_headers(self):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Content-Security-Policy", "frame-ancestors 'none'")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
         http.server.BaseHTTPRequestHandler.end_headers(self)
 
     def send_payload(self, status, payload, headers=None):
@@ -1119,7 +1150,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 class Server(http.server.ThreadingHTTPServer):
-    allow_reuse_address = False
+    # Windows: no address reuse (another process could take the port), see server_bind; elsewhere the default keeps a restart possible while old connections are in TIME_WAIT
+    allow_reuse_address = os.name != "nt"
+
+    def handle_error(self, request, client_address):
+        if not issubclass(sys.exc_info()[0], ConnectionError):
+            http.server.ThreadingHTTPServer.handle_error(self, request, client_address)
 
     def server_bind(self):
         if os.name == "nt":
@@ -1150,6 +1186,14 @@ def wait_for_job():
         pass
 
 
+def print_urls(bind, port):
+    everywhere = bind in ("", DEFAULT_BIND)
+    print("tuner running on http://%s:%d%s/" % ("127.0.0.1" if everywhere else bind, port, BASE_PATH), flush=True)
+    if everywhere:
+        for address in lan_addresses():
+            print("reachable in the home network: http://%s:%d%s/" % (address, port, BASE_PATH), flush=True)
+
+
 def main():
     try:
         pos, opts = kspkg.parse_args(sys.argv[1:], ("port", "bind", "work", "mods", "logs", "game"))
@@ -1173,10 +1217,7 @@ def main():
         tune.load_cars_index(CONFIG["work"], CONFIG["game"])
     except (ValueError, OSError) as e:
         sys.exit("error: %s" % e)
-    print("tuner running on http://127.0.0.1:%d%s/" % (port, BASE_PATH), flush=True)
-    if bind != "127.0.0.1":
-        for address in lan_addresses():
-            print("reachable in the home network: http://%s:%d%s/" % (address, port, BASE_PATH), flush=True)
+    print_urls(bind, port)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

@@ -930,7 +930,7 @@ class TestInstallCars(unittest.TestCase):
     def test_every_job_kind_the_progress_panel_knows_is_started_by_the_server(self):
         kinds = set(re.findall(r'job\.kind === "(\w+)"', function_body("renderProgress")))
         self.assertEqual(kinds, {"apply", "init"})
-        self.assertEqual(kinds - set(re.findall(r'run_job\("(\w+)"', inspect.getsource(ts))), set())
+        self.assertEqual(kinds - set(re.findall(r'(?:run_job|claim_job)\("(\w+)"', inspect.getsource(ts))), set())
 
 
 class TestProgressDetails(unittest.TestCase):

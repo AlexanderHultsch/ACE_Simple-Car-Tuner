@@ -27,7 +27,7 @@ SOUNDS = {"turbo": "event:/parts/turbos/turbo_rx7"}
 CHANGES = {"since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}], "extras": [], "total": 1}
 BUILD_KEYS = ["snapshot_time", "package_time", "settings", "kit", "garage", "sounds", "changes"]
 MODDED_KEYS = ["matched", "modded", "stock_car", "tune_id", "default", "name_suffix", "values", "garage", "turbo_kit", "sounds", "build",
-               "game_process_start"]
+               "game_process_start", "rpm_max"]
 
 
 def suffix():
@@ -175,7 +175,7 @@ class TestTunerFactsOfAModdedCar(FactsCase):
             "garage": {"keys": ["own:fast", "stock:a|b"]}, "turbo_kit": {"donor": "ks_donor"}, "sounds": SOUNDS,
             "build": {"snapshot_time": SNAPSHOT_TIME, "settings": {"limiter": 8000}, "kit": KIT, "garage": GARAGE, "sounds": SOUNDS,
                       "changes": CHANGES},
-            "game_process_start": START})
+            "game_process_start": START, "rpm_max": None})
         self.assertRegex(package_time, ISO_OFFSET)
 
     def test_the_rows_are_read_for_the_stock_car_the_applicable_settings_and_the_tune_as_the_server_passes_it(self):
@@ -377,13 +377,13 @@ class TestDamagedParts(FactsCase):
     def test_a_damaged_state_of_an_unrelated_tune_still_gives_the_stock_match(self):
         self.write(tune.state_path(self.work, "ks_alpha", "ax_alp01"), "{")
         for name, want in (("Bravo Stock", "ks_bravo"), ("ks_bravo", "ks_bravo"), ("Alpha Stock", "ks_alpha"), ("KS_ALPHA", "ks_alpha")):
-            self.assertEqual(self.facts(name, START), {"matched": True, "modded": False, "stock_car": want, "game_process_start": START})
+            self.assertEqual(self.facts(name, START), {"matched": True, "modded": False, "stock_car": want, "game_process_start": START, "rpm_max": None})
 
     def test_a_car_that_exists_only_as_a_modded_car_with_a_damaged_state_is_unmatched_with_the_error(self):
         self.write(tune.state_path(self.work, "ks_alpha", "ax_alp01"), "{")
         for name in ("ax_alpha", "ax_alp01", "Alpha Stock Drift"):
             got = self.facts(name, START)
-            self.assertEqual(list(got), ["matched", "reason", "error", "game_process_start"])
+            self.assertEqual(list(got), ["matched", "reason", "error", "game_process_start", "rpm_max"])
             self.assertEqual((got["matched"], got["reason"], got["game_process_start"]), (False, "car not found in the tuner work folder", START))
             self.assertIn("tune_state.json", got["error"])
             json.dumps(logfacts.find_car(self.work, self.mods, name))
@@ -426,18 +426,18 @@ class TestDamagedParts(FactsCase):
     def test_a_catalogue_that_cannot_be_read_skips_the_modded_cars_but_not_the_stock_cars(self):
         self.patch(tune, "load_catalogue", mock.Mock(side_effect=ValueError("catalogue broken")))
         self.assertEqual(self.facts("ax_alpha", START), {"matched": False, "reason": "car not found in the tuner work folder",
-                                                         "error": "catalogue broken", "game_process_start": START})
-        self.assertEqual(self.facts("Bravo Stock", START), {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START})
+                                                         "error": "catalogue broken", "game_process_start": START, "rpm_max": None})
+        self.assertEqual(self.facts("Bravo Stock", START), {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START, "rpm_max": None})
 
     def test_a_failing_list_gives_an_unmatched_entry_with_the_reason_the_error_and_the_game_start(self):
         with mock.patch.object(tune, "list_modded", side_effect=ValueError("cannot expand the path 'x'")):
             got = self.facts("ax_alpha", START)
         self.assertEqual(got, {"matched": False, "reason": "car not found in the tuner work folder", "error": "cannot expand the path 'x'",
-                               "game_process_start": START})
+                               "game_process_start": START, "rpm_max": None})
 
     def test_any_other_failure_of_the_search_is_still_an_error_entry(self):
         with mock.patch.object(tune, "list_modded", side_effect=RuntimeError("boom")):
-            self.assertEqual(self.facts("ax_alpha", START), {"matched": False, "error": "boom", "game_process_start": START})
+            self.assertEqual(self.facts("ax_alpha", START), {"matched": False, "error": "boom", "game_process_start": START, "rpm_max": None})
 
     def test_a_package_time_that_cannot_be_read_is_an_error_in_the_build_part_only(self):
         tune.save_snapshot(self.work, "ks_alpha", "ax_alpha", snapshot())
@@ -447,15 +447,156 @@ class TestDamagedParts(FactsCase):
         self.assertEqual(got["values"]["limiter"]["value"], 8000)
 
 
+class TestRpmMax(FactsCase):
+    """The game reports a tuned car under the name of its stock car; the reported rev limiter tells the car is modded."""
+
+    def setUp(self):
+        super().setUp()
+        self.limiter_rows = [{"id": "name_suffix", "default": "MY"}, {"id": "limiter", "default": tune.to_f32(8100.0)}]
+        self.resolve_calls = []
+        self.patch(tune, "resolve_defaults", self.resolve_defaults)
+
+    def resolve_defaults(self, work, car_id, catalogue=None, game=None, hidden=False, tune=None):
+        self.resolve_calls.append((work, car_id, hidden, tune))
+        if isinstance(self.limiter_rows, Exception):
+            raise self.limiter_rows
+        return self.limiter_rows
+
+    def installed(self, tune_id, limiter_value, stock="ks_alpha"):
+        tune.save_snapshot(self.work, stock, tune_id, snapshot(settings={"limiter": limiter_value}))
+        self.package(tune_id)
+
+    def find(self, name, rpm_max):
+        got = logfacts.find_car(self.work, self.mods, name, rpm_max)
+        json.dumps(got)
+        return got
+
+    def test_without_rpm_max_a_stock_name_is_a_stock_car_and_nothing_is_read(self):
+        self.installed("ax_alpha", 8500)
+        self.assertEqual(self.find("Alpha Stock", None), {"matched": True, "modded": False, "stock_car": "ks_alpha"})
+        self.assertEqual(self.resolve_calls, [])
+
+    def test_a_rpm_max_that_is_not_positive_is_ignored(self):
+        for value in (0, -1, 0.0):
+            with self.subTest(value=value):
+                self.assertEqual(self.find("Alpha Stock", value), {"matched": True, "modded": False, "stock_car": "ks_alpha"})
+        self.assertEqual(self.resolve_calls, [])
+
+    def test_the_stock_limiter_is_read_hidden_from_the_stock_car(self):
+        self.find("Alpha Stock", 8100)
+        self.assertEqual(self.resolve_calls, [(self.work, "ks_alpha", True, None)])
+
+    def test_a_rpm_max_equal_to_the_stock_limiter_within_one_rpm_is_a_stock_car(self):
+        self.installed("ax_alpha", 8500)
+        for value in (8100, 8100.4, 8101, 8099, 8099.6):
+            with self.subTest(value=value):
+                self.assertEqual(self.find("Alpha Stock", value), {"matched": True, "modded": False, "stock_car": "ks_alpha"})
+
+    def test_a_rpm_max_two_rpm_off_is_a_modded_car(self):
+        self.assertTrue(self.find("Alpha Stock", 8102)["modded"])
+        self.assertTrue(self.find("Alpha Stock", 8098)["modded"])
+
+    def test_exactly_one_installed_tune_with_that_limiter_is_the_car(self):
+        self.installed("ax_alpha", 8500)
+        self.installed("ax_alp01", 9000)
+        self.assertEqual(self.find("Alpha Stock", 8500), {"matched": True, "modded": True, "stock_car": "ks_alpha", "matched_by": "rpm_max",
+                                                          "tune_id": "ax_alpha", "default": True, "name_suffix": "MY"})
+        self.assertEqual(self.find("Alpha Stock", 9000.4)["tune_id"], "ax_alp01")
+        self.assertEqual(self.find("Alpha Stock", 8501)["tune_id"], "ax_alpha")
+
+    def test_the_tuner_facts_of_such_a_car_have_values_and_build_and_the_rpm_max(self):
+        self.installed("ax_alp01", 8500)
+        got = logfacts.tuner_facts(self.work, self.mods, "Alpha Stock", START, 8500)
+        self.assertEqual(list(got), MODDED_KEYS[:3] + ["matched_by"] + MODDED_KEYS[3:])
+        self.assertEqual((got["matched_by"], got["tune_id"], got["default"], got["name_suffix"]), ("rpm_max", "ax_alp01", False, "Drift"))
+        self.assertEqual(got["build"]["settings"], {"limiter": 8500})
+        self.assertEqual(got["values"]["limiter"]["value"], 8000)
+        self.assertEqual((got["game_process_start"], got["rpm_max"]), (START, 8500))
+        self.assertEqual(self.row_calls[-1][1:], ("ks_alpha", self.catalogue, False, "ax_alp01"))
+
+    def test_no_installed_tune_with_that_limiter_is_a_modded_car_without_a_tune_and_without_values(self):
+        self.installed("ax_alpha", 8500)
+        got = logfacts.tuner_facts(self.work, self.mods, "Alpha Stock", START, 9999)
+        self.assertEqual(got, {"matched": True, "modded": True, "stock_car": "ks_alpha", "matched_by": "rpm_max", "tune_id": None, "default": None,
+                               "name_suffix": None, "game_process_start": START, "rpm_max": 9999})
+        self.assertEqual(self.row_calls, [])
+
+    def test_two_installed_tunes_with_that_limiter_are_not_told_apart(self):
+        self.installed("ax_alpha", 8500)
+        self.installed("ax_alp01", 8501)
+        got = logfacts.tuner_facts(self.work, self.mods, "Alpha Stock", None, 8500)
+        self.assertEqual((got["modded"], got["matched_by"], got["tune_id"], got["default"], got["name_suffix"]), (True, "rpm_max", None, None, None))
+        for key in ("values", "garage", "turbo_kit", "sounds", "build"):
+            self.assertNotIn(key, got)
+
+    def test_a_tune_that_is_built_but_not_installed_is_not_a_candidate(self):
+        tune.save_snapshot(self.work, "ks_alpha", "ax_alpha", snapshot(settings={"limiter": 8500}))
+        self.assertTrue(any(r["id"] == "ax_alpha" and not r["installed"] for r in tune.list_modded(self.work, self.mods)))
+        got = self.find("Alpha Stock", 8500)
+        self.assertEqual((got["modded"], got["tune_id"]), (True, None))
+        self.installed("ax_alp01", 8500)
+        self.assertEqual(self.find("Alpha Stock", 8500)["tune_id"], "ax_alp01")
+
+    def test_a_tune_without_a_snapshot_or_without_a_limiter_in_it_is_not_a_candidate(self):
+        self.package("ax_alpha")
+        self.assertIsNone(self.find("Alpha Stock", 8500)["tune_id"])
+        self.installed("ax_alp01", 8500)
+        tune.save_snapshot(self.work, "ks_alpha", "ax_alp01", snapshot(settings={"other": 1}))
+        self.assertIsNone(self.find("Alpha Stock", 8500)["tune_id"])
+
+    def test_a_tune_of_another_stock_car_is_not_a_candidate(self):
+        tune.save_state(self.work, "ks_bravo", {"name_suffix": "Bravo"}, "ax_brv01")
+        self.installed("ax_brv01", 8500, "ks_bravo")
+        self.assertIsNone(self.find("Alpha Stock", 8500)["tune_id"])
+        self.assertEqual(self.find("Bravo Stock", 8500)["tune_id"], "ax_brv01")
+
+    def test_a_stock_car_without_tunes_is_modded_by_its_limiter_without_a_tune(self):
+        self.assertEqual(self.find("ks_bravo", 7000), {"matched": True, "modded": True, "stock_car": "ks_bravo", "matched_by": "rpm_max",
+                                                        "tune_id": None, "default": None, "name_suffix": None})
+
+    def test_a_modded_match_by_id_or_label_is_not_changed_by_rpm_max(self):
+        self.installed("ax_alpha", 8500)
+        for name, tune_id in (("ax_alp01", "ax_alp01"), ("Alpha Stock Drift", "ax_alp01"), ("Alpha Stock MY", "ax_alpha")):
+            for value in (None, 8500, 9999):
+                with self.subTest(name=name, value=value):
+                    got = self.find(name, value)
+                    self.assertEqual(got["tune_id"], tune_id)
+                    self.assertNotIn("matched_by", got)
+        self.assertEqual(self.resolve_calls, [])
+
+    def test_a_car_without_a_limiter_row_or_with_unreadable_defaults_stays_a_stock_car(self):
+        want = {"matched": True, "modded": False, "stock_car": "ks_alpha"}
+        self.limiter_rows = [{"id": "name_suffix", "default": "MY"}]
+        self.assertEqual(self.find("Alpha Stock", 9999), want)
+        for error in (ValueError("no base car in x, run init first"), RuntimeError("boom")):
+            self.limiter_rows = error
+            self.assertEqual(self.find("Alpha Stock", 9999), want)
+
+    def test_an_unmatched_name_is_not_changed_by_rpm_max(self):
+        self.assertEqual(self.find("Gamma", 8500), {"matched": False, "reason": "car not found in the tuner work folder"})
+
+    def test_the_tuner_facts_have_the_rpm_max_as_given(self):
+        self.assertIsNone(self.facts("Bravo Stock")["rpm_max"])
+        self.assertEqual(logfacts.tuner_facts(self.work, self.mods, "Gamma", START, 8500)["rpm_max"], 8500)
+        self.assertEqual(logfacts.tuner_facts(self.work, self.mods, "ax_alpha", START, 8123.5)["rpm_max"], 8123.5)
+
+    def test_make_facts_passes_the_rpm_max_on(self):
+        with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call:
+            facts = logfacts.make_facts("W", "M", lambda: START)
+            facts("Some Car", 8500)
+            facts("Some Car")
+        self.assertEqual([c.args for c in call.call_args_list], [("W", "M", "Some Car", START, 8500), ("W", "M", "Some Car", START, None)])
+
+
 class TestOtherCars(FactsCase):
     def test_a_stock_car_has_the_found_keys_and_the_game_start_only(self):
-        self.assertEqual(self.facts("Bravo Stock", START), {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START})
-        self.assertEqual(self.facts("ks_alpha"), {"matched": True, "modded": False, "stock_car": "ks_alpha", "game_process_start": None})
+        self.assertEqual(self.facts("Bravo Stock", START), {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START, "rpm_max": None})
+        self.assertEqual(self.facts("ks_alpha"), {"matched": True, "modded": False, "stock_car": "ks_alpha", "game_process_start": None, "rpm_max": None})
         self.assertEqual(self.row_calls, [])
 
     def test_an_unmatched_car_has_the_reason_and_the_game_start_only(self):
         self.assertEqual(self.facts("Unknown Car", START),
-                         {"matched": False, "reason": "car not found in the tuner work folder", "game_process_start": START})
+                         {"matched": False, "reason": "car not found in the tuner work folder", "game_process_start": START, "rpm_max": None})
         self.assertEqual(self.facts("")["matched"], False)
         self.assertEqual(self.row_calls, [])
 
@@ -468,7 +609,7 @@ class TestOtherCars(FactsCase):
 
     def test_nothing_raises_for_a_missing_work_folder_or_mods_folder(self):
         got = logfacts.tuner_facts(str(self.d / "nowhere"), str(self.d / "no_mods"), "ax_alpha", START)
-        self.assertEqual(got, {"matched": False, "reason": "car not found in the tuner work folder", "game_process_start": START})
+        self.assertEqual(got, {"matched": False, "reason": "car not found in the tuner work folder", "game_process_start": START, "rpm_max": None})
 
     def test_a_car_name_that_is_not_text_is_an_error_entry(self):
         got = logfacts.tuner_facts(self.work, self.mods, None, START)
@@ -664,7 +805,7 @@ class TestMakeFacts(FactsCase):
 
         facts = logfacts.make_facts(self.work, self.mods, start)
         got = facts("Bravo Stock")
-        self.assertEqual(got, {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START})
+        self.assertEqual(got, {"matched": True, "modded": False, "stock_car": "ks_bravo", "game_process_start": START, "rpm_max": None})
         self.assertEqual(starts, [1])
         facts("ax_alpha")
         self.assertEqual(starts, [1, 1])
@@ -673,7 +814,7 @@ class TestMakeFacts(FactsCase):
         with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call:
             facts = logfacts.make_facts("W", "M", lambda: START)
             self.assertEqual(facts("Some Car"), {"matched": False})
-        call.assert_called_once_with("W", "M", "Some Car", START)
+        call.assert_called_once_with("W", "M", "Some Car", START, None)
 
     def test_the_default_start_is_the_game_process_start(self):
         self.assertIs(logfacts.make_facts.__defaults__[0], logfacts.game_process_start)

@@ -1,6 +1,6 @@
 """Tuner facts of the session header of the logger: which modded car of the tuner the game's car name is, with its effective settings, its garage tyres, turbo kit and sounds, its last build and the start time of the game process.
 
-Library module of tools/logger.py (no command line of its own). find_car(work, mods, car_name) matches the name the game reports (car_model) against the modded cars of tune.list_modded (id first, then label, spaces at the ends and case ignored) and then against the stock cars of the work folder (id or display name): {"matched": True, "modded": True, "stock_car", "tune_id", "default", "name_suffix"}, {"matched": True, "modded": False, "stock_car"} or {"matched": False, "reason"} (plus "error" when the modded cars could not be listed). tuner_facts(work, mods, car_name, game_start) is the dict stored under "tuner" in the header: find_car's keys and "game_process_start" (the argument), and for a modded car also "values" ({setting id: {"value", "default"}} of the applicable settings), "garage" ({"keys"} or None), "turbo_kit" ({"donor"} or None), "sounds" ({slot: option key}) and "build" ({"snapshot_time", "package_time" (the file time of <mods>/<tune id>.kspkg, local time with its UTC offset), "settings", "kit", "garage", "sounds", "changes"} of the snapshot of the last build, all None without one except "package_time"). A part that cannot be read is {"error": text} (the home folder shortened to ~) under its own key, the rest is kept; nothing raises. game_process_start() is the creation time of the game process (ISO text with the local UTC offset), None when it does not run. make_facts(work, mods) gives the function Logger takes as facts.
+Library module of tools/logger.py (no command line of its own). find_car(work, mods, car_name, rpm_max=None) matches the name the game reports (car_model) against the modded cars of tune.list_modded (id first, then label, spaces at the ends and case ignored) and then against the stock cars of the work folder (id or display name): {"matched": True, "modded": True, "stock_car", "tune_id", "default", "name_suffix"}, {"matched": True, "modded": False, "stock_car"} or {"matched": False, "reason"} (plus "error" when the modded cars could not be listed). The game reports a tuned car under the plain name of its stock car, so a stock match with a positive rpm_max (the rev limiter the game reports, channel rpm_max) is compared with the stock limiter of the car (the default of the setting limiter): when they differ by more than 1 rpm the car is modded and the result is {"matched": True, "modded": True, "stock_car", "matched_by": "rpm_max", "tune_id", "default", "name_suffix"}, where tune_id, default and name_suffix are those of the one installed tune of that stock car whose last build (snapshot) has that limiter, and None when none or several fit. tuner_facts(work, mods, car_name, game_start, rpm_max) is the dict stored under "tuner" in the header: find_car's keys and "game_process_start" and "rpm_max" (the arguments), and for a modded car with a tune_id also "values" ({setting id: {"value", "default"}} of the applicable settings), "garage" ({"keys"} or None), "turbo_kit" ({"donor"} or None), "sounds" ({slot: option key}) and "build" ({"snapshot_time", "package_time" (the file time of <mods>/<tune id>.kspkg, local time with its UTC offset), "settings", "kit", "garage", "sounds", "changes"} of the snapshot of the last build, all None without one except "package_time"). A part that cannot be read is {"error": text} (the home folder shortened to ~) under its own key, the rest is kept; nothing raises. game_process_start() is the creation time of the game process (ISO text with the local UTC offset), None when it does not run. make_facts(work, mods) gives the function Logger takes as facts.
 
 Stdlib only.
 """
@@ -118,11 +118,43 @@ def error_text(error):
     return str(error).replace(home, "~") if len(home) > 1 else str(error)
 
 
-def find_car(work, mods, car_name):
+def same_rpm(a, b):
+    return abs(round(a) - round(b)) <= 1
+
+
+def stock_limiter(work, stock_car):
+    """The default of the setting limiter of the stock car, None when the car has none or it cannot be read."""
+    try:
+        for row in tune.resolve_defaults(work, stock_car, tune.load_catalogue(), hidden=True):
+            if row["id"] == "limiter":
+                return row["default"]
+    except Exception:
+        pass
+    return None
+
+
+def tune_limiter(work, stock_car, tune_id):
+    """The limiter of the last build of the modded car, None without a snapshot or without that setting."""
+    snapshot = tune.load_snapshot(work, stock_car, tune_id)
+    value = None if snapshot is None else snapshot["settings"].get("limiter")
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def car_by_rpm_max(work, stock_car, rpm_max, modded):
+    """The result for a stock match whose reported rev limiter rpm_max is not the stock limiter, see the module docstring."""
+    fits = [row for row in modded if row["stock"] == stock_car and row["installed"]
+            and (limiter := tune_limiter(work, stock_car, row["id"])) is not None and same_rpm(limiter, rpm_max)]
+    row = fits[0] if len(fits) == 1 else {"id": None, "default": None, "name_suffix": None}
+    return {"matched": True, "modded": True, "stock_car": stock_car, "matched_by": "rpm_max", "tune_id": row["id"], "default": row["default"],
+            "name_suffix": row["name_suffix"]}
+
+
+def find_car(work, mods, car_name, rpm_max=None):
     """The car the game calls car_name (what car_model reports, trimmed and compared ignoring case): a modded car by id, then by
-    label (stock name, space, suffix), then a stock car of the work folder by id or display name. When the list of modded cars cannot
-    be read (a damaged tune_state.json, an unreadable catalogue) the stock cars are still searched, and an unmatched result then also
-    has "error": the text of that failure."""
+    label (stock name, space, suffix), then a stock car of the work folder by id or display name. A stock match with a positive
+    rpm_max that is not the stock limiter (more than 1 rpm off) is a modded car, see the module docstring. When the list of modded
+    cars cannot be read (a damaged tune_state.json, an unreadable catalogue) the stock cars are still searched, and an unmatched
+    result then also has "error": the text of that failure."""
     wanted = car_name.strip().lower()
     modded, error = [], None
     try:
@@ -137,7 +169,10 @@ def find_car(work, mods, car_name):
     folders = tune.car_folders(work)
     for car_id, name in stock_names(work, folders).items():
         if same_name(wanted, car_id) or same_name(wanted, name):
-            return {"matched": True, "modded": False, "stock_car": car_id}
+            limiter = stock_limiter(work, car_id) if isinstance(rpm_max, (int, float)) and rpm_max > 0 else None
+            if limiter is None or same_rpm(rpm_max, limiter):
+                return {"matched": True, "modded": False, "stock_car": car_id}
+            return car_by_rpm_max(work, car_id, rpm_max, modded)
     return {"matched": False, "reason": NOT_FOUND} if error is None else {"matched": False, "reason": NOT_FOUND, "error": error}
 
 
@@ -189,11 +224,11 @@ def build_facts(work, mods, stock_car, tune_id):
             "kit": snapshot["kit"], "garage": snapshot["garage"], "sounds": snapshot["sounds"], "changes": snapshot.get("changes")}
 
 
-def tuner_facts(work, mods, car_name, game_start=None):
+def tuner_facts(work, mods, car_name, game_start=None, rpm_max=None):
     """The "tuner" entry of the header, see the module docstring."""
     try:
-        facts = find_car(work, mods, car_name)
-        if facts["matched"] and facts["modded"]:
+        facts = find_car(work, mods, car_name, rpm_max)
+        if facts["matched"] and facts["modded"] and facts["tune_id"] is not None:
             tune_arg = None if facts["default"] else facts["tune_id"]
             facts["values"] = part(effective_values, work, facts["stock_car"], tune_arg)
             facts.update(state_parts(work, facts["stock_car"], tune_arg))
@@ -201,11 +236,12 @@ def tuner_facts(work, mods, car_name, game_start=None):
     except Exception as e:
         facts = {"matched": False, "error": error_text(e)}
     facts["game_process_start"] = game_start
+    facts["rpm_max"] = rpm_max
     return facts
 
 
 def make_facts(work, mods, start=game_process_start):
-    """The function Logger takes as facts: facts(car) = tuner_facts(work, mods, car, start())."""
-    def facts(car):
-        return tuner_facts(work, mods, car, start())
+    """The function Logger takes as facts: facts(car, rpm_max) = tuner_facts(work, mods, car, start(), rpm_max)."""
+    def facts(car, rpm_max=None):
+        return tuner_facts(work, mods, car, start(), rpm_max)
     return facts

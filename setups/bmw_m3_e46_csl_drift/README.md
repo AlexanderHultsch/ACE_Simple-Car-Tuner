@@ -20,7 +20,9 @@ The two files differ in one value: `driver_aids_off` is `true` in the build reco
 
 ## Restore on another PC
 
-1. Install the game, start `start_tuner.bat` once so the work folder exists, and use "Install car" on the BMW M3 E46 CSL and on the BMW M4 CSL (the donor of the turbo kit) in the page.
+1. Install the game, start `start_tuner.bat` once so the work folder exists, and use "Install car" on the BMW M3 E46 CSL, on the BMW M4 CSL (the donor of the turbo kit) and on the Audi Sport quattro (the car of the turbo sound `turbo_quattro`; without it Apply refuses with "the saved turbo sound ... is no longer available") in the page.
 2. Stop the tuner. Copy `setup.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\tune_state.json` (the file name must be exactly that; it is git-ignored in the repository, which is why the copy here is called `setup.json`).
 3. Start the tuner, select the BMW M3 E46 CSL (it appears under Modded Cars as "BMW M3 E46 CSL Drift"), check that the table shows the values above, then Apply with the game closed.
+Restored and driven on the gaming PC on 2026-11-19 (Brands Hatch): Alex says it feels very good, the differential can be felt, the Audi turbo sound is there and the extra power can be felt.
+
 4. A package built this way is not byte-identical to the one built on 2026-11-15 (new build time), but it has the same content if the same tuner version and game version are used. Never commit the package: it contains Kunos data.

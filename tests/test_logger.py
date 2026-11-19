@@ -263,7 +263,7 @@ class TestSessionStart(LoggerCase):
     def test_the_facts_function_gets_the_car_and_its_result_is_the_tuner_entry(self):
         calls = []
 
-        def facts(car):
+        def facts(car, rpm_max=None):
             calls.append(car)
             return {"matched": True, "tune": "ax01"}
 
@@ -272,10 +272,26 @@ class TestSessionStart(LoggerCase):
         self.assertEqual(calls, ["BMW M4 CSL"])
         self.assertEqual(self.records()[0]["tuner"], {"matched": True, "tune": "ax01"})
 
+    def test_the_facts_function_gets_the_rev_limiter_the_game_reports(self):
+        calls = []
+
+        def facts(car, rpm_max):
+            calls.append((car, rpm_max))
+            return {"matched": True}
+
+        self.game.ph.currentMaxRpm = 8500
+        self.logger = self.make(facts=facts)
+        self.logger.step()
+        self.assertEqual(calls, [("BMW M4 CSL", 8500)])
+
+    def test_without_a_facts_function_the_tuner_entry_is_not_matched(self):
+        self.logger.step()
+        self.assertEqual(self.records()[0]["tuner"], {"matched": False})
+
     def test_the_home_folder_is_shortened_in_the_error_of_the_facts(self):
         home = os.path.join(os.path.dirname(self.work), "home")
 
-        def facts(car):
+        def facts(car, rpm_max=None):
             raise RuntimeError("cannot read %s" % os.path.join(home, "work", "x.json"))
 
         self.logger = self.make(facts=facts)
@@ -285,7 +301,7 @@ class TestSessionStart(LoggerCase):
         self.assertEqual(error, "cannot read %s" % os.path.join("~", "work", "x.json"))
 
     def test_facts_that_raise_are_stored_as_an_error_and_logging_goes_on(self):
-        def facts(car):
+        def facts(car, rpm_max=None):
             raise RuntimeError("no tune here")
 
         self.logger = self.make(facts=facts)
@@ -1274,7 +1290,7 @@ class TestMain(unittest.TestCase):
         with mock.patch.object(logfacts, "tuner_facts", return_value={"matched": False}) as call, \
                 mock.patch.object(logfacts, "process_id", return_value=None):
             self.assertEqual(facts("Some Car"), {"matched": False})
-        self.assertEqual(call.call_args.args, (os.path.abspath("w"), os.path.abspath("m"), "Some Car", None))
+        self.assertEqual(call.call_args.args, (os.path.abspath("w"), os.path.abspath("m"), "Some Car", None, None))
 
     def test_an_unexpandable_mods_folder_is_an_error_line_before_anything_starts(self):
         code, out, err = run_main("--mods", "%ACET_NO_SUCH_VAR%/m")

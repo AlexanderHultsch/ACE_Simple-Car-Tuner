@@ -10,7 +10,7 @@ line. A new file starts when the car, the track or the session changes, or when 
 --work is the work folder (default %USERPROFILE%\ace_modded_cars_work; the choice of the Logging tab, log_config.json, is read from
 it when a session starts), --mods the mods folder of the game (default %USERPROFILE%\Saved Games\ACE\mods; only the file time of
 <id>.kspkg is read), --logs the folder of the session files (default: the folder logs of the repository). The "tuner" entry of the
-header (tools/logfacts.py) says which modded car of the tuner the game's car name is and holds its effective settings with their
+header (tools/logfacts.py) says which modded car of the tuner the game's car name is (a tuned car is recognised by the rev limiter the game reports) and holds its effective settings with their
 stock defaults, garage tyres, turbo kit, sounds, the data of its last build (snapshot, package file time, changes) and the start time
 of the game process; a car that is not found in the work folder has "matched": false and a reason. While it runs the logger writes
 <logs>/logger_status.json once a second and removes it when it stops; once a second it also looks for the empty file <logs>/logger_stop (the Logging tab creates it) and, when it is there, deletes it and stops like Ctrl+C does. The game's memory is only read, never written.
@@ -68,7 +68,7 @@ def utc_offset(moment):
     return "%s%02d:%02d" % (sign, seconds // 3600, seconds % 3600 // 60)
 
 
-def no_facts(car):
+def no_facts(car, rpm_max=None):
     return {"matched": False}
 
 
@@ -90,7 +90,7 @@ class Session:
 
 
 class Logger:
-    """One tick per step(). open_source() returns an object with read() (the three blocks) and close(); facts(car) gives
+    """One tick per step(). open_source() returns an object with read() (the three blocks) and close(); facts(car, rpm_max) gives
     the tuner facts of the header; clock() is a monotonic time in seconds, wall() an aware local datetime, out(text) prints a line."""
 
     def __init__(self, work, logs, open_source=ace_shm.open_source, facts=None, clock=time.monotonic, wall=None,
@@ -141,7 +141,7 @@ class Logger:
             if self.session is not None and key != self.session.key:
                 self.end("car, track or session changed", now)
             if self.session is None:
-                self.begin(key, info, now)
+                self.begin(key, info, now, ace_shm.channels(physics, graphics)["rpm_max"])
         session = self.session
         if session is None:
             self.heartbeat("waiting", None, 0, self.started, now)
@@ -200,13 +200,13 @@ class Logger:
             name = "%s-%d.jsonl" % (stem, number)
         return name
 
-    def tuner_facts(self, car):
+    def tuner_facts(self, car, rpm_max):
         try:
-            return self.facts(car)
+            return self.facts(car, rpm_max)
         except Exception as e:
             return {"matched": False, "error": logfacts.error_text(e)}
 
-    def begin(self, key, info, now):
+    def begin(self, key, info, now, rpm_max):
         table = logconf.load_channels()
         config = logconf.load_config(self.work, table)
         selection = logconf.selected_channels(table, config)
@@ -221,7 +221,7 @@ class Logger:
                                                "logger_version": LOGGER_VERSION,
                                                "config": {"rate_hz": config["rate_hz"], "ticked": config["ticked"],
                                                           "once": session.once, "live": session.live}},
-                                  "tuner": self.tuner_facts(info["car"])})
+                                  "tuner": self.tuner_facts(info["car"], rpm_max)})
         self.status_at = float("-inf")
         self.out("session started: %s" % name)
 

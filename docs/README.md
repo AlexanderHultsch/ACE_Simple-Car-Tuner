@@ -20,7 +20,7 @@ Pick a car, change what matters to the way it drives, and take your own version 
 
 ## Get started
 
-1. You need Windows, **Assetto Corsa EVO** with its **SDK** (both from Steam) and **Python 3.12**.
+1. You need Windows, **Assetto Corsa EVO** (from Steam; its SDK is optional) and **Python 3.9 or newer**.
 2. One time only: read the field names out of the SDK with a single command (see the [user guide](USER_GUIDE.md)).
 3. Double-click **`start_tuner.bat`**.
 4. Pick a car, change some values, press **Create modded car**, start the game and drive.

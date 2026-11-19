@@ -1,16 +1,18 @@
 @echo off
 rem Starts the tuner server (all cars) and opens the tuner page in the default browser.
-set "PY=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-set "PORT=8080"
+rem Optional: full path of python.exe (Python 3.9 or newer); empty = find it (py launcher, PATH, the usual install folders).
+set "PY="
+set "PORT=8090"
 rem Optional: full path of the game package content.kspkg when the game is not in the default Steam folder.
 set "GAME="
-if not exist "%PY%" (
-    echo Python not found at "%PY%".
-    echo Install Python 3.12 for the current user, or edit the PY line in this file.
+cd /d "%~dp0"
+call "%~dp0tools\find_python.bat"
+if not defined PY (
+    echo Python 3.9 or newer not found.
+    echo Install Python from python.org, or set the PY line in this file to the full path of python.exe.
     pause
     exit /b 1
 )
-cd /d "%~dp0"
 start "" /min cmd /c "ping -n 3 127.0.0.1 >nul & start http://127.0.0.1:%PORT%/ACESCT/"
 echo After the first start Windows asks whether Python may use the private network: choose Allow. Other devices then open the address the server prints.
 if defined GAME (

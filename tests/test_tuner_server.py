@@ -5433,10 +5433,10 @@ class TestMain(Env):
         self.run_main(*self.argv)
         self.assertEqual((ts.CONFIG["port"], ts.CONFIG["work"], ts.CONFIG["mods"]), (8765, os.path.abspath(self.work), self.mods))
 
-    def test_the_default_port_is_8080(self):
+    def test_the_default_port_is_8090(self):
         self.run_main("--work", self.work)
-        self.assertEqual((ts.DEFAULT_PORT, StubServer.last.address), (8080, ("0.0.0.0", 8080)))
-        self.assertIn("http://127.0.0.1:8080/ACESCT/\n", self.out.getvalue())
+        self.assertEqual((ts.DEFAULT_PORT, StubServer.last.address), (8090, ("0.0.0.0", 8090)))
+        self.assertIn("http://127.0.0.1:8090/ACESCT/\n", self.out.getvalue())
 
     def test_ctrl_c_closes_the_server_and_returns(self):
         self.assertIsNone(self.run_main(*self.argv))
@@ -5600,8 +5600,8 @@ class TestUsageText(unittest.TestCase):
         self.assertIn("[--logs <dir>]", USAGE)
 
     def test_the_documented_defaults_match_the_code(self):
-        self.assertIn("default port 8080", ts.__doc__)
-        self.assertEqual(ts.DEFAULT_PORT, 8080)
+        self.assertIn("default port 8090", ts.__doc__)
+        self.assertEqual(ts.DEFAULT_PORT, 8090)
         self.assertIn("--bind <address> (default 0.0.0.0", ts.__doc__)
         self.assertIn("http://127.0.0.1:<port>/ACESCT/", ts.__doc__)
         self.assertIn("http://<address of the PC>:<port>/ACESCT/", ts.__doc__)

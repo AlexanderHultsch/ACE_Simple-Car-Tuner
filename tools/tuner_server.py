@@ -3,7 +3,7 @@
 usage:
   python tools/tuner_server.py [--port N] [--bind <address>] [--work <dir>] [--mods <dir>] [--logs <dir>] [--game <content.kspkg>]
 
-Serves tuner/web/index.html at http://127.0.0.1:<port>/ACESCT/ (default port 8080, allowed 1024 to 65535) and, from other
+Serves tuner/web/index.html at http://127.0.0.1:<port>/ACESCT/ (default port 8090, allowed 1024 to 65535) and, from other
 devices of the home network, at http://<address of the PC>:<port>/ACESCT/; --bind <address> (default 0.0.0.0, all IPv4
 addresses of the PC, as does an empty address; 127.0.0.1 serves this PC only) is the address the server listens on. Everything is served below the
 fixed base path /ACESCT: GET /ACESCT redirects (301) to /ACESCT/, GET / redirects (302) to /ACESCT/, every other path
@@ -182,7 +182,7 @@ STATIC_FILES = {"/apple-touch-icon.png": (WEB / "apple-touch-icon.png", "image/p
                 "/favicon.png": (WEB / "favicon.png", "image/png"),
                 "/favicon.ico": (WEB / "favicon.ico", "image/x-icon"),
                 "/manifest.webmanifest": (WEB / "manifest.webmanifest", "application/manifest+json")}
-DEFAULT_PORT = 8080
+DEFAULT_PORT = 8090
 DEFAULT_BIND = "0.0.0.0"
 BASE_PATH = "/ACESCT"
 GAME_CHECK_SECONDS = 15.0

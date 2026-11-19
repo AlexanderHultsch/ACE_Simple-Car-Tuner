@@ -2193,7 +2193,7 @@ class TestLogConfigRoute(LogCase):
     def test_only_direct_settings_and_extra_rows_are_tickable_in_the_answer(self):
         r = self.get("/api/log_config")
         direct = [row["id"] for g in r.json["groups"][2:] for row in g["rows"] if row["tickable"]]
-        self.assertEqual(len(direct), 29)
+        self.assertEqual(len(direct), 31)
         self.assertIn("limiter", direct)
         self.assertNotIn("gear_1", direct)
 

@@ -103,6 +103,8 @@
     "arb_stiffness_rear": {"status": "indirect", "note": "only its effect is visible: susp_travel, wheel_load, roll_deg, pitch_deg", "once": [], "live": []},
     "camber_front": {"status": "direct", "note": "", "once": ["camber_deg"], "live": ["camber_deg", "slip_angle_deg", "wheel_load"]},
     "camber_rear": {"status": "direct", "note": "", "once": ["camber_deg"], "live": ["camber_deg", "slip_angle_deg", "wheel_load"]},
+    "static_camber_front": {"status": "direct", "note": "", "once": ["camber_deg"], "live": ["camber_deg", "slip_angle_deg", "wheel_load"]},
+    "static_camber_rear": {"status": "direct", "note": "", "once": ["camber_deg"], "live": ["camber_deg", "slip_angle_deg", "wheel_load"]},
     "toe_front": {"status": "none", "note": "not published by the game", "once": [], "live": []},
     "toe_rear": {"status": "none", "note": "not published by the game", "once": [], "live": []},
     "tyre_pressure_front": {"status": "direct", "note": "", "once": ["tyre_pressure_psi"], "live": ["tyre_pressure_psi", "tyre_temp_core"]},

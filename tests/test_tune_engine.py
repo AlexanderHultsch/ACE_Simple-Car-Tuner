@@ -2420,6 +2420,18 @@ class TestApply(CarCase):
         item = [a for a in res["applied"] if a["id"] == "aids"][0]
         self.assertEqual((item["old"], item["new"], sorted(item["files"])), (False, True, ["data/setup.carsetup", "data/x.car"]))
 
+    def test_the_static_camber_settings_write_both_wheels_of_their_axle(self):
+        real = [s for s in REAL_LOAD_CATALOGUE()["settings"] if s["id"] in ("static_camber_front", "static_camber_rear")]
+        self.assertEqual([s["id"] for s in real], ["static_camber_front", "static_camber_rear"])
+        self.setup["alignments"] = [{"camber": -1.0, "static_camber": -1.5 - i / 10} for i in range(4)]
+        res = self.apply(self.settings(*real), {"static_camber_front": -3.5, "static_camber_rear": -2.0})
+        alignments = self.built(res, "data/setup.carsetup")["alignments"]
+        self.assertEqual([a["static_camber"] for a in alignments], [-3.5, -3.5, -2.0, -2.0])
+        self.assertEqual([a["camber"] for a in alignments], [-1.0] * 4)
+        items = {a["id"]: a for a in res["applied"]}
+        self.assertEqual((items["static_camber_front"]["old"], items["static_camber_front"]["new"]), (-1.5, -3.5))
+        self.assertEqual((items["static_camber_rear"]["old"], items["static_camber_rear"]["new"]), (-1.7, -2.0))
+
     def test_flag_that_is_off_writes_nothing(self):
         res = self.apply(self.settings(self.flag()), {"aids": False})
         self.assertEqual((res["applied"], self.fc.saved), ([], []))

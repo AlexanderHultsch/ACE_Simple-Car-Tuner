@@ -325,7 +325,7 @@ class TestCatalogueData(unittest.TestCase):
                          {"Meta": 2, "Display": 2, "Engine": 10, "Turbo": 3, "Gearbox & clutch": 14, "Differential": 6,
                           "Differential (hardware)": 6, "Steering": 5, "Brakes": 6, "Vehicle (hardware)": 1,
                           "Springs & anti-roll": 12, "Ride height & bump stops": 12, "Dampers": 8, "Suspension (physical)": 12,
-                          "Alignment & tyres": 15, "Tyres": 24, "Fuel": 1, "Electronics": 4})
+                          "Alignment & tyres": 17, "Tyres": 24, "Fuel": 1, "Electronics": 4})
 
     def test_ui_hint_is_header(self):
         self.assertEqual({s["ui"] for s in SETTINGS if "ui" in s}, {"header"})

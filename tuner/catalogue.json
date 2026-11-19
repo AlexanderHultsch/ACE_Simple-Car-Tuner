@@ -888,7 +888,7 @@
     },
     {
       "id": "camber_front", "group": "Alignment & tyres", "label": "Front camber", "kind": "value", "type": "float", "unit": "deg",
-      "description": "Default setup: front wheel tilt (both wheels). More negative tilts the top of the wheel inward, which gives more grip in corners and less on straights.",
+      "description": "Default setup: target front camber (setup alignments.camber, both front wheels), the value the editor's Auto Setup computes static_camber_front from. Measured on the BMW M3 E46 CSL (2026-11-19): the game does not drive with this value; change static_camber_front to move the wheel. More negative tilts the top of the wheel inward, which gives more grip in corners and less on straights.",
       "verified": true, "min": -8, "max": 2,
       "targets": [
         {"file": "@setup", "path": "alignments[0].camber"},
@@ -897,11 +897,29 @@
     },
     {
       "id": "camber_rear", "group": "Alignment & tyres", "label": "Rear camber", "kind": "value", "type": "float", "unit": "deg",
-      "description": "Default setup: rear wheel tilt (both wheels). More negative tilts the top of the wheel inward, which gives more cornering grip and less straight-line grip at the rear.",
+      "description": "Default setup: target rear camber (setup alignments.camber, both rear wheels), the value the editor's Auto Setup computes static_camber_rear from. Measured on the BMW M3 E46 CSL (2026-11-19): the game does not drive with this value; change static_camber_rear to move the wheel. More negative tilts the top of the wheel inward, which gives more cornering grip and less straight-line grip at the rear.",
       "verified": true, "min": -8, "max": 2,
       "targets": [
         {"file": "@setup", "path": "alignments[2].camber"},
         {"file": "@setup", "path": "alignments[3].camber"}
+      ]
+    },
+    {
+      "id": "static_camber_front", "group": "Alignment & tyres", "label": "Front static camber", "kind": "value", "type": "float", "unit": "deg",
+      "description": "The static camber is computed by the editor's Auto Setup from the camber target. This is the default setup: static camber of the front wheels (setup alignments.static_camber, both front wheels), the camber the game drives with; the camber the car shows on the road is this value plus the change the suspension geometry gives at the current ride height. Measured on the BMW M3 E46 CSL (2026-11-19): changing camber_front alone had no effect in the game, changing this value is what moves the wheel. More negative tilts the top of the wheel inward.",
+      "verified": false, "min": -8, "max": 2,
+      "targets": [
+        {"file": "@setup", "path": "alignments[0].static_camber"},
+        {"file": "@setup", "path": "alignments[1].static_camber"}
+      ]
+    },
+    {
+      "id": "static_camber_rear", "group": "Alignment & tyres", "label": "Rear static camber", "kind": "value", "type": "float", "unit": "deg",
+      "description": "The static camber is computed by the editor's Auto Setup from the camber target. This is the default setup: static camber of the rear wheels (setup alignments.static_camber, both rear wheels), the camber the game drives with; the camber the car shows on the road is this value plus the change the suspension geometry gives at the current ride height. Measured on the BMW M3 E46 CSL (2026-11-19): changing camber_rear alone had no effect in the game, changing this value is what moves the wheel. More negative tilts the top of the wheel inward.",
+      "verified": false, "min": -8, "max": 2,
+      "targets": [
+        {"file": "@setup", "path": "alignments[2].static_camber"},
+        {"file": "@setup", "path": "alignments[3].static_camber"}
       ]
     },
     {

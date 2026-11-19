@@ -24,8 +24,8 @@
   "spring_rear": 55000.0,
   "ride_height_front": 130.0,
   "ride_height_rear": 135.0,
-  "collar_front": 108.778265,
-  "collar_rear": 53.570915,
+  "collar_front": 91.778265,
+  "collar_rear": 41.170915,
   "bump_stop_up_rate_front": 80.0,
   "bump_stop_down_rate_front": 500.0,
   "bump_stop_down_rate_rear": 500.0,
@@ -99,5 +99,7 @@
   "_sounds": {
     "turbo": "event:/parts/turbos/turbo_quattro"
   },
-  "car_mass": 1290.0
+  "car_mass": 1290.0,
+  "static_camber_front": -4.2,
+  "static_camber_rear": -0.5
 }

@@ -21,7 +21,7 @@ Pick a car, change what matters to the way it drives, and take your own version 
 ## Get started
 
 1. You need Windows, **Assetto Corsa EVO** (from Steam; its SDK is optional) and **Python 3.9 or newer**.
-2. One time only: read the field names out of the SDK with a single command (see the [user guide](USER_GUIDE.md)).
+2. One time only: read the field names out of the SDK or the game with a single command (see the [user guide](USER_GUIDE.md)).
 3. Double-click **`start_tuner.bat`**.
 4. Pick a car, change some values, press **Create modded car**, start the game and drive.
 
@@ -29,6 +29,7 @@ The full step-by-step guide is in the [user guide](USER_GUIDE.md). The project i
 
 ## More
 
+- Example setups: [BMW M3 E46 CSL Drift](../Saved_Setups/bmw_m3_e46_csl_drift/README.md) and [BMW M4 CSL Drift](../Saved_Setups/bmw_m4_csl_drift/README.md), two drift cars built and driven with the tuner, with what was measured in the game and how to load them.
 - [User guide](USER_GUIDE.md): installation, every button and the details.
 - [Project state](TUNER_SPEC.md): what works, what is verified, what is open.
 - [Handover](HANDOVER.md): notes for continuing the work.

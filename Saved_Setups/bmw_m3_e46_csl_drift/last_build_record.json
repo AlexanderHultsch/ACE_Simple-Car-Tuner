@@ -32,8 +32,8 @@
     "spring_rear": 55000.0,
     "ride_height_front": 130.0,
     "ride_height_rear": 135.0,
-    "collar_front": 108.778265,
-    "collar_rear": 53.570915,
+    "collar_front": 91.778265,
+    "collar_rear": 41.170915,
     "bump_stop_up_rate_front": 80.0,
     "bump_stop_down_rate_front": 500.0,
     "bump_stop_down_rate_rear": 500.0,
@@ -63,6 +63,8 @@
     "arb_stiffness_rear": 6000.0,
     "camber_front": -3.5,
     "camber_rear": -0.5,
+    "static_camber_front": -4.2,
+    "static_camber_rear": -0.5,
     "toe_front": 0.0,
     "toe_rear": 0.1,
     "tyre_pressure_front": 28.0,
@@ -94,8 +96,7 @@
     "tyre_thermal_curve_front": "supercar",
     "tyre_thermal_curve_rear": "supercar",
     "fuel_start": 29.0,
-    "tc_level": 0,
-    "driver_aids_off": true
+    "tc_level": 0
   },
   "kit": {
     "donor": "ks_bmw_m4_csl",
@@ -111,5 +112,27 @@
     "turbo": "event:/parts/turbos/turbo_quattro"
   },
   "name": "BMW M3 E46 CSL Drift",
-  "time": "2026-11-15T17:10:59Z"
+  "time": "2026-11-19T14:31:09Z",
+  "changes": {
+    "since": "last build",
+    "settings": [
+      {
+        "id": "collar_rear",
+        "from": 38.570915,
+        "to": 41.170915
+      },
+      {
+        "id": "static_camber_front",
+        "from": -2.5072165,
+        "to": -4.2
+      },
+      {
+        "id": "static_camber_rear",
+        "from": -1.0332735,
+        "to": -0.5
+      }
+    ],
+    "extras": [],
+    "total": 96
+  }
 }

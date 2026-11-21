@@ -49,6 +49,24 @@ def not_chained(test, exc):
     test.assertTrue(exc.__context__ is None or exc.__suppress_context__, "implicit exception chain: %r" % (exc.__context__,))
 
 
+def add_variant(fc, name="q_drift", note="Drift", parts=("engine", "setup", "geometry")):
+    """A second mechanical preset of the stub car whose forced parts replace the engine (with a turbo of its own), the setup and the suspension geometry."""
+    gp = fc.game_path
+    tunings = {"engine": {"engine": {"path": gp("data/DRIFT.carengine")}}, "setup": {"setup": {"path": gp("data/drift.carsetup")}},
+               "geometry": {"suspensions_geometry": {"geometry_path_front": gp("data/f.suspension"), "geometry_path_rear": gp("data/r.suspension")}},
+               "wing": {"wing": {"path": gp("data/w.wing")}}}
+    fc.add("presets/%s.mechanicalcarpreset" % name, {"note": note, "description": "Name Preset " + name,
+                                                    "car_specs": {"items": [{"key": "KEY_POWER", "value": 600.0}]},
+                                                    "forced_compatible_part_paths": [gp("presets/parts/%s_%s.compatiblepart" % (name, p)) for p in parts]})
+    for part in parts:
+        fc.add("presets/parts/%s_%s.compatiblepart" % (name, part), {"car_part_path": gp("presets/parts/%s_%s.carpart" % (name, part))})
+        fc.add("presets/parts/%s_%s.carpart" % (name, part), {"logic_parts": [{"tuning_part_path": gp("data/parts/%s_%s.tuningpart" % (name, part))}]})
+        fc.add("data/parts/%s_%s.tuningpart" % (name, part), tunings[part])
+    fc.add("data/drift.carengine", {"limiter": 8000.0, "minimum": 800, "turbos_to_load": [gp("data/drift.turbo")]})
+    fc.add("data/drift.turbo", {"max_boost": 1.8})
+    fc.add("data/drift.carsetup", {"alignments": [{"camber": -3.0, "pressure": 28.0}]})
+
+
 class Base(Sandbox):
     def setUp(self):
         super().setUp()
@@ -954,6 +972,97 @@ class TestResolveDefaults(CarCase):
 
     def test_renamed_replaces_the_old_id_case_insensitively(self):
         self.assertEqual(tune.renamed("data/KS_X_engine.car", "ks_x", "ax_x"), "data/ax_x_engine.car")
+
+
+# --------------------------------------------------------------------------------------------- variants
+class TestVariants(CarCase):
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(tune._resolved.clear)
+        self.engine["turbos_to_load"] = [self.fc.game_path("data/t0.turbo")]
+        self.fc.add("data/t0.turbo", {"max_boost": 0.8})
+        add_variant(self.fc)
+        self.cat = mini_catalogue(limiter(), mini_setting("camber", targets=[("@setup", "alignments[0].camber")]),
+                                  mini_setting("boost", targets=[("@turbo[0]", "max_boost")]),
+                                  mini_setting("power", targets=[("@mech_preset", "car_specs.items[key=KEY_POWER].value")]),
+                                  mini_setting("tyre", targets=[("@tyre_front", "modelData.Dy0")]))
+
+    def variants(self):
+        return {v["id"]: v for v in tune.list_variants(self.work, "ks_x")}
+
+    def defaults(self, **kw):
+        return {r["id"]: r["default"] for r in tune.resolve_defaults(self.work, "ks_x", self.cat, hidden=True, **kw)}
+
+    def test_the_variant_lists_its_role_files_and_the_members_not_shown(self):
+        self.assertEqual(tune.list_variants(self.work, "ks_x"),
+                         [{"id": "q_drift", "label": "Drift", "preset": "presets/q_drift.mechanicalcarpreset",
+                           "roles": {"@engine": "data/drift.carengine", "@setup": "data/drift.carsetup"},
+                           "not_shown": ["suspensions_geometry"], "error": None}])
+
+    def test_the_id_is_lower_case_and_the_label_the_description_without_a_note(self):
+        add_variant(self.fc, "q_Mixed", note="")
+        found = self.variants()["q_mixed"]
+        self.assertEqual((found["label"], found["preset"]), ("Name Preset q_Mixed", "presets/q_Mixed.mechanicalcarpreset"))
+
+    def test_a_car_with_only_the_base_preset_has_no_variants(self):
+        os.remove(os.path.join(self.fc.car_root, "presets", "q_drift.mechanicalcarpreset"))
+        self.assertEqual(tune.list_variants(self.work, "ks_x"), [])
+
+    def test_visual_only_presets_are_not_variants(self):
+        self.fc.add("presets/r_visual.mechanicalcarpreset", {"note": "Visual", "forced_compatible_part_paths": []})
+        add_variant(self.fc, "s_wing", "Wing", parts=("wing",))
+        self.assertEqual(list(self.variants()), ["q_drift"])
+
+    def test_variants_come_in_sorted_order_without_the_base_preset(self):
+        add_variant(self.fc, "q_a", "A", parts=("setup",))
+        self.assertEqual(list(self.variants()), ["q_a", "q_drift"])
+
+    def test_a_missing_file_on_the_way_is_the_error_of_that_preset_only(self):
+        add_variant(self.fc, "r_broken", "Broken", parts=("engine",))
+        os.remove(os.path.join(self.fc.car_root, "presets", "parts", "r_broken_engine.carpart"))
+        found = self.variants()
+        self.assertIsNone(found["q_drift"]["error"])
+        self.assertEqual((found["r_broken"]["label"], found["r_broken"]["roles"]), ("Broken", {}))
+        self.assertIn("r_broken_engine.carpart not found in", found["r_broken"]["error"])
+
+    def test_an_undecodable_tuning_part_and_a_missing_replacement_file_are_errors(self):
+        add_variant(self.fc, "r_bad", "Bad", parts=("setup",))
+        self.fc.add("data/parts/r_bad_setup.tuningpart", ValueError("r_bad_setup.tuningpart: wire type mismatch"))
+        add_variant(self.fc, "s_gone", "Gone", parts=("engine",))
+        os.remove(os.path.join(self.fc.car_root, "data", "drift.carengine"))
+        found = self.variants()
+        self.assertEqual(found["r_bad"]["error"], "r_bad_setup.tuningpart: wire type mismatch")
+        self.assertIn("DRIFT.carengine not found in", found["s_gone"]["error"])
+
+    def test_two_parts_naming_different_files_for_one_role_are_an_error(self):
+        add_variant(self.fc, "r_two", "Two", parts=("engine", "setup"))
+        self.fc.add("data/parts/r_two_setup.tuningpart", {"engine": {"path": self.fc.game_path("data/t0.turbo")}})
+        self.assertRegex(self.variants()["r_two"]["error"], r"two tuning parts override @engine with different files")
+
+    def test_the_variant_resolves_its_own_engine_turbo_setup_and_preset(self):
+        stock = self.defaults()
+        self.assertEqual((stock["limiter"], stock["boost"], stock["camber"], stock["power"]), (7000, 0.8, -1.5, 380.0))
+        var = self.defaults(variant="q_drift")
+        self.assertEqual((var["limiter"], var["boost"], var["camber"], var["power"]), (8000, 1.8, -3.0, 600.0))
+        self.assertEqual(var["tyre"], stock["tyre"])
+        self.assertEqual(self.defaults(), stock)
+
+    def test_variant_and_stock_rows_do_not_share_the_cache(self):
+        self.assertEqual(self.defaults(variant="q_drift")["limiter"], 8000)
+        self.assertEqual(self.defaults()["limiter"], 7000)
+        self.assertEqual(self.defaults(variant="q_drift")["limiter"], 8000)
+
+    def test_a_variant_cannot_be_combined_with_a_tune(self):
+        with self.assertRaisesRegex(ValueError, "variant"):
+            tune.resolve_defaults(self.work, "ks_x", self.cat, tune="ax_x", variant="q_drift")
+
+    def test_an_unknown_variant_and_a_variant_with_an_error_are_errors_naming_it(self):
+        with self.assertRaisesRegex(ValueError, "ks_x has no variant nope"):
+            self.defaults(variant="nope")
+        add_variant(self.fc, "r_broken", "Broken", parts=("engine",))
+        os.remove(os.path.join(self.fc.car_root, "presets", "parts", "r_broken_engine.carpart"))
+        with self.assertRaisesRegex(ValueError, "variant r_broken of ks_x cannot be read: .*r_broken_engine.carpart not found"):
+            self.defaults(variant="r_broken")
 
 
 # --------------------------------------------------------------------------------------------- resolve cache, effective_row
@@ -3375,6 +3484,31 @@ class TestCommands(CarCase):
         code, out, err = self.main("defaults", "--hidden")
         self.assertIn("  deep: @engine q.r: missing field 'q'\n", out)
 
+    def test_variants_prints_the_roles_the_members_not_shown_and_the_errors(self):
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        add_variant(self.fc)
+        add_variant(self.fc, "r_broken", "Broken", parts=("engine",))
+        os.remove(os.path.join(self.fc.car_root, "presets", "parts", "r_broken_engine.carpart"))
+        code, out, err = self.main("variants")
+        lines = out.splitlines()
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(lines[:6], ["q_drift: Drift", "  preset: presets/q_drift.mechanicalcarpreset", "  @engine = data/drift.carengine",
+                                     "  @setup = data/drift.carsetup", "  not shown: suspensions_geometry", "r_broken: Broken"])
+        self.assertTrue(lines[7].startswith("  error: ") and "r_broken_engine.carpart not found" in lines[7])
+
+    def test_variants_of_a_car_without_any_says_so(self):
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        self.assertEqual(self.main("variants"), (0, "ks_x has no variants\n", ""))
+
+    def test_defaults_with_a_variant_prints_its_values(self):
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        add_variant(self.fc)
+        code, out, err = self.main("defaults", "--variant", "q_drift")
+        self.assertEqual((code, err), (0, ""))
+        row = [c.strip() for c in next(l for l in out.splitlines() if l.startswith("limiter")).split(" | ")]
+        self.assertEqual(row[2], "8000")
+        self.assertEqual(self.main("defaults", "--variant", "nope")[::2], (1, "error: ks_x has no variant nope\n"))
+
     def test_defaults_lists_settings_whose_copies_differ(self):
         code, out, err = self.main("defaults")
         self.assertIn("copies differ in the stock data (1 setting(s), the default shown is the first required target):\n  m\n"
@@ -3695,7 +3829,7 @@ class TestUsageText(unittest.TestCase):
 
     def test_every_usage_line_is_a_command_main_dispatches(self):
         commands = [line.split()[2] for line in self.usage_lines()]
-        self.assertEqual(commands, ["cars", "init", "defaults", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
+        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
                                     "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "garage", "garage-set", "garage-reset", "turbo-donors",
                                     "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
         self.assertEqual(list(tune.COMMANDS), commands)
@@ -3740,6 +3874,8 @@ usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("unknown_command", ["fr
                                   ("option_without_value", ["show", "--car"]), ("tune_without_value", ["show", "--tune"]),
                                   ("cars_modded_with_tested", ["cars", "--modded", "--tested"]), ("duplicate_with_a_positional", ["duplicate", "x"]),
                                   ("duplicate_tune_with_draft", ["duplicate", "--tune", "ax01", "--draft"]), ("duplicate_with_all", ["duplicate", "--all"]),
+                                  ("defaults_with_variant_and_tune", ["defaults", "--variant", "q_drift", "--tune", "ax01"]),
+                                  ("variants_with_a_positional", ["variants", "x"]), ("variants_with_a_tune", ["variants", "--tune", "ax01"]),
                                   ("init_with_a_tune", ["init", "--tune", "ax01"]),
                                   ("cars_with_a_tune", ["cars", "--tune", "ax01"]), ("show_with_draft", ["show", "--draft"]),
                                   ("apply_with_new_id_without_value", ["apply", "--tune", "ax01", "--new-id"])), tune, real=("no_arguments",))

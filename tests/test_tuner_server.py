@@ -1853,6 +1853,113 @@ class TestSettingsOfTunes(TuneCase):
         self.assertEqual(held, [("ax01", True)])
 
 
+class TestVariants(TuneCase):
+    """The mechanical presets of a car (sub cars): listed in /api/state, shown read-only by /api/settings?variant=."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(ts.VARIANTS.clear)
+        self.addCleanup(tune._resolved.clear)
+        self.fc.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base"})
+        self.add_variant()
+
+    def add_variant(self, name="q_drift", note="Drift"):
+        gp = self.fc.game_path
+        self.fc.add("presets/%s.mechanicalcarpreset" % name, {"note": note, "description": "Name Preset " + name,
+                                                             "forced_compatible_part_paths": [gp("presets/parts/%s_engine.compatiblepart" % name)]})
+        self.fc.add("presets/parts/%s_engine.compatiblepart" % name, {"car_part_path": gp("presets/parts/%s_engine.carpart" % name)})
+        self.fc.add("presets/parts/%s_engine.carpart" % name, {"logic_parts": [{"tuning_part_path": gp("data/parts/%s_engine.tuningpart" % name)}]})
+        self.fc.add("data/parts/%s_engine.tuningpart" % name, {"engine": {"path": gp("data/drift.carengine")}})
+        self.fc.add("data/drift.carengine", {"limiter": 8000, "turbos_to_load": []})
+
+    def variants(self, car="ks_x"):
+        return next(c for c in self.get("/api/state").json["cars"] if c["id"] == car).get("variants")
+
+    def test_state_lists_the_variants_of_an_extracted_car(self):
+        self.assertEqual(self.variants(), [{"id": "q_drift", "label": "Drift", "error": None}])
+
+    def test_a_car_without_variants_has_an_empty_list_and_a_car_that_is_not_extracted_has_none(self):
+        os.remove(os.path.join(self.fc.car_root, "presets", "q_drift.mechanicalcarpreset"))
+        self.assertEqual(self.variants(), [])
+        self.assertIsNone(self.variants("ks_y"))
+
+    def test_a_variant_with_a_broken_chain_is_listed_with_its_error(self):
+        os.remove(os.path.join(self.fc.car_root, "presets", "parts", "q_drift_engine.carpart"))
+        found = self.variants()
+        self.assertEqual([(v["id"], v["label"]) for v in found], [("q_drift", "Drift")])
+        self.assertIn("q_drift_engine.carpart", found[0]["error"])
+
+    def test_state_does_not_fail_when_the_variants_cannot_be_listed(self):
+        with mock.patch.object(tune, "list_variants", side_effect=ValueError("broken")):
+            r = self.get("/api/state")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(next(c for c in r.json["cars"] if c["id"] == "ks_x")["variants"], [])
+
+    def test_the_variants_are_read_again_only_when_the_preset_or_part_files_change(self):
+        with mock.patch.object(tune, "list_variants", wraps=tune.list_variants) as listing:
+            for _ in range(3):
+                self.assertEqual(len(self.variants()), 1)
+            self.assertEqual(listing.call_count, 1)
+            with open(os.path.join(self.fc.car_root, "presets", "q_drift.mechanicalcarpreset"), "ab") as f:
+                f.write(b"x")
+            self.variants()
+            self.assertEqual(listing.call_count, 2)
+            with open(os.path.join(self.fc.car_root, "data", "parts", "q_drift_engine.tuningpart"), "ab") as f:
+                f.write(b"x")
+            self.variants()
+            self.assertEqual(listing.call_count, 3)
+
+    def test_the_variant_settings_show_the_values_of_the_variant_as_defaults_and_values(self):
+        self.make_tune(tune.DRAFT, {"limiter": 9000})
+        r = self.get("/api/settings?variant=q_drift")
+        rows = {x["id"]: x for x in r.json}
+        self.assertEqual(r.status, 200)
+        self.assertEqual((rows["limiter"]["default"], rows["limiter"]["value"], rows["limiter"]["changed"]), (8000, 8000, False))
+        self.assertEqual(set(rows["limiter"]), ROW_KEYS | {"min", "max", "copy_values"})
+        self.assertEqual([x["id"] for x in r.json], ["limiter", "aids_off", "name_suffix"])
+        self.assertEqual(self.get("/api/settings").json[0]["default"], 7000)
+
+    def test_the_variant_settings_carry_the_base_range_and_accept_the_draft_tune(self):
+        self.write(os.path.join(self.work, tune.RANGES_FILE), {"limiter": {"low": 5000, "high": 9000}})
+        r = self.get("/api/settings?tune=draft&variant=q_drift")
+        self.assertEqual(r.status, 200)
+        self.assertEqual(r.json[0]["base_range"], {"low": 5000, "high": 9000})
+
+    def test_a_variant_together_with_a_modded_car_is_400(self):
+        self.make_tune("ax01", {"limiter": 8500})
+        r = self.get("/api/settings?tune=ax01&variant=q_drift")
+        self.assertEqual((r.status, r.json), (400, {"error": "a variant cannot be combined with a modded car"}))
+
+    def test_an_unknown_variant_is_400(self):
+        r = self.get("/api/settings?variant=nope")
+        self.assertEqual((r.status, r.json), (400, {"error": "ks_x has no variant nope"}))
+
+    def test_a_variant_that_cannot_be_read_is_400(self):
+        os.remove(os.path.join(self.fc.car_root, "presets", "parts", "q_drift_engine.carpart"))
+        r = self.get("/api/settings?variant=q_drift")
+        self.assertEqual(r.status, 400)
+        self.assertIn("variant q_drift of ks_x cannot be read", r.json["error"])
+
+    def test_a_variant_without_a_base_car_is_409(self):
+        r = self.get("/api/settings?car=ks_y&variant=q_drift")
+        self.assertEqual((r.status, r.json), (409, {"error": "base car missing, run init"}))
+
+    def test_no_write_route_takes_a_variant(self):
+        r = self.post("/api/set?tune=draft&variant=q_drift", {"id": "limiter", "value": 8100, "variant": "q_drift"})
+        self.assertEqual(r.status, 200)
+        self.assertEqual(self.tune_state(tune.DRAFT), {"limiter": 8100})
+        self.assertEqual(self.tune_ids(), [])
+        rows = {x["id"]: x for x in self.get("/api/settings?variant=q_drift").json}
+        self.assertEqual((rows["limiter"]["value"], rows["limiter"]["changed"]), (8000, False))
+        for route in ts.POST_ROUTES:
+            self.assertNotIn("variant", inspect.getsource(ts.POST_ROUTES[route]))
+
+    def test_only_the_settings_route_reads_the_variant(self):
+        self.assertEqual(ts.VARIANT_ROUTES, ("/api/settings",))
+        self.assertTrue(set(ts.VARIANT_ROUTES) <= set(ts.GET_ROUTES))
+        self.assertTrue(set(ts.VARIANT_ROUTES).isdisjoint(ts.QUERY_ROUTES))
+
+
 class TestResetAllOfTunes(TuneCase):
     def test_the_default_modded_car_is_cleared_completely(self):
         self.make_tune(None, {"limiter": 8000, "name_suffix": "_A"})

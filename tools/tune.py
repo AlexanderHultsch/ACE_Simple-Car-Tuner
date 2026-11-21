@@ -3,7 +3,8 @@
 usage:
   python tools/tune.py cars     [--tested | --modded] [--game <content.kspkg>] [--mods <dir>] [--work <dir>]
   python tools/tune.py init     [--car ID] [--game <content.kspkg>] [--work <dir>]
-  python tools/tune.py defaults [--car ID] [--tune ID] [--hidden] [--work <dir>]
+  python tools/tune.py defaults [--car ID] [--tune ID | --variant ID] [--hidden] [--work <dir>]
+  python tools/tune.py variants [--car ID] [--work <dir>]
   python tools/tune.py set      <id> <value> [--car ID] [--tune ID] [--work <dir>]
   python tools/tune.py unset    <id> [--car ID] [--tune ID] [--work <dir>]
   python tools/tune.py show     [--car ID] [--tune ID] [--work <dir>]
@@ -64,6 +65,23 @@ defaults: reads every applicable setting of tuner/catalogue.json from <work>/<ca
           others are hidden: their number is printed, --hidden lists each with its reason. When the copies of a value of
           an applicable setting disagree in the stock data, they are listed in the section "copies differ in the stock
           data" (the default shown is the value of the first required target); that is not an error.
+variants: lists the other mechanical presets of the extracted stock car (library functions list_variants, variant_seed): every
+          presets/*.mechanicalcarpreset except the base preset (the first in sorted order, @mech_preset) that replaces role files
+          through its parts. Each part is followed like the game does: forced_compatible_part_paths and compatible_part_paths of
+          the preset -> .compatiblepart -> car_part_path -> .carpart -> logic_parts[].tuning_part_path -> .tuningpart. Its
+          engine, gearbox, drivetrain, clutch, setup, setup_limits and suspensions (coilover_path_front, coilover_path_rear) members
+          name the replacement files, listed as the roles @engine, @gearbox, @drivetrain, @clutch, @setup, @limits, @coilover_front
+          and @coilover_rear with the path relative to the car folder. Every other member (suspensions_geometry, engine_tune,
+          electronics, wing, aero_package, performance_modes_tuning, brakes, brake_system) is only named as "not shown". A
+          preset that replaces no role file is visual only and is not listed; a file missing or undecodable on the way is the "error"
+          of that preset only. A variant = {"id": the preset file name without extension in lower case, "label": the preset's note,
+          else its description, "preset": path relative to the car folder, "roles": {role: path}, "not_shown": [...], "error": text
+          or None}; two tuning parts that name different files for one role are an error. The command prints id, label, roles, the
+          members not shown and the error of each variant, or says that the car has none. Nothing is written.
+defaults --variant ID: shows the defaults of that variant (viewing only; it cannot be combined with --tune): the stock car read
+          with the role files of the variant and its preset as @mech_preset, so @turbo[N] follows the variant's engine while @car and
+          @tyre_front / @tyre_rear stay those of the stock car. An unknown variant or one with an error is an error
+          (resolve_defaults(..., variant=ID), only together with tune None).
 set/unset/show: edit and print <work>/<car>/tune_state.json ({setting id: value}). show lists applicable settings
           only, set refuses a setting that is not applicable to the car. Entries of the state whose id is not in the
           catalogue are ignored with a warning (show, apply) and kept in the file (remove them with unset).
@@ -283,6 +301,12 @@ MANIFEST_ROLES = {"engine": "engine_path", "drivetrain": "drivetrain_path", "gea
                   "clutch": "clutch_path", "brakes": "brakes_path", "setup": "stock_setup", "limits": "setupLimits",
                   "coilover_front": "suspensions.coilover_front_path",
                   "coilover_rear": "suspensions.coilover_rear_path"}
+VARIANT_PATHS = {"engine": "@engine", "gearbox": "@gearbox", "drivetrain": "@drivetrain", "clutch": "@clutch",
+                 "setup": "@setup", "setup_limits": "@limits"}
+VARIANT_COILOVERS = {"coilover_path_front": "@coilover_front", "coilover_path_rear": "@coilover_rear"}
+TUNING_MEMBERS = ("engine_tune", "engine", "gearbox", "drivetrain", "clutch", "brakes", "brake_system", "electronics",
+                  "suspensions", "suspensions_geometry", "wing", "aero_package", "setup", "setup_limits",
+                  "performance_modes_tuning")
 TYRE_ROLES = {"tyre_front": "frontTyreCompounds", "tyre_rear": "rearTyreCompounds"}
 ROLE = re.compile(r"@(car|mech_preset|%s|turbo\[\d+\])" % "|".join(list(MANIFEST_ROLES) + list(TYRE_ROLES)))
 SHARED_DIR = "common_phsx"
@@ -1355,32 +1379,113 @@ def stat_or_none(path):
         return None
 
 
-def resolve_defaults(work, car_id, catalogue=None, game=DEFAULT_GAME, hidden=False, tune=None):
+def preset_names(car_root):
+    folder = find_ci(car_root, "presets")
+    return folder, sorted(n for n in os.listdir(kspkg.long_path(folder)) if n.lower().endswith(".mechanicalcarpreset"))
+
+
+def tuning_overrides(root, car_id, tuning, roles, not_shown):
+    """Add the role overrides of one decoded .tuningpart to roles ({role: rel}) and its other members to not_shown."""
+    for member in TUNING_MEMBERS:
+        if member not in tuning:
+            continue
+        data = tuning[member] if isinstance(tuning[member], dict) else {}
+        found = {}
+        if member in VARIANT_PATHS and data.get("path"):
+            found[VARIANT_PATHS[member]] = data["path"]
+        elif member == "suspensions":
+            found = {role: data[field] for field, role in VARIANT_COILOVERS.items() if data.get(field)}
+        if not found:
+            if member not in VARIANT_PATHS and member not in not_shown:
+                not_shown.append(member)
+            continue
+        for role, text in found.items():
+            rel = manifest_file(root, car_id, text, "%s path in the tuning part" % member)
+            if roles.setdefault(role, rel) != rel:
+                raise ValueError("two tuning parts override %s with different files (%s, %s)" % (role, roles[role], rel))
+
+
+def variant_of(root, car_id, folder, name):
+    """The variant entry of one mechanical preset file, or None when the preset changes no role file (visual only)."""
+    vid = name.rsplit(".", 1)[0].lower()
+    entry = {"id": vid, "label": vid, "preset": rel_of(root, car_id, os.path.join(folder, name)), "roles": {},
+             "not_shown": [], "error": None}
+    try:
+        preset = load_msg(os.path.join(folder, name))[0]
+        entry["label"] = preset.get("note") or preset.get("description") or vid
+        for key in ("forced_compatible_part_paths", "compatible_part_paths"):
+            for part in preset.get(key, []):
+                compatible = load_msg(find_ci(root, part))[0]
+                if not compatible.get("car_part_path"):
+                    raise ValueError("no car_part_path in %s" % part)
+                car_part = load_msg(find_ci(root, compatible["car_part_path"]))[0]
+                for logic in car_part.get("logic_parts", []):
+                    if logic.get("tuning_part_path"):
+                        tuning = load_msg(find_ci(root, logic["tuning_part_path"]))[0]
+                        tuning_overrides(root, car_id, tuning, entry["roles"], entry["not_shown"])
+    except (ValueError, OSError) as e:
+        entry["error"] = str(e)
+    return entry if entry["roles"] or entry["error"] else None
+
+
+def list_variants(work, car_id):
+    """The mechanical presets of the extracted stock car other than the base preset (@mech_preset) that replace role files
+    (engine, gearbox, ...) through their tuning parts, in sorted order of the preset files, each as {"id", "label", "preset",
+    "roles": {role: path relative to the car folder}, "not_shown": [tuning members that are not shown], "error": text or None}.
+    A preset whose chain of files is broken carries the error; a preset without any role override is not listed."""
+    root = base_dir(work, car_id)
+    car_root = car_root_of(root, car_id)
+    if not os.path.isdir(kspkg.long_path(car_root)):
+        raise ValueError("no base car in %s, run init first" % root)
+    base = os.path.basename(mech_preset_path(car_root))
+    folder, names = preset_names(car_root)
+    found = [variant_of(root, car_id, folder, n) for n in names if n != base]
+    return [v for v in found if v]
+
+
+def variant_seed(work, car_id, variant):
+    """The resolve cache entries of a variant: its role files and its preset as @mech_preset."""
+    for v in list_variants(work, car_id):
+        if v["id"] == variant:
+            if v["error"]:
+                raise ValueError("variant %s of %s cannot be read: %s" % (variant, car_id, v["error"]))
+            seed = {("role", role): rel for role, rel in v["roles"].items()}
+            seed[("role", "@mech_preset")] = v["preset"]
+            return seed
+    raise ValueError("%s has no variant %s" % (car_id, variant))
+
+
+def resolve_defaults(work, car_id, catalogue=None, game=DEFAULT_GAME, hidden=False, tune=None, variant=None):
     """Every setting with its default; hidden=False keeps only the settings applicable to the car, hidden=True
     returns all of them, each with applicable and reason (None when applicable). The resolved rows are cached per
     (work, car, root, catalogue) while resolve_stamp is unchanged (not when the tyre files or the stock info could not be
     read); the caller gets its own copy. tune None reads the stock car (base); a tune id or DRAFT reads root_for of
-    that tune, the kit root when its state has a turbo kit."""
+    that tune, the kit root when its state has a turbo kit. variant (an id of list_variants, only with tune None) reads the
+    stock car with the role files of that variant (its engine, setup, ... and its preset as @mech_preset); an unknown
+    variant or one with an error is a ValueError."""
+    if variant is not None and tune is not None:
+        raise ValueError("a variant cannot be combined with a tune")
     cat = catalogue or load_catalogue()
     root = base_dir(work, car_id) if tune is None else root_for(work, car_id, tune)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("no base car in %s, run init first" % root)
+    seed = variant_seed(work, car_id, variant) if variant is not None else None
     digest = hashlib.sha1(json.dumps(cat, sort_keys=True).encode()).hexdigest()
-    key, stamp = (work, car_id, root, digest), resolve_stamp(work, car_id, root)
+    key, stamp = (work, car_id, root, digest) + ((variant,) if variant is not None else ()), resolve_stamp(work, car_id, root)
     with _resolve_lock:
         hit = _resolved.get(key)
     if hit and stamp is not None and hit[0] == stamp:
         rows = copy.deepcopy(hit[1])
     else:
-        rows, cacheable = resolve_rows(work, car_id, cat, game, root)
+        rows, cacheable = resolve_rows(work, car_id, cat, game, root, seed)
         if cacheable and stamp is not None and resolve_stamp(work, car_id, root) == stamp:
             with _resolve_lock:
                 _resolved[key] = (stamp, copy.deepcopy(rows))
     return rows if hidden else [r for r in rows if r["applicable"]]
 
 
-def resolve_rows(work, car_id, cat, game, root=None):
-    """All rows of resolve_defaults and whether they may be cached; root is base unless a kit root is given."""
+def resolve_rows(work, car_id, cat, game, root=None, seed=None):
+    """All rows of resolve_defaults and whether they may be cached; root is base unless a kit root is given, seed the resolve cache entries a variant starts with."""
     root = root or base_dir(work, car_id)
     car_root = car_root_of(root, car_id)
     info = stock_name = stock_variant = None
@@ -1388,7 +1493,7 @@ def resolve_rows(work, car_id, cat, game, root=None):
         info = stock_info_or_none(work, car_id, game)
         stock_name = info["display_name"] if info else preset_display_name(car_root)
         stock_variant = (info or {}).get("variant_name") or stock_name
-    cache, rows, tyre_error = {}, [], None
+    cache, rows, tyre_error = dict(seed or {}), [], None
     if any(t["file"].startswith("@tyre_") for s in cat["settings"] for t in s.get("targets", [])):
         try:
             ensure_tyre_files(work, car_id, game, cache if root == base_dir(work, car_id) else None)
@@ -3511,12 +3616,12 @@ def cmd_init():
 
 
 def cmd_defaults():
-    pos, opts = cli_args(("car", "tune", "work"), ("hidden",))
-    if pos:
+    pos, opts = cli_args(("car", "tune", "variant", "work"), ("hidden",))
+    if pos or ("tune" in opts and "variant" in opts):
         usage()
     work, car_id = start(opts)
     tune_arg(work, car_id, opts)
-    every = resolve_defaults(work, car_id, hidden=True)
+    every = resolve_defaults(work, car_id, hidden=True, variant=opts.get("variant"))
     rows = [r for r in every if r["applicable"]]
     print_defaults(rows)
     print("%d hidden for this car (not applicable)" % (len(every) - len(rows)))
@@ -3525,6 +3630,25 @@ def cmd_defaults():
             if not r["applicable"]:
                 print("  %s: %s" % (r["id"], r["reason"]))
     print_copy_differences(rows)
+
+
+def cmd_variants():
+    pos, opts = cli_args(("car", "work"))
+    if pos:
+        usage()
+    work, car_id = start(opts)
+    variants = list_variants(work, car_id)
+    if not variants:
+        print("%s has no variants" % car_id)
+    for v in variants:
+        print("%s: %s" % (v["id"], v["label"]))
+        print("  preset: %s" % v["preset"])
+        for role, rel in v["roles"].items():
+            print("  %s = %s" % (role, rel))
+        if v["not_shown"]:
+            print("  not shown: %s" % ", ".join(v["not_shown"]))
+        if v["error"]:
+            print("  error: %s" % v["error"])
 
 
 def cmd_set():
@@ -3816,6 +3940,7 @@ COMMANDS = {
     "cars": cmd_cars,
     "init": cmd_init,
     "defaults": cmd_defaults,
+    "variants": cmd_variants,
     "set": cmd_set,
     "unset": cmd_unset,
     "show": cmd_show,

@@ -259,6 +259,8 @@ button.small { padding: 2px 8px; font-size: 12px; }
   </div>
 
   <div id="panel-car" role="tabpanel" aria-labelledby="tab-car">
+    <p id="variant-note" class="msg warn" role="status" hidden></p>
+
     <div class="bar">
       <div class="title">
         <label class="selectrow">Car
@@ -548,7 +550,8 @@ let jobSig = "";
 let statusSig = "";
 let carsSig = "";
 // the selected car: car is the stock id (null until the server named its default car), tune is "draft" for a base car
-// and the id of the modded car otherwise
+// and the id of the modded car otherwise; variant (only on a base car, else absent) is the id of one of its presets, shown
+// read-only
 let selection = storedSelection();
 let carConfirmed = false;
 // the open Create / Duplicate panel: {kind, opener, busy}, else null
@@ -632,7 +635,8 @@ function storedSelection() {
   const none = { car: null, tune: DRAFT };
   try {
     const s = JSON.parse(window.localStorage.getItem(SELECTION_KEY));
-    return s && typeof s.car === "string" && typeof s.tune === "string" ? { car: s.car, tune: s.tune } : none;
+    if (!s || typeof s.car !== "string" || typeof s.tune !== "string") return none;
+    return typeof s.variant === "string" && s.tune === DRAFT ? { car: s.car, tune: s.tune, variant: s.variant } : { car: s.car, tune: s.tune };
   } catch (e) {
     return none;
   }
@@ -647,11 +651,17 @@ function storeSelection(s) {
 }
 
 function sameSelection(a, b) {
-  return a.car === b.car && a.tune === b.tune;
+  return a.car === b.car && a.tune === b.tune && a.variant === b.variant;
+}
+
+// whether the selection is a preset of a stock car: its values can be read, nothing can be changed
+function viewOnly() {
+  return !!selection.variant;
 }
 
 function choiceValue(s) {
   if (!s.car) return "";
+  if (s.variant) return "var:" + s.car + ":" + s.variant;
   return s.tune === DRAFT ? "base:" + s.car : "mod:" + s.tune;
 }
 
@@ -660,6 +670,11 @@ function choiceOf(value) {
   if (value.startsWith("mod:")) {
     const m = moddedList().find((x) => x.id === value.slice(4));
     return m ? { car: m.stock, tune: m.id } : null;
+  }
+  if (value.startsWith("var:")) {
+    const [car, variant] = value.slice(4).split(":");
+    const c = serverState && serverState.cars ? serverState.cars.find((x) => x.id === car) : null;
+    return c && (c.variants || []).some((v) => v.id === variant) ? { car: car, tune: DRAFT, variant: variant } : null;
   }
   return null;
 }
@@ -693,14 +708,21 @@ function carName() {
   return c ? optionText(c) : "the car";
 }
 
+function variantEntry() {
+  const c = carEntry();
+  return c && selection.variant ? (c.variants || []).find((v) => v.id === selection.variant) || null : null;
+}
+
 function shownName() {
   const m = moddedEntry();
-  return m ? m.label : carName();
+  const v = variantEntry();
+  return m ? m.label : v ? carName() + " - " + v.label + " (preset)" : carName();
 }
 
 async function api(path, body, target) {
   if (target && body === undefined) {
     path += (path.includes("?") ? "&" : "?") + (target.car ? "car=" + encodeURIComponent(target.car) + "&" : "") + "tune=" + encodeURIComponent(target.tune);
+    if (target.variant && path.startsWith("/api/settings?")) path += "&variant=" + encodeURIComponent(target.variant);
   }
   const opts = body === undefined ? {} : {
     method: "POST",
@@ -784,7 +806,8 @@ function renderCars() {
   const byName = (a, b) => optionText(a).localeCompare(optionText(b));
   const optionGroups = [
     ["Modded Cars", moddedList().map((m) => ["mod:" + m.id, m.label + (m.installed ? " - installed" : " - not installed")])],
-    ["Installed Cars", list.filter((c) => c.extracted).sort(byName).map((c) => ["base:" + c.id, optionText(c)])],
+    ["Installed Cars", list.filter((c) => c.extracted).sort(byName).flatMap((c) => [["base:" + c.id, optionText(c)]].concat(
+      (c.variants || []).map((v) => ["var:" + c.id + ":" + v.id, optionText(c) + " - " + v.label + " (preset, view only)" + (v.error ? " (cannot be read)" : ""), !!v.error])))],
     ["Other Cars", list.filter((c) => !c.extracted).sort(byName).map((c) => ["base:" + c.id, optionText(c)])]
   ];
   const sig = JSON.stringify([optionGroups, selection]);
@@ -795,9 +818,10 @@ function renderCars() {
     if (!options.length) continue;
     const g = el("optgroup");
     g.label = title;
-    for (const [value, text] of options) {
+    for (const [value, text, off] of options) {
       const o = el("option", "", text);
       o.value = value;
+      o.disabled = !!off;
       g.appendChild(o);
     }
     select.appendChild(g);
@@ -809,6 +833,10 @@ function renderCars() {
   $("untested").textContent = entry && !entry.tested ?
     "This car has not been tested with the tuner yet; check the results before you trust them." : "";
   if (entry) $("caption").textContent = "Settings of " + shownName();
+  const v = variantEntry();
+  $("variant-note").hidden = !v;
+  $("variant-note").textContent = v ? "View only: the " + v.label + " preset of " + carName() +
+    ". These values come from the game's preset files; copy the ones you want by hand into your own modded car." : "";
 }
 
 function renderButtons() {
@@ -816,6 +844,7 @@ function renderButtons() {
   const draft = selection.tune === DRAFT;
   let why = "";
   if (!serverState) why = serverError || "server not reachable";
+  else if (viewOnly()) why = "view only: a preset of the game cannot be applied";
   else if (running) why = "a job is running";
   else if (serverState.game_running) why = "close the game first";
   else if (!serverState.base_present) why = "extract the stock car first";
@@ -836,10 +865,19 @@ function renderButtons() {
     r.field.disabled = running;
     r.reset.disabled = running;
   }
+  if (viewOnly()) {
+    $("btn-reset-all").disabled = true;
+    for (const r of rows) {
+      r.field.disabled = true;
+      r.reset.disabled = true;
+    }
+  }
   const baseOk = !!serverState && serverState.base_present;
   $("init-panel").hidden = !serverState || baseOk;
   $("tuner").hidden = !baseOk || !tableLoaded;
   $("name-host").hidden = !baseOk || !tableLoaded || !headerRow;
+  $("garage").hidden = viewOnly();
+  $("sounds").hidden = viewOnly();
   syncTyres();
   syncGarage();
   syncTurbo();
@@ -948,7 +986,13 @@ async function refresh() {
   if (want !== selection) return;
   if (serverState && !carConfirmed) {
     selection = { car: serverState.car, tune: serverState.tune };
+    if (want.variant && want.tune === serverState.tune) selection.variant = want.variant;
     carConfirmed = true;
+  }
+  // the stored preset may be gone: show the stock car
+  if (selection.variant && serverState && serverState.cars && !variantEntry()) {
+    switchCar({ car: selection.car, tune: DRAFT });
+    return;
   }
   if (createdCar()) return;
   const extracting = !!serverState && serverState.job.kind === "init" && serverState.job.state === "running";
@@ -1198,7 +1242,7 @@ function buildTable(list, target) {
   let current = null;
   for (const data of list) {
     if (data.ui === "header") {
-      headerRow = buildHeaderRow(data, target);
+      if (!target.variant) headerRow = buildHeaderRow(data, target);
       continue;
     }
     if (!current || current.name !== data.group) {
@@ -1342,6 +1386,7 @@ function loadCarPanels() {
   garageJobRunning = running;
   turboJobRunning = running;
   soundsJobRunning = running;
+  if (viewOnly()) return;
   loadGarage();
   loadTurbo();
   loadSounds();

@@ -1259,6 +1259,68 @@ class TestModdedCars(unittest.TestCase):
         self.assertIn("whyDuplicate = why;", body)
 
 
+class TestVariantView(unittest.TestCase):
+    """The presets (variants) of a car in the car selector: shown read-only, nothing can be written from them."""
+
+    def test_a_variant_option_has_the_value_var_car_variant_and_follows_its_car_in_the_installed_group(self):
+        body = function_body("renderCars")
+        self.assertIn('["var:" + c.id + ":" + v.id, ', body)
+        self.assertLess(body.index('["base:" + c.id, optionText(c)]'), body.index('["var:" + c.id + ":" + v.id, '))
+        self.assertIn('optionText(c) + " - " + v.label + " (preset, view only)"', body)
+        self.assertIn('(v.error ? " (cannot be read)" : "")', body)
+        self.assertIn("o.disabled = !!off;", body)
+        self.assertIn('if (s.variant) return "var:" + s.car + ":" + s.variant;', function_body("choiceValue"))
+        self.assertIn('startsWith("var:")', function_body("choiceOf"))
+        self.assertIn("tune: DRAFT, variant: variant", function_body("choiceOf"))
+
+    def test_the_selection_carries_the_variant_and_the_stored_selection_keeps_it(self):
+        self.assertIn("a.variant === b.variant", function_body("sameSelection"))
+        self.assertIn("typeof s.variant === \"string\"", function_body("storedSelection"))
+        self.assertIn("!!selection.variant", function_body("viewOnly"))
+
+    def test_the_variant_goes_in_the_query_of_the_settings_read_only(self):
+        body = function_body("api")
+        self.assertIn('target.variant && path.startsWith("/api/settings?")', body)
+        self.assertIn('"&variant=" + encodeURIComponent(target.variant)', body)
+
+    def test_the_notice_names_the_preset_and_the_car(self):
+        self.assertIn('<p id="variant-note" class="msg warn" role="status" hidden></p>', MARKUP)
+        body = function_body("renderCars")
+        self.assertIn('"View only: the " + v.label + " preset of " + carName() +', body)
+        self.assertIn("These values come from the game's preset files; copy the ones you want by hand into your own modded car.", body)
+        self.assertIn('$("variant-note").hidden = !v;', body)
+
+    def test_a_variant_selection_disables_the_write_buttons_and_the_value_fields(self):
+        body = function_body("renderButtons")
+        self.assertIn('else if (viewOnly()) why = "view only: a preset of the game cannot be applied";', body)
+        self.assertLess(body.index("viewOnly()) why"), body.index("else if (running) why"))
+        self.assertIn('$("btn-apply").disabled = why !== "";', body)
+        self.assertIn('$("btn-duplicate").disabled = whyDuplicate !== "";', body)
+        view = body[body.index("if (viewOnly()) {"):]
+        for part in ('$("btn-reset-all").disabled = true;', "r.field.disabled = true;", "r.reset.disabled = true;"):
+            self.assertIn(part, view)
+
+    def test_a_variant_selection_has_no_name_suffix_and_hides_the_garage_turbo_and_sound_panels(self):
+        self.assertIn("if (!target.variant) headerRow = buildHeaderRow(data, target);", function_body("buildTable"))
+        body = function_body("renderButtons")
+        self.assertIn('$("garage").hidden = viewOnly();', body)
+        self.assertIn('$("sounds").hidden = viewOnly();', body)
+        self.assertIn('$("turbo").hidden = !turbo || turbo.has_turbo;', function_body("renderTurbo"))
+        self.assertIn("if (viewOnly()) return;", function_body("loadCarPanels"))
+        self.assertLess(function_body("loadCarPanels").index("if (viewOnly()) return;"), function_body("loadCarPanels").index("loadGarage();"))
+
+    def test_a_stored_variant_that_no_longer_exists_falls_back_to_the_stock_car(self):
+        body = function_body("refresh")
+        self.assertIn("if (want.variant && want.tune === serverState.tune) selection.variant = want.variant;", body)
+        self.assertIn("if (selection.variant && serverState && serverState.cars && !variantEntry()) {", body)
+        self.assertIn("switchCar({ car: selection.car, tune: DRAFT });", body)
+
+    def test_the_page_never_sends_a_variant_in_a_post(self):
+        self.assertEqual(len(re.findall(r"variant", function_body("api"))), 3)
+        for route in ts.POST_ROUTES:
+            self.assertNotIn("variant", inspect.getsource(ts.POST_ROUTES[route]))
+
+
 class TestTabs(unittest.TestCase):
     CAR_PANEL = MARKUP[MARKUP.index('id="panel-car"'):MARKUP.index('id="panel-tyres"')]
     TYRES_PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]

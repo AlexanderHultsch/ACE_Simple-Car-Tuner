@@ -13,7 +13,8 @@ favicon.ico (image/x-icon) and manifest.webmanifest (application/manifest+json);
 (browser tab, Add to Home Screen). The routes below are written without that prefix;
 the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). A small JSON API:
   GET  /api/state       work folder, base car, game running, installed package, background job; every car of the game
-                        (id, label, display_name, extracted, tested, new_id, installed) and the number of applicable and
+                        (id, label, display_name, extracted, tested, new_id, installed; an extracted car also "variants": id, label, error of its
+                        other mechanical presets that swap physics files, shown read-only by /api/settings?variant=<id>) and the number of applicable and
                         hidden settings of the car (null while the base is missing or being extracted); the selected
                         tune ("tune"); the modded cars of all stock cars ("modded": id, stock, label, name_suffix,
                         default, installed, built; "modded_error" and an empty list when they cannot be read);
@@ -27,6 +28,9 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         cars from <work>/ranges.json (written by tune.py ranges), only on the settings that have an entry
                         there: a soft border for the page, values outside it stay allowed; "min" and "max" are the
                         catalogue's allowed limits and a different thing)
+                        ?variant=<variant id> (optional, only for the stock car: no tune or "draft") answers the rows of the stock car
+                        resolved with that variant's files, value = default and changed false, nothing saved is read; 400 for an
+                        unknown or unreadable variant and for a variant together with a modded car; no POST route takes a variant
   GET  /api/groups      the setting groups of the catalogue in display order ("groups": name, description); static data,
                         the same for every car and tune, needs no base car
   POST /api/set        {"id": ..., "value": ...}          POST /api/unset  {"id": ...}
@@ -152,6 +156,7 @@ Ctrl+C while a job runs waits for it; a second Ctrl+C aborts it.
 Stdlib only.
 """
 import contextlib
+import copy
 import datetime
 import http.server
 import ipaddress
@@ -191,6 +196,8 @@ MAX_BODY = 65536
 ACCEPTED = ("/api/init", "/api/apply")
 # GET routes that take the raw query string as a third argument
 QUERY_ROUTES = ("/api/tyre", "/api/log_file")
+# GET routes that take the raw query string for the optional parameter variant (a preset of the car, shown read-only)
+VARIANT_ROUTES = ("/api/settings",)
 # POST routes that only a client on the PC itself (loopback) may call
 LOCAL_ROUTES = ("/api/log_copy",)
 LOG_FILE_MAX = 1048576
@@ -206,6 +213,9 @@ GAME_CHECK = [float("-inf"), False]
 # the logger process this server started (a list so that it can be replaced) and the lock that makes the check and the start of api_logger_start one step
 LOGGER_PROC = [None]
 LOGGER_LOCK = threading.Lock()
+# the variants of a car as api_state lists them, cached per (work, car): (variants_stamp, [{"id", "label", "error"}]); VARIANTS_LOCK guards the dict
+VARIANTS = {}
+VARIANTS_LOCK = threading.Lock()
 
 
 class ApiError(Exception):
@@ -424,21 +434,74 @@ def modded_cars(work):
         return {"modded": [], "modded_error": str(e)}
 
 
+def variants_stamp(work, car_id):
+    """The (folder, name, mtime_ns, size) of every file below the presets folder and the parts folder of the extracted car (what
+    list_variants reads), None when they cannot be listed."""
+    car_root = tune.car_root_of(tune.base_dir(work, car_id), car_id)
+    stamp = []
+    try:
+        for rel in ("presets", "data/parts"):
+            for folder, dirs, names in os.walk(kspkg.long_path(tune.find_ci(car_root, rel))):
+                dirs.sort()
+                for name in sorted(names):
+                    st = os.stat(os.path.join(folder, name))
+                    stamp.append((folder, name, st.st_mtime_ns, st.st_size))
+    except (ValueError, OSError):
+        return None
+    return stamp
+
+
+def variants_of(work, car_id):
+    """The variants of an extracted car as the page lists them ([{"id", "label", "error"}]), cached per (work, car) while
+    variants_stamp is unchanged; [] for a car without variants or when they cannot be read."""
+    stamp, key = variants_stamp(work, car_id), (work, car_id)
+    with VARIANTS_LOCK:
+        hit = VARIANTS.get(key)
+    if hit and stamp is not None and hit[0] == stamp:
+        return copy.deepcopy(hit[1])
+    try:
+        found = [{k: v[k] for k in ("id", "label", "error")} for v in tune.list_variants(work, car_id)]
+    except (ValueError, OSError):
+        return []
+    if stamp is not None and variants_stamp(work, car_id) == stamp:
+        with VARIANTS_LOCK:
+            VARIANTS[key] = (stamp, copy.deepcopy(found))
+    return found
+
+
+def car_entry_json(work, c):
+    entry = {k: c[k] for k in ("id", "label", "display_name", "extracted", "tested", "new_id", "installed")}
+    if c["extracted"]:
+        entry["variants"] = variants_of(work, c["id"])
+    return entry
+
+
 def api_state(car_id, tune_id):
     require_mods()
     work, cars = CONFIG["work"], tune.load_cars()
     applicable, hidden = settings_counts(work, car_id)
     return dict({"work": work, "car": car_id, "tune": tune_id, "default_car": cars["default"],
-                 "cars": [{k: c[k] for k in ("id", "label", "display_name", "extracted", "tested", "new_id", "installed")}
-                          for c in tune.list_cars(work, CONFIG["mods"], game=CONFIG["game"], sizes=False)],
+                 "cars": [car_entry_json(work, c) for c in tune.list_cars(work, CONFIG["mods"], game=CONFIG["game"], sizes=False)],
                  "base_present": base_present(work, car_id), "game_running": game_running_cached(),
                  "installed": installed_info(car_id, tune_id), "stock_id_length": len(car_id),
                  "default_new_id": tune.new_id_for(car_id), "settings_applicable": applicable, "settings_hidden": hidden,
                  "job": job_snapshot()}, **modded_cars(work), **tune_proposals(work, car_id))
 
 
-def api_settings(car_id, tune_id):
+def variant_rows_json(work, car_id, cat, variant):
+    require_base(work, car_id)
+    ranges = tune.load_ranges(work)
+    return [row_json(dict(r, value=r["default"], changed=False), tune.find_setting(cat, r["id"]), ranges.get(r["id"]))
+            for r in tune.resolve_defaults(work, car_id, cat, variant=variant)]
+
+
+def api_settings(car_id, tune_id, query):
+    variant = (urllib.parse.parse_qs(query).get("variant") or [None])[0]
+    if variant is not None and tune_id not in (None, tune.DRAFT):
+        raise ApiError(400, "a variant cannot be combined with a modded car")
     with STATE_LOCK, bad_input():
+        if variant is not None:
+            return variant_rows_json(CONFIG["work"], car_id, tune.load_catalogue(), variant)
         return rows_json(CONFIG["work"], car_id, tune.load_catalogue(), tune_id)
 
 
@@ -1050,7 +1113,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         else:
             car_id = request_car(None, query)
             tune_id = request_tune(None, query, car_id)
-            payload = route(car_id, tune_id, query) if path in QUERY_ROUTES else route(car_id, tune_id)
+            payload = route(car_id, tune_id, query) if path in QUERY_ROUTES + VARIANT_ROUTES else route(car_id, tune_id)
         return (202 if path in ACCEPTED else 200), payload
 
     def handle_request(self, method):

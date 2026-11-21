@@ -322,7 +322,7 @@ class TestCatalogueData(unittest.TestCase):
 
     def test_the_group_sizes_after_the_regrouping(self):
         self.assertEqual(collections.Counter(s["group"] for s in SETTINGS),
-                         {"Meta": 2, "Display": 2, "Engine": 10, "Turbo": 3, "Gearbox & clutch": 14, "Differential": 6,
+                         {"Meta": 2, "Display": 2, "Engine": 10, "Turbo": 5, "Gearbox & clutch": 14, "Differential": 6,
                           "Differential (hardware)": 6, "Steering": 5, "Brakes": 6, "Vehicle (hardware)": 1,
                           "Springs & anti-roll": 12, "Ride height & bump stops": 12, "Dampers": 8, "Suspension (physical)": 12,
                           "Alignment & tyres": 17, "Tyres": 24, "Fuel": 1, "Electronics": 4})

@@ -2432,6 +2432,23 @@ class TestApply(CarCase):
         self.assertEqual((items["static_camber_front"]["old"], items["static_camber_front"]["new"]), (-1.5, -3.5))
         self.assertEqual((items["static_camber_rear"]["old"], items["static_camber_rear"]["new"]), (-1.7, -2.0))
 
+    def test_the_wastegate_settings_write_the_engine_and_the_turbo_file_of_their_own_turbo_only(self):
+        real = [s for s in REAL_LOAD_CATALOGUE()["settings"] if s["id"] in ("turbo_wastegate_1", "turbo_wastegate_2")]
+        self.assertEqual([s["id"] for s in real], ["turbo_wastegate_1", "turbo_wastegate_2"])
+        self.engine["turbos"] = [{"max_boost": 1.0, "wastegate": 0.785}, {"max_boost": 1.0, "wastegate": 0.785}]
+        self.engine["turbos_to_load"] = [self.fc.game_path("data/t0.turbo"), self.fc.game_path("data/t1.turbo")]
+        self.fc.add("data/t0.turbo", {"max_boost": 1.0, "wastegate": 0.785})
+        self.fc.add("data/t1.turbo", {"max_boost": 1.0, "wastegate": 0.785})
+        res = self.apply(self.settings(*real), {"turbo_wastegate_2": 1.25})
+        turbos = self.built(res, "data/engine.carengine")["turbos"]
+        self.assertEqual([t["wastegate"] for t in turbos], [0.785, 1.25])
+        self.assertEqual(self.built(res, "data/t0.turbo")["wastegate"], 0.785)
+        self.assertEqual(self.built(res, "data/t1.turbo")["wastegate"], 1.25)
+        self.assertEqual([t["max_boost"] for t in turbos], [1.0, 1.0])
+        items = {a["id"]: a for a in res["applied"]}
+        self.assertEqual(list(items), ["turbo_wastegate_2"])
+        self.assertEqual((items["turbo_wastegate_2"]["old"], items["turbo_wastegate_2"]["new"]), (0.785, 1.25))
+
     def test_flag_that_is_off_writes_nothing(self):
         res = self.apply(self.settings(self.flag()), {"aids": False})
         self.assertEqual((res["applied"], self.fc.saved), ([], []))

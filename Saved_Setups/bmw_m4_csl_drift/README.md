@@ -1,34 +1,34 @@
 # Setup: BMW M4 CSL "Drift"
 
-A drift setup of the BMW M4 CSL, an example of what the tuner builds: the recipe of the [BMW M3 E46 CSL Drift](../bmw_m3_e46_csl_drift/README.md) carried over to the M4 on 2026-11-19 and corrected once after measuring in the game. Numbers only, no game data and no package.
+Alex's own drift setup of the BMW M4 CSL, made in the tuner on 2026-11-19 (it replaces an earlier M4 setup that was carried over from the E46; that one is in the git history, commit 597519b). Numbers only, no game data and no package.
 
 In the game the car is called **BMW M4 CSL Drift** (setting `name_suffix` = `Drift`, tuned-car id `ax_bmw_m4_csl`).
 
 | File | What it is |
 |---|---|
-| `setup.json` | the saved state of the car page (`tune_state.json` of the default modded car), copied from `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m4_csl\tune_state.json` on 2026-11-19. Setting ids as in `tuner/catalogue.json` plus the keys `_turbo`, `_sounds` and `_tyres`. This is the file to restore |
-| `last_build_record.json` | the record the tuner stored at the last build (`snapshots\ax_bmw_m4_csl.json`, build of 2026-11-19 14:56 UTC). Same content as `setup.json` (it leaves out values equal to the stock default); kept for reference |
+| `setup.json` | the saved state of the car page (`tune_state.json` of the default modded car), copied from `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m4_csl\tune_state.json`. This is the file to restore |
+| `last_build_record.json` | the record the tuner stored at the last build (`snapshots\ax_bmw_m4_csl.json`, build of 2026-11-19 16:22 UTC); same content, kept for reference |
 
-## How the E46 recipe was carried over
+## What the setup does (17 changes against the stock car)
 
-The M4 is heavier and has its own twin turbo, so the E46 numbers were not copied 1:1:
+- Engine: power scale 1.18, display power 650 PS and torque 800 Nm, limiter 8100 rpm (stock 7250), nominal rpm 7900, engine damage from 8300 rpm, auto shift up at 7899 rpm, clutch torque 1000 Nm.
+- Turbo: boost 2.0 / 2.0 bar per turbo, `max_turbo_boost` 2.0 (stock 1.0 / 1.0 and 1.57), turbo sound `event:/parts/turbos/turbo_supra`.
+- Differential: Spool, power 0.8, coast 0.06.
+- Car mass 1590 kg (stock 1693), TC level 0.
+- Chassis, alignment and tyres are stock.
 
-- **Same value** (the drift recipe): Spool differential with power 0.85 / coast 0.7 (setup and hardware), power scale 1.05, coast scale 0.8, tyre pressure 28 / 23 psi, toe 0.0 / 0.1, TC 0, fuel 29, front camber limit -4.0 and rear 0.0, turbo sound `turbo_quattro`.
-- **Same ratio to stock**: springs, anti-roll bars, dampers, gear 1 and 2, final ratio, car mass (-13.7 %), steering rod ratio and lock (+22 % maximum wheel angle), bump stop rates, tyre physics, rev limiter (+5 %, 7600), display power and torque.
-- **Same offset from stock**: collars, ride height target, camber target, static camber, bump stop ranges; then corrected once from the measurement.
-- **Rules**: coilover springs and dampers equal to the setup ones; tyre grain gains and heat partition as offsets (partition capped at 1.0); diff preload, Torsen bias, nominal rpm and the tyre thermal curve (already "hypercar") stay stock; no turbo kit.
-- The stock M4's setup limits are locked (min = max for springs, anti-roll bars, steer ratio); the setup widens them to the new values.
+## Measured in the game (2026-11-19, Brands Hatch, session log `2026-11-19_17-25-26_BMW_M4_CSL.jsonl`, 163 s)
 
-Result: limiter 7600, gear 1 = 4.14, gear 2 = 2.66, final 3.41, mass 1461 kg, springs 43875 / 38077, anti-roll bars 18000 / 2160, collars 112.8 / 78.2 mm, static camber -4.275 / -1.35 deg, steering lock 315 deg.
-
-## Measured in the game (2026-11-19, Brands Hatch, same pit box, standing still)
-
-Camber -3.78 / -1.28 deg (average of left and right) against the targets -3.8 / -1.3, ride height 144.0 / 147.7 mm against 144 / 147, limiter 7600, TC 0 in the SPORT+ performance mode, pressures 28 / 23 psi. Alex: drifting is easy, maybe from the extra power.
-
-Known limit: the M4 has an "M Active Differential" (`rear_lock_controllers` in its drivetrain) on top of the Spool the setup writes; the game reports a diff of 0.25, so the Spool probably does not act as on the E46. The tuner cannot switch that controller off yet.
+- Logger: recognised as `ax_bmw_m4_csl` "Drift" (`matched_by` rpm_max); the package was built before the game started, so the game ran this build.
+- Limiter works: rpm up to 8158, 1545 samples above the stock 7250.
+- Power works: up to 645 bhp (stock about 550 x 1.18).
+- Spool works: the two rear wheels turned at exactly the same speed in every sample under throttle (a locked axle), although the game keeps reporting the stock diff values 0.25 / 0.55.
+- Drifting: rear slip angle above 10 deg for 30 % of the time above 30 km/h, up to 87 deg.
+- **Boost does not reach 2.0:** it stops at 1.57 bar at full throttle. Cause: each turbo's `wastegate` is 0.785 bar (2 x 0.785 = 1.57) and limits the real boost; the tuner has no wastegate setting yet.
+- Camber about -2.15 / -2.26 deg and ride height 136 / 137 mm (stock values, unchanged).
 
 ## Restore on another PC
 
-1. Install the game, start `start_tuner.bat` once so the work folder exists, and use "Install car" on the BMW M4 CSL and on the Audi Sport quattro (the car of the turbo sound `turbo_quattro`).
+1. Install the game, start `start_tuner.bat` once so the work folder exists, and use "Install car" on the BMW M4 CSL and on the car of the turbo sound `turbo_supra` (the Toyota Supra MKIV, `ks_toyota_supra_mkiv`; without it Apply refuses with "the saved turbo sound ... is no longer available").
 2. Stop the tuner. Copy `setup.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m4_csl\tune_state.json` (exactly that name; it is git-ignored in the repository, which is why the copy here is called `setup.json`).
 3. Start the tuner, select the BMW M4 CSL (it appears under Modded Cars as "BMW M4 CSL Drift"), check the values, then Apply with the game closed. Never commit the package: it contains Kunos data.

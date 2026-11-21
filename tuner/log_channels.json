@@ -17,6 +17,8 @@
     "coast_scale": {"status": "indirect", "note": "only its effect is visible: rpm, gas, bhp, torque", "once": [], "live": []},
     "turbo_boost_1": {"status": "direct", "note": "peak boost is read from the series", "once": ["boost_max"], "live": ["boost", "rpm", "gas"]},
     "turbo_boost_2": {"status": "direct", "note": "peak boost is read from the series", "once": ["boost_max"], "live": ["boost", "rpm", "gas"]},
+    "turbo_wastegate_1": {"status": "direct", "note": "peak boost is read from the series", "once": ["boost_max"], "live": ["boost", "rpm", "gas"]},
+    "turbo_wastegate_2": {"status": "direct", "note": "peak boost is read from the series", "once": ["boost_max"], "live": ["boost", "rpm", "gas"]},
     "max_turbo_boost": {"status": "direct", "note": "peak boost is read from the series", "once": ["boost_max"], "live": ["boost", "rpm", "gas"]},
     "final_ratio": {"status": "indirect", "note": "only its effect is visible: gear, rpm, speed_kmh, wheel_speed", "once": [], "live": []},
     "gear_1": {"status": "indirect", "note": "only its effect is visible: gear, rpm, speed_kmh, wheel_speed", "once": [], "live": []},

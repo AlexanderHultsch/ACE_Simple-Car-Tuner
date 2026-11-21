@@ -134,7 +134,7 @@
     },
     {
       "id": "turbo_boost_1", "group": "Turbo", "label": "Turbo 1 max boost", "kind": "value", "type": "float", "unit": "bar",
-      "description": "Max boost is the peak boost of a turbo (TurboData.max_boost, in bar); with two turbos each needs its own controller, or one runs unregulated at full boost. This is the maximum boost pressure of the first turbo, written to the engine file, the turbo's own file and the car's inline copy. Not confirmed in the game. Shown only when the stock data has this field. Only shown for cars with a turbo.",
+      "description": "Max boost is the peak boost of a turbo (TurboData.max_boost, in bar); with two turbos each needs its own controller, or one runs unregulated at full boost. This is the maximum boost pressure of the first turbo, written to the engine file, the turbo's own file and the car's inline copy. Measured on the BMW M4 CSL (2026-11-19): raising it from 1.0 to 2.0 alone did not raise the boost the game reports; the wastegate (turbo_wastegate_1, turbo_wastegate_2) caps it. Shown only when the stock data has this field. Only shown for cars with a turbo.",
       "verified": false, "min": 0, "max": 3, "hide_if_absent": true,
       "targets": [
         {"file": "@engine", "path": "turbos[0].max_boost"},
@@ -144,7 +144,7 @@
     },
     {
       "id": "turbo_boost_2", "group": "Turbo", "label": "Turbo 2 max boost", "kind": "value", "type": "float", "unit": "bar",
-      "description": "Max boost is the peak boost of a turbo (TurboData.max_boost, in bar); with two turbos each needs its own controller, or one runs unregulated at full boost. This is the maximum boost pressure of the second turbo, written to the engine file, the turbo's own file and the car's inline copy. Not confirmed in the game. Shown only when the stock data has this field. Only shown for cars with two turbos.",
+      "description": "Max boost is the peak boost of a turbo (TurboData.max_boost, in bar); with two turbos each needs its own controller, or one runs unregulated at full boost. This is the maximum boost pressure of the second turbo, written to the engine file, the turbo's own file and the car's inline copy. Measured on the BMW M4 CSL (2026-11-19): raising it from 1.0 to 2.0 alone did not raise the boost the game reports; the wastegate (turbo_wastegate_1, turbo_wastegate_2) caps it. Shown only when the stock data has this field. Only shown for cars with two turbos.",
       "verified": false, "min": 0, "max": 3, "hide_if_absent": true,
       "targets": [
         {"file": "@engine", "path": "turbos[1].max_boost"},
@@ -153,8 +153,28 @@
       ]
     },
     {
+      "id": "turbo_wastegate_1", "group": "Turbo", "label": "Turbo 1 wastegate", "kind": "value", "type": "float", "unit": "bar",
+      "description": "Wastegate is the boost pressure at which the turbo's wastegate limits the boost (TurboData.wastegate, in bar), so it caps the real boost of the turbo. This is the wastegate of the first turbo, written to the engine file, the turbo's own file and the car's inline copy. Measured on the BMW M4 CSL (2026-11-19): with turbo_boost_1 and turbo_boost_2 at 2.0 and the stock wastegate 0.785 on both turbos the game reported at most 1.57 bar (2 x 0.785); raise this value, not only the max boost, to get more boost. Shown only when the stock data has this field. Only shown for cars with a turbo.",
+      "verified": false, "min": 0, "max": 3, "hide_if_absent": true,
+      "targets": [
+        {"file": "@engine", "path": "turbos[0].wastegate"},
+        {"file": "@turbo[0]", "path": "wastegate"},
+        {"file": "@car", "path": "engine.turbos[0].wastegate", "optional": true}
+      ]
+    },
+    {
+      "id": "turbo_wastegate_2", "group": "Turbo", "label": "Turbo 2 wastegate", "kind": "value", "type": "float", "unit": "bar",
+      "description": "Wastegate is the boost pressure at which the turbo's wastegate limits the boost (TurboData.wastegate, in bar), so it caps the real boost of the turbo. This is the wastegate of the second turbo, written to the engine file, the turbo's own file and the car's inline copy. Measured on the BMW M4 CSL (2026-11-19): with turbo_boost_1 and turbo_boost_2 at 2.0 and the stock wastegate 0.785 on both turbos the game reported at most 1.57 bar (2 x 0.785); raise this value, not only the max boost, to get more boost. Shown only when the stock data has this field. Only shown for cars with a turbo.",
+      "verified": false, "min": 0, "max": 3, "hide_if_absent": true,
+      "targets": [
+        {"file": "@engine", "path": "turbos[1].wastegate"},
+        {"file": "@turbo[1]", "path": "wastegate"},
+        {"file": "@car", "path": "engine.turbos[1].wastegate", "optional": true}
+      ]
+    },
+    {
       "id": "max_turbo_boost", "group": "Turbo", "label": "Engine max boost", "kind": "value", "type": "float", "unit": "bar",
-      "description": "Max Turbo Boost has no physical effect, it is only a reference for gameplay and audio; the boost of each turbo (turbo_boost_1, turbo_boost_2) is the real cap. This is the engine-level reference value of the turbo boost pressure in bar (EngineData.max_turbo_boost), written to the engine file and the car's inline copy. Only shown for cars whose engine lists a turbo file.",
+      "description": "Max Turbo Boost has no physical effect, it is only a reference for gameplay and audio; the wastegate of each turbo (turbo_wastegate_1, turbo_wastegate_2) caps the real boost. On the BMW M4 CSL the stock value 1.57 equals the peak boost the game reports (two wastegates of 0.785); keep it equal to the real peak boost, a higher value probably makes the turbo sound play as if the turbo never reached full boost (not confirmed). This is the engine-level reference value of the turbo boost pressure in bar (EngineData.max_turbo_boost), written to the engine file and the car's inline copy. Only shown for cars whose engine lists a turbo file.",
       "verified": false, "min": 0, "max": 3, "hide_if_absent": true,
       "needs": [
         {"file": "@turbo[0]", "path": "max_boost"}

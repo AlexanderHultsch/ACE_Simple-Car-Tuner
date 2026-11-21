@@ -30,6 +30,8 @@ DIRECT = {
     "idle_rpm": ("rpm", "rpm gas"),
     "turbo_boost_1": ("boost_max", "boost rpm gas"),
     "turbo_boost_2": ("boost_max", "boost rpm gas"),
+    "turbo_wastegate_1": ("boost_max", "boost rpm gas"),
+    "turbo_wastegate_2": ("boost_max", "boost rpm gas"),
     "max_turbo_boost": ("boost_max", "boost rpm gas"),
     "diff_power_default": ("diff_power_level diff_coast_level diff_power_pct diff_coast_pct",
                            "diff_power_pct diff_coast_pct wheel_speed slip_ratio"),
@@ -128,13 +130,13 @@ class TestChannelTable(unittest.TestCase):
 
     def test_every_catalogue_setting_is_in_the_table_in_catalogue_order(self):
         self.assertEqual(list(RAW["settings"]), [s["id"] for s in CAT["settings"]])
-        self.assertEqual(len(RAW["settings"]), 145)
+        self.assertEqual(len(RAW["settings"]), 147)
 
-    def test_exactly_these_31_settings_are_direct(self):
+    def test_exactly_these_33_settings_are_direct(self):
         direct = [i for i, e in RAW["settings"].items() if e["status"] == "direct"]
-        self.assertEqual(len(DIRECT), 31)
+        self.assertEqual(len(DIRECT), 33)
         self.assertEqual(set(direct), set(DIRECT))
-        self.assertEqual(len(direct), 31)
+        self.assertEqual(len(direct), 33)
 
     def test_the_channels_of_every_direct_setting(self):
         for sid, (once, live) in DIRECT.items():
@@ -391,8 +393,8 @@ class TestTickableIds(unittest.TestCase):
     def test_direct_settings_in_catalogue_order_then_the_extra_rows(self):
         ids = logconf.tickable_ids(CHAN)
         order = [s["id"] for s in CAT["settings"] if s["id"] in DIRECT]
-        self.assertEqual(ids[:31], order)
-        self.assertEqual(ids[31:], ["behaviour." + r for r in BEHAVIOUR] + ["car_state." + r for r in CAR_STATE])
+        self.assertEqual(ids[:33], order)
+        self.assertEqual(ids[33:], ["behaviour." + r for r in BEHAVIOUR] + ["car_state." + r for r in CAR_STATE])
         self.assertEqual(len(ids), len(set(ids)))
 
     def test_a_greyed_setting_is_not_tickable(self):
@@ -663,7 +665,7 @@ class TestTree(unittest.TestCase):
                 self.assertEqual(r["tickable"], r["status"] == "direct", r["id"])
                 self.assertEqual(set(r), {"id", "label", "unit", "status", "note", "tickable", "ticked", "once", "live"})
                 self.assertNotIn("default", r)
-        self.assertEqual(sum(r["tickable"] for g in self.catalogue_groups() for r in g["rows"]), 31)
+        self.assertEqual(sum(r["tickable"] for g in self.catalogue_groups() for r in g["rows"]), 33)
 
     def test_ticked_follows_the_config(self):
         ticked = [r["id"] for g in self.groups for r in g["rows"] if r["ticked"]]
@@ -709,8 +711,8 @@ class TestTree(unittest.TestCase):
         ids = logconf.tickable_ids(CHAN)
         self.assertNotEqual(shown, ids)
         self.assertEqual(sorted(shown), sorted(ids))
-        self.assertEqual(ids[:31], [s["id"] for s in CAT["settings"] if s["id"] in DIRECT])
-        self.assertEqual(ids[31:], ["behaviour." + r for r in BEHAVIOUR] + ["car_state." + r for r in CAR_STATE])
+        self.assertEqual(ids[:33], [s["id"] for s in CAT["settings"] if s["id"] in DIRECT])
+        self.assertEqual(ids[33:], ["behaviour." + r for r in BEHAVIOUR] + ["car_state." + r for r in CAR_STATE])
         self.assertEqual(logconf.normalised({"version": 1, "rate_hz": 30, "ticked": shown}, CHAN)["ticked"], ids)
         self.assertEqual(logconf.selected_channels(CHAN, {"version": 1, "rate_hz": 30, "ticked": shown}),
                          logconf.selected_channels(CHAN, {"version": 1, "rate_hz": 30, "ticked": ids}))
@@ -1230,7 +1232,7 @@ class TestAiCommand(unittest.TestCase):
         shown = [l for l in rows[:rows.index("NOT VISIBLE TO THE GAME (cannot be logged, never ask for them)")] if l.startswith("- ")]
         tickable = [r for g in groups for r in g["rows"] if r["tickable"]]
         self.assertEqual(len(shown), len(tickable))
-        self.assertEqual(len(tickable), 31 + 13 + 9)
+        self.assertEqual(len(tickable), 33 + 13 + 9)
         for line, r in zip(shown, tickable):
             with self.subTest(r["id"]):
                 self.assertTrue(line.startswith("- %s (" % r["label"]), line)

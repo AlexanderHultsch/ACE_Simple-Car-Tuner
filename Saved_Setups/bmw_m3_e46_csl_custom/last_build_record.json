@@ -1,0 +1,389 @@
+{
+  "version": 1,
+  "settings": {
+    "name_suffix": "Custom"
+  },
+  "kit": null,
+  "garage": null,
+  "sounds": {},
+  "name": "BMW M3 E46 CSL Custom",
+  "time": "2026-11-23T12:40:24Z",
+  "changes": {
+    "since": "last build",
+    "settings": [
+      {
+        "id": "display_power_ps",
+        "from": 579.0,
+        "to": 360.0
+      },
+      {
+        "id": "display_torque_nm",
+        "from": 400.0,
+        "to": 370.0
+      },
+      {
+        "id": "limiter",
+        "from": 8800,
+        "to": 8100
+      },
+      {
+        "id": "idle_rpm",
+        "from": 800,
+        "to": 700
+      },
+      {
+        "id": "power_scale",
+        "from": 0.5714,
+        "to": 1.0
+      },
+      {
+        "id": "nominal_rpm",
+        "from": 8600.0,
+        "to": 8100.0
+      },
+      {
+        "id": "engine_damage_rpm",
+        "from": 9000.0,
+        "to": 7700.0
+      },
+      {
+        "id": "turbo_boost_1",
+        "from": 0.3,
+        "to": null
+      },
+      {
+        "id": "turbo_boost_2",
+        "from": 2.0,
+        "to": null
+      },
+      {
+        "id": "turbo_wastegate_1",
+        "from": 0.3,
+        "to": null
+      },
+      {
+        "id": "turbo_wastegate_2",
+        "from": 1.5,
+        "to": null
+      },
+      {
+        "id": "max_turbo_boost",
+        "from": 1.8,
+        "to": 0.0
+      },
+      {
+        "id": "final_ratio",
+        "from": 3.91,
+        "to": 3.62
+      },
+      {
+        "id": "gear_1",
+        "from": 3.5,
+        "to": 4.227
+      },
+      {
+        "id": "gear_2",
+        "from": 2.1,
+        "to": 2.528
+      },
+      {
+        "id": "autoshift_up_rpm",
+        "from": 8700,
+        "to": 7900
+      },
+      {
+        "id": "auto_cut_off_time",
+        "from": 150.0,
+        "to": 250.0
+      },
+      {
+        "id": "diff_power_default",
+        "from": 0.85,
+        "to": 0.3
+      },
+      {
+        "id": "diff_coast_default",
+        "from": 0.7,
+        "to": 0.1
+      },
+      {
+        "id": "diff_power_max",
+        "from": 1.0,
+        "to": 0.1
+      },
+      {
+        "id": "diff_coast_max",
+        "from": 1.0,
+        "to": 0.1
+      },
+      {
+        "id": "diff_type",
+        "from": "Spool",
+        "to": "LSD"
+      },
+      {
+        "id": "diff_hw_preload",
+        "from": 10.0,
+        "to": 1.0
+      },
+      {
+        "id": "diff_hw_bias_power",
+        "from": 2.5,
+        "to": 2.3
+      },
+      {
+        "id": "diff_hw_bias_coast",
+        "from": 3.0,
+        "to": 0.5
+      },
+      {
+        "id": "diff_hw_power",
+        "from": 0.85,
+        "to": 0.0
+      },
+      {
+        "id": "diff_hw_coast",
+        "from": 0.7,
+        "to": 0.0
+      },
+      {
+        "id": "steer_ratio",
+        "from": 14.0,
+        "to": 14.5
+      },
+      {
+        "id": "steer_rod_ratio",
+        "from": 0.0025,
+        "to": 0.0017
+      },
+      {
+        "id": "ff_mult",
+        "from": 2.1,
+        "to": 1.75
+      },
+      {
+        "id": "brake_torque",
+        "from": 4700.0,
+        "to": 3700.0
+      },
+      {
+        "id": "car_mass",
+        "from": 1450.0,
+        "to": 1495.0
+      },
+      {
+        "id": "arb_front",
+        "from": 36000.0,
+        "to": 70000.0
+      },
+      {
+        "id": "arb_rear",
+        "from": 30000.0,
+        "to": 50000.0
+      },
+      {
+        "id": "spring_front",
+        "from": 54000.0,
+        "to": 80000.0
+      },
+      {
+        "id": "spring_rear",
+        "from": 55000.0,
+        "to": 65000.0
+      },
+      {
+        "id": "collar_front",
+        "from": 97.12118,
+        "to": 68.12118
+      },
+      {
+        "id": "collar_rear",
+        "from": 44.217757,
+        "to": 25.917757
+      },
+      {
+        "id": "camber_front",
+        "from": -3.5,
+        "to": -2.0000005
+      },
+      {
+        "id": "camber_rear",
+        "from": -0.5,
+        "to": -1.4999999
+      },
+      {
+        "id": "static_camber_front",
+        "from": -3.1,
+        "to": -2.5072165
+      },
+      {
+        "id": "static_camber_rear",
+        "from": -0.5,
+        "to": -1.0332735
+      },
+      {
+        "id": "camber_min_front",
+        "from": -4.0,
+        "to": -2.5
+      },
+      {
+        "id": "camber_max_rear",
+        "from": 0.0,
+        "to": -1.0
+      },
+      {
+        "id": "tyre_grip_lateral_front",
+        "from": 1.353434,
+        "to": 1.2078336
+      },
+      {
+        "id": "tyre_grip_longitudinal_front",
+        "from": 1.326,
+        "to": 1.2584136
+      },
+      {
+        "id": "tyre_peak_slip_angle_front",
+        "from": 8.418182,
+        "to": 8.115532
+      },
+      {
+        "id": "tyre_load_reference_front",
+        "from": 4320.0,
+        "to": 3930.0
+      },
+      {
+        "id": "tyre_pressure_ref_front",
+        "from": 28.0,
+        "to": 30.0
+      },
+      {
+        "id": "tyre_flex_lateral_front",
+        "from": 38000.0,
+        "to": 30000.0
+      },
+      {
+        "id": "tyre_flex_longitudinal_front",
+        "from": 20000.0,
+        "to": 18000.0
+      },
+      {
+        "id": "tyre_stiffness_rate_front",
+        "from": 312000.0,
+        "to": 282100.0
+      },
+      {
+        "id": "tyre_heat_partition_front",
+        "from": 0.9,
+        "to": 0.7
+      },
+      {
+        "id": "tyre_grain_gain_front",
+        "from": 0.47,
+        "to": 0.27
+      },
+      {
+        "id": "tyre_grain_slip_angle_gain_front",
+        "from": 0.565,
+        "to": 0.265
+      },
+      {
+        "id": "tyre_grip_lateral_rear",
+        "from": 1.1993119,
+        "to": 1.2243638
+      },
+      {
+        "id": "tyre_grip_longitudinal_rear",
+        "from": 1.265897,
+        "to": 1.2740656
+      },
+      {
+        "id": "tyre_peak_slip_angle_rear",
+        "from": 8.35,
+        "to": 8.010755
+      },
+      {
+        "id": "tyre_load_reference_rear",
+        "from": 3720.0,
+        "to": 4320.0
+      },
+      {
+        "id": "tyre_pressure_ref_rear",
+        "from": 24.0,
+        "to": 30.0
+      },
+      {
+        "id": "tyre_flex_lateral_rear",
+        "from": 38000.0,
+        "to": 30000.0
+      },
+      {
+        "id": "tyre_flex_longitudinal_rear",
+        "from": 20000.0,
+        "to": 18000.0
+      },
+      {
+        "id": "tyre_stiffness_rate_rear",
+        "from": 312000.0,
+        "to": 322400.0
+      },
+      {
+        "id": "tyre_heat_partition_rear",
+        "from": 0.85,
+        "to": 0.7
+      },
+      {
+        "id": "tyre_grain_gain_rear",
+        "from": 0.47,
+        "to": 0.27
+      },
+      {
+        "id": "tyre_grain_slip_angle_gain_rear",
+        "from": 0.565,
+        "to": 0.265
+      },
+      {
+        "id": "tyre_thermal_curve_front",
+        "from": "supercar",
+        "to": "road"
+      },
+      {
+        "id": "tyre_thermal_curve_rear",
+        "from": "supercar",
+        "to": "road"
+      },
+      {
+        "id": "fuel_start",
+        "from": 29.0,
+        "to": 30.0
+      },
+      {
+        "id": "tc_level",
+        "from": 0,
+        "to": 1
+      }
+    ],
+    "extras": [
+      {
+        "kind": "turbo_kit",
+        "from": "BMW M4 CSL (twin turbo, 1.0/1.0 bar)",
+        "to": null,
+        "text": "Turbo kit: BMW M4 CSL (twin turbo, 1.0/1.0 bar) -> none"
+      },
+      {
+        "kind": "sound",
+        "slot": "turbo",
+        "from": "event:/parts/turbos/turbo_quattro",
+        "to": null,
+        "text": "Sound turbo: turbo_quattro -> own sound"
+      },
+      {
+        "kind": "sound",
+        "slot": "backfire",
+        "from": "event:/parts/backfires/backfire_supra",
+        "to": null,
+        "text": "Sound backfire: backfire_supra -> own sound"
+      }
+    ],
+    "total": 1
+  }
+}

@@ -366,6 +366,22 @@ class TestSetGarage(World):
         self.assertEqual(sorted(k for k in sources if "stock:" + k in self.stock_keys()), sorted(k[len("stock:"):] for k in self.stock_keys()))
 
 
+class TestGarageOfALockedVersion(World):
+    def setUp(self):
+        super().setUp()
+        self.tyres()
+
+    def test_the_selection_and_its_reset_are_refused_and_the_state_stays(self):
+        v = tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {tune.TYRE_KEY: [ST_SS]}, v)
+        tune.save_json(os.path.join(tune.version_dir(self.work, "ks_x", None, v), "meta.json"), {"name": "Drift", "locked": True})
+        before = tune.read_version_state(self.work, "ks_x", v)
+        for call in (lambda: tune.set_garage(self.work, "ks_x", ["own:soft"], version=v), lambda: tune.reset_garage(self.work, "ks_x", version=v)):
+            with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) is locked; unlock it to change it$"):
+                call()
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", v), before)
+
+
 class TestResetGarage(World):
     def test_reset_removes_the_key_and_keeps_the_rest(self):
         tune.save_state(self.work, "ks_x", {"limiter": 8000, tune.TYRE_KEY: [ST_SS]})

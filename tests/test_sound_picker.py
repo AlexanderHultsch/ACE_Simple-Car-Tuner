@@ -557,6 +557,19 @@ class TestSetSound(World):
         self.assertEqual(self.fakes["ks_x"].saved, [])
 
 
+class TestSoundsOfALockedVersion(World):
+    def test_the_choice_and_its_reset_are_refused_and_the_state_stays(self):
+        v = tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {KEY: {"turbo": T_RX7}}, v)
+        tune.save_json(os.path.join(tune.version_dir(self.work, "ks_x", None, v), "meta.json"), {"name": "Drift", "locked": True})
+        before = tune.read_version_state(self.work, "ks_x", v)
+        for call in (lambda: tune.set_sound(self.work, "ks_x", "backfire", B_B, version=v), lambda: tune.reset_sounds(self.work, "ks_x", version=v),
+                     lambda: tune.reset_sounds(self.work, "ks_x", slot="turbo", version=v)):
+            with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) is locked; unlock it to change it$"):
+                call()
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", v), before)
+
+
 class TestResetSounds(World):
     def test_without_a_slot_every_choice_is_removed(self):
         tune.save_state(self.work, "ks_x", {"limiter": 8000, KEY: {"turbo": T_RX7, "backfire": B_B}})

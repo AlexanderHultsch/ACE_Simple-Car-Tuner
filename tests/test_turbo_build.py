@@ -1128,6 +1128,18 @@ class TestWireBookkeeping(unittest.TestCase):
         self.assertEqual(listing, ["x"])
 
 
+class TestTurboOfALockedVersion(World):
+    def test_the_kit_and_its_reset_are_refused_and_the_state_stays(self):
+        v = tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {KEY: {"donor": "ks_b"}}, v)
+        tune.save_json(os.path.join(tune.version_dir(self.work, "ks_x", None, v), "meta.json"), {"name": "Drift", "locked": True})
+        before = tune.read_version_state(self.work, "ks_x", v)
+        for call in (lambda: tune.set_turbo(self.work, "ks_x", "ks_a", version=v), lambda: tune.reset_turbo(self.work, "ks_x", version=v)):
+            with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) is locked; unlock it to change it$"):
+                call()
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", v), before)
+
+
 class TestCommand(World):
     def test_the_usage_and_the_dispatch_name_the_command_after_turbo_remove(self):
         self.assertIn("python tools/tune.py turbo-kit    [--tune ID | --draft] [--car ID] [--work <dir>]", USAGE)

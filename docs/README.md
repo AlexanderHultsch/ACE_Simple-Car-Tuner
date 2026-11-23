@@ -29,7 +29,7 @@ The full step-by-step guide is in the [user guide](USER_GUIDE.md). The project i
 
 ## More
 
-- Example setups: [BMW M3 E46 CSL Custom with the version Drift](../Saved_Setups/bmw_m3_e46_csl_custom/README.md) and [BMW M4 CSL Drift](../Saved_Setups/bmw_m4_csl_drift/README.md), cars built and driven with the tuner (the E46 as a stock-valued Base plus a Drift version), with what was measured in the game and how to load them.
+- Example setup: [BMW M3 E46 CSL Custom with the version Drift](../Saved_Setups/bmw_m3_e46_csl_custom/README.md), a car built and driven with the tuner (a stock-valued Base plus a Drift version), with what was measured in the game and how to load it.
 - [User guide](USER_GUIDE.md): installation, every button and the details.
 - [Project state](TUNER_SPEC.md): what works, what is verified, what is open.
 - [Handover](HANDOVER.md): notes for continuing the work.

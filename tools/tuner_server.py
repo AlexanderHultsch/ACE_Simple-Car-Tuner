@@ -44,6 +44,9 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
   POST /api/version_add {"tune": ..., "name": ..., "from": version id (optional, default the base)}   adds a version as a copy
                         of the base (or of version "from"); answers {"id"}
   POST /api/version_rename {"tune": ..., "version": ..., "name": ...}   answers {"id", "name"}; there is no route that deletes a version
+  POST /api/version_lock   {"tune": ..., "version": ...}   locks a version (its kept build must match its state: 400 "Apply first, then lock it"
+                        otherwise); answers {"id", "name"}; a locked version refuses every write of its state with 400 "... is locked ..."
+  POST /api/version_unlock {"tune": ..., "version": ...}   unlocks a version; answers {"id", "name"}
   POST /api/set        {"id": ..., "value": ...}          POST /api/unset  {"id": ...}
                         (value: text, number, or true/false for the settings of type bool, which are on/off switches
                         and appear in the rows with type "bool" and true/false as default and value)
@@ -576,7 +579,8 @@ def api_reset_all(car_id, body):
     with STATE_LOCK:
         state = {}
         if version is not None:
-            tune.save_version_state(work, car_id, state, version, tune_id)
+            with bad_input():
+                tune.save_version_state(work, car_id, state, version, tune_id)
             return {"ok": True}
         if tune.is_extra_tune(car_id, tune_id):
             suffix_id = tune.name_suffix_setting()["id"]
@@ -616,6 +620,30 @@ def api_version_rename(car_id, body):
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
         return {"id": version, "name": tune.rename_version(work, car_id, version, name, tune_id)}
+
+
+def api_version_lock(car_id, body):
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
+    if not isinstance(version, str):
+        raise ApiError(400, "need version (text)")
+    if tune_id in (None, tune.DRAFT):
+        raise ApiError(400, "a version needs a modded car")
+    refuse_while_job_runs()
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return {"id": version, "name": tune.lock_version(work, car_id, version, tune_id)}
+
+
+def api_version_unlock(car_id, body):
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
+    if not isinstance(version, str):
+        raise ApiError(400, "need version (text)")
+    if tune_id in (None, tune.DRAFT):
+        raise ApiError(400, "a version needs a modded car")
+    refuse_while_job_runs()
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return {"id": version, "name": tune.unlock_version(work, car_id, version, tune_id)}
 
 
 def api_init(car_id, body):
@@ -1045,6 +1073,7 @@ GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/grou
 POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": api_reset_all,
                "/api/init": api_init, "/api/duplicate": api_duplicate,
                "/api/version_add": api_version_add, "/api/version_rename": api_version_rename,
+               "/api/version_lock": api_version_lock, "/api/version_unlock": api_version_unlock,
                "/api/apply": api_apply, "/api/tyre_new": api_tyre_new, "/api/tyre_rename": api_tyre_rename,
                "/api/tyre_source": api_tyre_source, "/api/tyre_set": api_tyre_set, "/api/tyre_unset": api_tyre_unset,
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,

@@ -2258,9 +2258,9 @@ class TestVersions(CarCase):
         self.assertEqual(tune.add_version(self.work, "ks_x", "Drift"), "v01")
         self.assertEqual(tune.add_version(self.work, "ks_x", "Grip"), "v02")
         self.assertEqual(tune.add_version(self.work, "ks_x", "Other car", "ax01"), "v01")
-        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift"}, {"id": "v02", "name": "Grip"}])
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift", "locked": False, "built": None}, {"id": "v02", "name": "Grip", "locked": False, "built": None}])
         self.assertEqual(tune.list_versions(self.work, "ks_x", "ax_x"), tune.list_versions(self.work, "ks_x"))
-        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01"), [{"id": "v01", "name": "Other car"}])
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01"), [{"id": "v01", "name": "Other car", "locked": False, "built": None}])
         self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift"})
 
     def test_a_gap_in_the_ids_is_filled_first_and_the_last_id_is_v99(self):
@@ -2311,7 +2311,7 @@ class TestVersions(CarCase):
         tune.add_version(self.work, "ks_x", "Grip")
         state = tune.read_version_state(self.work, "ks_x", "v02")
         self.assertEqual(tune.rename_version(self.work, "ks_x", "v02", "  Wet grip "), "Wet grip")
-        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift"}, {"id": "v02", "name": "Wet grip"}])
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift", "locked": False, "built": None}, {"id": "v02", "name": "Wet grip", "locked": False, "built": None}])
         self.assertEqual(tune.read_version_state(self.work, "ks_x", "v02"), state)
         self.assertEqual(tune.rename_version(self.work, "ks_x", "v01", "DRIFT"), "DRIFT")
         with self.assertRaisesRegex(ValueError, "already used by v01"):
@@ -2516,6 +2516,246 @@ class TestVersions(CarCase):
                            (("version-add", "A", "--tune", "ax99"), "error: ks_x has no tune ax99\n")):
             with self.subTest(argv):
                 self.assertEqual(self.main(*argv)[::2], (1, text))
+
+    # ---------------------------------------------------------------------------- locking
+    def keep(self, version, tune_id=None, **over):
+        """A kept build for the version made from its state as it is now (build/files/data/a.bin and build/build.json); over replaces keys of build.json."""
+        folder = self.vpath(version, "build", tune_id=tune_id)
+        self.write(os.path.join(folder, "files", "data", "a.bin"), b"A", binary=True)
+        record = {"tune": tune_id or "ax_x", "preset": "content\\cars\\ax_x\\presets\\p_v01.mechanicalcarpreset", "sound_part": None, "files": ["data/a.bin"],
+                  "time": "2026-11-23T10:00:00Z", "state": tune.read_version_state(self.work, "ks_x", version, tune_id)}
+        record.update(over)
+        self.write(os.path.join(folder, "build.json"), record)
+        return record
+
+    def lock(self, name="Drift", tune_id=None):
+        v = tune.add_version(self.work, "ks_x", name, tune_id)
+        self.keep(v, tune_id)
+        tune.lock_version(self.work, "ks_x", v, tune_id)
+        return v
+
+    def tree(self, folder):
+        found = {}
+        for dp, _, names in os.walk(folder):
+            for n in names:
+                with open(os.path.join(dp, n), "rb") as f:
+                    found[os.path.relpath(os.path.join(dp, n), folder)] = f.read()
+        return found
+
+    def test_list_versions_tells_locked_and_the_time_of_the_kept_build(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.add_version(self.work, "ks_x", "Grip")
+        tune.add_version(self.work, "ks_x", "Wet")
+        self.keep("v02")
+        self.keep("v03")
+        tune.lock_version(self.work, "ks_x", "v03")
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift", "locked": False, "built": None},
+                                                                 {"id": "v02", "name": "Grip", "locked": False, "built": "2026-11-23T10:00:00Z"},
+                                                                 {"id": "v03", "name": "Wet", "locked": True, "built": "2026-11-23T10:00:00Z"}])
+
+    def test_locked_is_true_only_for_exactly_true_in_a_meta_json_object(self):
+        for n in range(1, 7):
+            tune.add_version(self.work, "ks_x", "V%d" % n)
+        for v, meta in (("v01", {"name": "A", "locked": True}), ("v02", {"name": "B", "locked": 1}), ("v03", {"name": "C", "locked": "true"}),
+                        ("v04", {"name": "D", "locked": False}), ("v05", "{not json"), ("v06", [True])):
+            self.write(self.vpath(v, "meta.json"), meta)
+        self.assertEqual([(v["name"], v["locked"]) for v in tune.list_versions(self.work, "ks_x")],
+                         [("A", True), ("B", False), ("C", False), ("D", False), ("v05", False), ("v06", False)])
+
+    def test_built_is_the_time_of_a_valid_kept_build_of_this_tune_only(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        record = self.keep("v01")
+        self.assertEqual(tune.kept_build(self.work, "ks_x", "v01"), record)
+        self.assertEqual(tune.kept_build(self.work, "ks_x", "v01", "ax_x"), record)
+        tune.add_version(self.work, "ks_x", "Other", "ax01")
+        self.keep("v01", "ax01", tune="ax_x")
+        self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01", "ax01"))
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01")[0]["built"], None)
+
+    def test_a_kept_build_that_is_damaged_is_none(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        build = self.vpath("v01", "build", "build.json")
+        good = self.keep("v01")
+        bad = [("files", []), ("files", "data/a.bin"), ("files", [5]), ("files", ["data/missing.bin"]), ("files", ["../x"]), ("files", ["data//a.bin"]),
+               ("files", ["/data/a.bin"]), ("preset", ""), ("preset", None), ("sound_part", ""), ("sound_part", 5), ("time", None), ("time", 5),
+               ("state", []), ("state", None), ("tune", "ax01"), ("tune", None)]
+        for key, value in bad:
+            with self.subTest(key=key, value=value):
+                self.write(build, dict(good, **{key: value}))
+                self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
+                self.assertEqual(tune.list_versions(self.work, "ks_x")[0]["built"], None)
+        for key in ("files", "preset", "sound_part", "time", "state", "tune"):
+            with self.subTest(missing=key):
+                self.write(build, {k: v for k, v in good.items() if k != key})
+                self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
+        for text in ("{not json", "[]", "null", ""):
+            with self.subTest(text=text):
+                self.write(build, text)
+                self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
+        self.write(build, dict(good, sound_part="content\\cars\\ax_x\\presets\\parts\\physics\\ax_x_v01_sound.compatiblepart"))
+        self.assertIsNotNone(tune.kept_build(self.work, "ks_x", "v01"))
+        os.remove(build)
+        self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
+
+    def test_lock_needs_a_kept_build(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) has no kept build: Apply first, then lock it$"):
+            tune.lock_version(self.work, "ks_x", "v01")
+        self.keep("v01", files=[])
+        with self.assertRaisesRegex(ValueError, "has no kept build"):
+            tune.lock_version(self.work, "ks_x", "v01")
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift"})
+
+    def test_lock_needs_a_kept_build_of_the_state_the_version_has_now(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.keep("v01")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) has changes that are not built yet: Apply first, then lock it$"):
+            tune.lock_version(self.work, "ks_x", "v01")
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift"})
+        self.keep("v01")
+        self.assertEqual(tune.lock_version(self.work, "ks_x", "v01"), "Drift")
+
+    def test_lock_and_unlock_keep_the_name_and_every_other_key_of_the_meta(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.keep("v01")
+        self.write(self.vpath("v01", "meta.json"), {"name": "Drift", "extra": [1]})
+        tune.lock_version(self.work, "ks_x", "v01")
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift", "extra": [1], "locked": True})
+        self.assertEqual(tune.list_versions(self.work, "ks_x")[0]["name"], "Drift")
+        self.assertEqual(tune.unlock_version(self.work, "ks_x", "v01"), "Drift")
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift", "extra": [1]})
+        self.assertFalse(tune.list_versions(self.work, "ks_x")[0]["locked"])
+
+    def test_locking_a_locked_version_and_unlocking_an_unlocked_one_are_fine(self):
+        v = self.lock()
+        self.assertEqual(tune.lock_version(self.work, "ks_x", v), "Drift")
+        self.assertTrue(tune.list_versions(self.work, "ks_x")[0]["locked"])
+        tune.unlock_version(self.work, "ks_x", v)
+        self.assertEqual(tune.unlock_version(self.work, "ks_x", v), "Drift")
+        self.assertEqual(tune.read_json(self.vpath(v, "meta.json")), {"name": "Drift"})
+
+    def test_lock_and_unlock_touch_neither_the_kept_build_nor_the_snapshot(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.keep("v01")
+        self.write(self.vpath("v01", "snapshot.json"), {"version": 1})
+        before = self.tree(self.vpath("v01"))
+        before.pop("meta.json")
+        tune.lock_version(self.work, "ks_x", "v01")
+        locked = self.tree(self.vpath("v01"))
+        self.assertEqual(locked.pop("meta.json"), json.dumps({"name": "Drift", "locked": True}, indent=2).encode() + b"\n")
+        self.assertEqual(locked, before)
+        tune.unlock_version(self.work, "ks_x", "v01")
+        self.assertEqual({k: v for k, v in self.tree(self.vpath("v01")).items() if k != "meta.json"}, before)
+
+    def test_lock_and_unlock_of_an_unknown_version_and_of_the_draft_are_errors(self):
+        for call in (tune.lock_version, tune.unlock_version):
+            with self.subTest(call.__name__):
+                with self.assertRaisesRegex(ValueError, "ks_x has no version v05 of ax_x"):
+                    call(self.work, "ks_x", "v05")
+                with self.assertRaisesRegex(ValueError, "version id must be v01 .. v99"):
+                    call(self.work, "ks_x", "v1")
+                with self.assertRaisesRegex(ValueError, "the draft has no versions"):
+                    call(self.work, "ks_x", "v01", tune.DRAFT)
+        self.assertFalse(os.path.exists(self.vpath()))
+
+    def test_lock_works_per_tune(self):
+        v = self.lock("Own", "ax01")
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01")[0]["locked"], True)
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [])
+        self.assertEqual(tune.read_json(self.vpath(v, "meta.json", tune_id="ax01")), {"name": "Own", "locked": True})
+
+    MESSAGE = r"^version v01 \(Drift\) is locked; unlock it to change it$"
+
+    def test_a_locked_version_refuses_every_change_of_its_state_and_keeps_it(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        self.keep("v01")
+        tune.lock_version(self.work, "ks_x", "v01")
+        before = self.tree(self.vpath("v01"))
+        for call in (lambda: tune.set_value(self.work, "ks_x", "limiter", "7500", version="v01"),
+                     lambda: tune.set_value(self.work, "ks_x", "m", "700", version="v01"),
+                     lambda: tune.unset_value(self.work, "ks_x", "limiter", version="v01"),
+                     lambda: tune.save_version_state(self.work, "ks_x", {}, "v01"),
+                     lambda: tune.save_tune_state(self.work, "ks_x", {}, version="v01"),
+                     lambda: tune.rename_version(self.work, "ks_x", "v01", "Other")):
+            with self.assertRaisesRegex(ValueError, self.MESSAGE):
+                call()
+        self.assertEqual(self.tree(self.vpath("v01")), before)
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {"limiter": 6500})
+
+    def test_the_message_names_the_version_by_its_id_when_the_name_is_unknown(self):
+        v = self.lock()
+        self.write(self.vpath(v, "meta.json"), {"locked": True})
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(v01\) is locked; unlock it to change it$"):
+            tune.set_value(self.work, "ks_x", "limiter", "7500", version=v)
+
+    def test_an_unlocked_version_and_the_base_stay_editable_and_unlocking_allows_changes_again(self):
+        v = self.lock()
+        tune.add_version(self.work, "ks_x", "Grip")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v02")
+        tune.set_value(self.work, "ks_x", "limiter", "6600")
+        tune.unlock_version(self.work, "ks_x", v)
+        tune.set_value(self.work, "ks_x", "limiter", "6700", version=v)
+        self.assertEqual(tune.rename_version(self.work, "ks_x", v, "Renamed"), "Renamed")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", v)["limiter"], 6700)
+
+    def test_a_rename_keeps_the_other_keys_of_the_meta(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.write(self.vpath("v01", "meta.json"), {"name": "Drift", "extra": 1, "locked": False})
+        tune.rename_version(self.work, "ks_x", "v01", "Grip")
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Grip", "extra": 1, "locked": False})
+
+    def test_a_new_version_from_a_locked_one_is_a_new_unlocked_copy(self):
+        v = self.lock()
+        before = self.tree(self.vpath(v))
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Copy", source=v), "v02")
+        self.assertEqual(tune.read_json(self.vpath("v02", "meta.json")), {"name": "Copy"})
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v02"), tune.read_version_state(self.work, "ks_x", v))
+        self.assertEqual(self.tree(self.vpath("v02")).keys(), {"meta.json", "tune_state.json"})
+        self.assertEqual([(x["id"], x["locked"], x["built"]) for x in tune.list_versions(self.work, "ks_x")], [("v01", True, "2026-11-23T10:00:00Z"), ("v02", False, None)])
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v02")
+        self.assertEqual(self.tree(self.vpath(v)), before)
+
+    # ---------------------------------------------------------------------------- locking: command line
+    def test_versions_prints_a_locked_version_with_the_word_locked(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.lock("Grip")
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Grip (locked)\n", ""))
+
+    def test_version_lock_and_unlock_print_the_id_and_the_name(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.keep("v01")
+        self.assertEqual(self.main("version-lock", "v01"), (0, "locked v01 (Drift)\n", ""))
+        self.assertEqual(self.main("version-lock", "v01", "--car", "ks_x", "--tune", "ax_x"), (0, "locked v01 (Drift)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift (locked)\n", ""))
+        self.assertEqual(self.main("version-unlock", "v01"), (0, "unlocked v01 (Drift)\n", ""))
+        self.assertEqual(self.main("version-unlock", "v01", "--tune", "ax_x"), (0, "unlocked v01 (Drift)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\n", ""))
+        tune.add_version(self.work, "ks_x", "Own", "ax01")
+        self.keep("v01", "ax01")
+        self.assertEqual(self.main("version-lock", "v01", "--tune", "ax01"), (0, "locked v01 (Own)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base\nv01: Own (locked)\n", ""))
+
+    def test_version_lock_and_unlock_report_runtime_errors_on_stderr_with_exit_1(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        for argv, text in ((("version-lock", "v01"), "error: version v01 (Drift) has no kept build: Apply first, then lock it\n"),
+                           (("version-lock", "v09"), "error: ks_x has no version v09 of ax_x\n"),
+                           (("version-unlock", "v09"), "error: ks_x has no version v09 of ax_x\n"),
+                           (("version-lock", "v1"), "error: version id must be v01 .. v99, got 'v1'\n"),
+                           (("version-lock", "v01", "--tune", "ax99"), "error: ks_x has no tune ax99\n"),
+                           (("version-unlock", "v01", "--tune", "ax99"), "error: ks_x has no tune ax99\n")):
+            with self.subTest(argv):
+                self.assertEqual(self.main(*argv)[::2], (1, text))
+        self.keep("v01")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        self.assertEqual(self.main("version-lock", "v01")[::2], (1, "error: version v01 (Drift) has changes that are not built yet: Apply first, then lock it\n"))
+        self.keep("v01")
+        self.main("version-lock", "v01")
+        for argv in (("set", "limiter", "7000", "--version", "v01"), ("unset", "limiter", "--version", "v01"), ("version-rename", "v01", "Other")):
+            with self.subTest(argv):
+                self.assertEqual(self.main(*argv)[::2], (1, "error: version v01 (Drift) is locked; unlock it to change it\n"))
 
     def test_show_with_a_version_prints_its_values_and_the_base_meta_settings(self):
         tune.add_version(self.work, "ks_x", "Drift")
@@ -4297,7 +4537,7 @@ class TestUsageText(unittest.TestCase):
 
     def test_every_usage_line_is_a_command_main_dispatches(self):
         commands = [line.split()[2] for line in self.usage_lines()]
-        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
+        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "version-lock", "version-unlock", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
                                     "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "garage", "garage-set", "garage-reset", "turbo-donors",
                                     "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
         self.assertEqual(list(tune.COMMANDS), commands)
@@ -4352,6 +4592,10 @@ usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("unknown_command", ["fr
                                   ("version_rename_with_one_operand", ["version-rename", "v01"]),
                                   ("version_rename_with_three_operands", ["version-rename", "v01", "a", "b"]),
                                   ("version_rename_with_draft", ["version-rename", "v01", "a", "--draft"]),
+                                  ("version_lock_without_an_id", ["version-lock"]), ("version_lock_with_two_ids", ["version-lock", "v01", "v02"]),
+                                  ("version_lock_with_draft", ["version-lock", "v01", "--draft"]), ("version_lock_with_a_version", ["version-lock", "v01", "--version", "v01"]),
+                                  ("version_unlock_without_an_id", ["version-unlock"]), ("version_unlock_with_two_ids", ["version-unlock", "v01", "v02"]),
+                                  ("version_unlock_with_draft", ["version-unlock", "v01", "--draft"]),
                                   ("show_with_version_and_draft", ["show", "--version", "v01", "--draft"]),
                                   ("set_with_version_and_draft", ["set", "limiter", "1", "--version", "v01", "--draft"]),
                                   ("unset_with_version_and_draft", ["unset", "limiter", "--version", "v01", "--draft"]),

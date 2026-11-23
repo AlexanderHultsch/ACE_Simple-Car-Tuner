@@ -275,8 +275,11 @@ button.small { padding: 2px 8px; font-size: 12px; }
         <button id="btn-duplicate" type="button" disabled>Duplicate&hellip;</button>
         <button id="btn-version-add" type="button" hidden disabled>Add version&hellip;</button>
         <button id="btn-version-rename" type="button" hidden disabled>Rename version&hellip;</button>
+        <button id="btn-version-lock" type="button" hidden disabled>Lock version</button>
       </div>
     </div>
+
+    <p id="version-note" class="msg warn" role="status" hidden></p>
 
     <section id="dialog" class="panel dialog" role="group" aria-labelledby="dialog-title" hidden>
       <h2 id="dialog-title"></h2>
@@ -719,6 +722,7 @@ function panelLockReason() {
   if (!serverState) return serverError || "server not reachable";
   if (jobRunning()) return "a job is running";
   if (!serverState.base_present) return "extract the stock car first";
+  if (selectedVersionLocked()) return "this version is locked: unlock it to change it";
   return "";
 }
 
@@ -747,6 +751,12 @@ function versionList() {
 
 function versionEntry() {
   return selection.version ? versionList().find((v) => v.id === selection.version) || null : null;
+}
+
+// whether the selected version is locked: it keeps the files of its last build and cannot be changed
+function selectedVersionLocked() {
+  const v = versionEntry();
+  return !!v && v.locked === true;
 }
 
 function versionSelection(id) {
@@ -879,7 +889,7 @@ function renderCars() {
   select.disabled = list.length === 0;
   const versionSelect = $("version-select");
   versionSelect.replaceChildren();
-  for (const [id, name] of [["", "Base"]].concat(versions.map((v) => [v.id, v.name]))) {
+  for (const [id, name] of [["", "Base"]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))) {
     const o = el("option", "", name);
     o.value = id;
     versionSelect.appendChild(o);
@@ -927,6 +937,17 @@ function renderButtons() {
   $("btn-version-rename").hidden = !moddedSelected;
   $("btn-version-rename").disabled = whyRename !== "";
   $("btn-version-rename").title = whyRename;
+  const lockedNow = selectedVersionLocked();
+  $("btn-version-rename").disabled = whyRename !== "" || lockedNow;
+  if (whyRename === "" && lockedNow) $("btn-version-rename").title = "this version is locked: unlock it to rename it";
+  $("btn-version-lock").hidden = !moddedSelected;
+  $("btn-version-lock").textContent = lockedNow ? "Unlock version" : "Lock version";
+  $("btn-version-lock").disabled = whyRename !== "";
+  $("btn-version-lock").title = whyRename;
+  const lockedEntry = lockedNow ? versionEntry() : null;
+  $("version-note").hidden = !lockedEntry;
+  $("version-note").textContent = lockedEntry ? "Locked: Apply keeps this version's files from its build of " +
+    (lockedEntry.built ? new Date(lockedEntry.built).toLocaleString() : "an unknown time") + ". Unlock it to change it." : "";
   $("version-select").disabled = running || (versionList().length === 0 && !selection.version);
   const locked = running || (dialog !== null && dialog.busy);
   for (const id of ["dialog-id", "dialog-suffix", "dialog-ok"]) $(id).disabled = locked;
@@ -943,6 +964,13 @@ function renderButtons() {
   if (viewOnly()) {
     $("btn-reset-all").disabled = true;
     for (const r of rows) {
+      r.field.disabled = true;
+      r.reset.disabled = true;
+    }
+  }
+  if (selectedVersionLocked()) {
+    $("btn-reset-all").disabled = true;
+    for (const r of headerRow ? rows.concat(headerRow) : rows) {
       r.field.disabled = true;
       r.reset.disabled = true;
     }
@@ -971,6 +999,36 @@ function addLine(box, text, cls) {
   box.appendChild(el("p", cls, text));
 }
 
+function summaryVersion(box, v) {
+  const label = v.id + " " + v.name + ": ";
+  if (v.locked) {
+    addLine(box, label + "locked, not rebuilt (kept from its build of " + new Date(v.built).toLocaleString() + ")");
+    return;
+  }
+  const ch = v.changes;
+  const count = ch.settings.length + ch.extras.length;
+  if (ch.since === null) {
+    addLine(box, label + "first build of this version: " + ch.total + (ch.total === 1 ? " changed setting" : " changed settings") +
+      " compared to the stock car");
+  } else if (count) {
+    addLine(box, label + count + (count === 1 ? " change" : " changes") + " since its last build");
+  } else {
+    addLine(box, label + "no change since its last build");
+  }
+  if (count) {
+    const details = el("details");
+    details.open = true;
+    details.appendChild(el("summary", "", "Changes (" + count + ")"));
+    const ul = el("ul");
+    for (const c of ch.settings) {
+      ul.appendChild(el("li", "", c.id + ": " + fmtVal("", c.from) + " -> " + fmtVal("", c.to)));
+    }
+    for (const e of ch.extras) ul.appendChild(el("li", "", e.text));
+    details.appendChild(ul);
+    box.appendChild(details);
+  }
+}
+
 function summaryApply(box, res) {
   if (res.changes) {
     const ch = res.changes;
@@ -996,6 +1054,7 @@ function summaryApply(box, res) {
       box.appendChild(details);
     }
   }
+  for (const v of res.versions || []) summaryVersion(box, v);
   if (res.versions && res.versions.length) {
     addLine(box, "versions: " + res.versions.map((v) => v.name + " (" + v.files + (v.files === 1 ? " file" : " files") + " of its own)").join(", "));
   }
@@ -1609,6 +1668,22 @@ async function resetAll() {
     try {
       await api("/api/reset_all", {}, target);
       await loadSettings();
+    } catch (e) {
+      localError = e.message;
+    }
+    await refresh();
+  });
+}
+
+async function toggleVersionLock() {
+  const current = versionEntry();
+  if (!serverState || !current || jobRunning()) return;
+  const target = selection;
+  queue = queue.then(async () => {
+    localError = "";
+    try {
+      if (current.locked) await api("/api/version_unlock", { version: target.version }, target);
+      else await api("/api/version_lock", { version: target.version }, target);
     } catch (e) {
       localError = e.message;
     }
@@ -3056,6 +3131,7 @@ $("btn-duplicate").addEventListener("click", () => openDialog("duplicate"));
 $("version-select").addEventListener("change", () => switchCar(versionSelection($("version-select").value)));
 $("btn-version-add").addEventListener("click", () => openVersionDialog("add"));
 $("btn-version-rename").addEventListener("click", () => openVersionDialog("rename"));
+$("btn-version-lock").addEventListener("click", toggleVersionLock);
 $("version-dialog-ok").addEventListener("click", submitVersionDialog);
 $("version-dialog-cancel").addEventListener("click", () => closeVersionDialog(true));
 $("version-dialog").addEventListener("keydown", versionDialogKey);

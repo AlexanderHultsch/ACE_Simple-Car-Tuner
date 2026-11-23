@@ -59,10 +59,13 @@ Borrowing sounds from other cars (optional, not heard in the game yet): the pane
 A modded car can carry several complete setups as **versions**. In the game you pick the car and then its version, like the game's own Toyota Supra MKIV with its Drift version.
 
 1. Select your modded car in the selector. Next to it a **Version** list appears: **Base** is the car's own setup.
-2. Press **Add version…**, type a name (it is shown in the game as the version's name, at most 40 characters) and confirm: the new version starts as a copy of the version you were looking at and is selected.
+2. Press **Add version…** to make a new version: type a name (it is shown in the game as the version's name, at most 40 characters) and confirm: the new version starts as a copy of the version you were looking at and is selected.
 3. Change the values of the version as usual. Every setting can differ per version (power, turbo, gears, differential, mass, steering, force feedback, springs, anti-roll bars, dampers, camber, ride height, tyres, sounds); only the name suffix is shared by all versions and can only be changed on **Base**.
 4. Press **Apply**: one package with all versions is built and installed. Start the game and choose the version in the car selection.
 5. **Rename version…** renames the selected version. The page never deletes anything: the line **Where it lives** shows the installed package and the versions folder; to remove a version, delete its folder there by hand, then press Apply.
+6. **Lock version** freezes a version you are happy with. Apply builds all versions every time (the game needs them in one package), but a locked version is not rebuilt: Apply puts exactly the files of the build you drove back into the package, so later changes of the base, a new tuner version or a game update cannot change it. A locked version shows "(locked)" in the list and cannot be edited or renamed. You can only lock a version after an Apply that included its latest changes (otherwise the page says "Apply first, then lock it"). **Unlock version** makes it editable again; the next Apply builds it again. To experiment from a locked version, select it and use **Add version…**: the copy is not locked. The Base cannot be locked.
+
+The Apply summary lists every version: how many settings changed since its last build, or "locked, not rebuilt".
 
 "unverified" next to a description means the meaning is guessed from the setting's name and not yet confirmed in the game. A "copies differ in stock" badge means the game's own files disagree about that value; applying writes your value to every copy. Every setting is explained in its row of the table. Where a setting has an entry in the official physics documentation of the game (https://docs.assetto.cn/en/evo/car/physics/), its description starts with the official statement and continues with our notes; the rules learned from it are in [docs/TUNER_SPEC.md](TUNER_SPEC.md) section 6c.
 

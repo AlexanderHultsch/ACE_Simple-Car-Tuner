@@ -282,7 +282,7 @@ class TestRoutes(ServerCase):
                                                   "/api/log_config_reset", "/api/log_config_set", "/api/log_copy", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
                                                   "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset",
-                                                  "/api/version_add", "/api/version_rename"])
+                                                  "/api/version_add", "/api/version_lock", "/api/version_rename", "/api/version_unlock"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
         self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre", "/api/log_file"))
         self.assertTrue(set(ts.QUERY_ROUTES) <= set(ts.GET_ROUTES))
@@ -4650,7 +4650,7 @@ class TestVersionRoutes(SoundCase):
 
     def test_state_lists_the_versions_and_where_the_modded_car_lives(self):
         r = self.get("/api/state?tune=ax01")
-        self.assertEqual(r.json["versions"], [{"id": "v01", "name": "Heavy"}])
+        self.assertEqual(r.json["versions"], [{"id": "v01", "name": "Heavy", "locked": False, "built": None}])
         self.assertEqual(r.json["mod_paths"], {"package": os.path.join(self.mods, "ax01.kspkg"),
                                                "versions_folder": tune.version_dir(self.work, "ks_x", "ax01"),
                                                "state": tune.state_path(self.work, "ks_x", "ax01")})
@@ -4779,7 +4779,7 @@ class TestVersionRoutes(SoundCase):
     def test_version_rename_renames_and_keeps_the_id_and_the_state(self):
         r = self.post("/api/version_rename", {"tune": "ax01", "version": "v01", "name": "Very heavy"})
         self.assertEqual((r.status, r.json), (200, {"id": "v01", "name": "Very heavy"}))
-        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"], [{"id": "v01", "name": "Very heavy"}])
+        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"], [{"id": "v01", "name": "Very heavy", "locked": False, "built": None}])
         self.assertEqual(self.version_state(), {"limiter": 9000})
         self.assertEqual(self.post("/api/version_rename", {"tune": "ax01", "version": "v01", "name": "heavy"}).status, 200)
 
@@ -4794,8 +4794,91 @@ class TestVersionRoutes(SoundCase):
                 self.assertEqual((r.status, r.json), (400, {"error": text}))
         self.assertEqual([v["name"] for v in tune.list_versions(self.work, "ks_x", "ax01")], ["Heavy", "Light"])
 
+    def keep_build(self, version=None, tune_id="ax01", time="2026-11-23T12:40:24Z"):
+        folder = os.path.join(tune.version_dir(self.work, "ks_x", tune_id, version or self.vid), "build")
+        os.makedirs(os.path.join(folder, "files", "data"))
+        with open(os.path.join(folder, "files", "data", "CarData_v01.car"), "wb") as f:
+            f.write(b"car")
+        tune.save_json(os.path.join(folder, "build.json"), {"tune": tune_id, "preset": "p", "sound_part": None, "files": ["data/CarData_v01.car"],
+                                                            "time": time, "state": self.version_state(version, tune_id)})
+
+    def test_version_lock_locks_a_version_with_a_matching_kept_build_and_unlock_frees_it(self):
+        self.keep_build()
+        r = self.post("/api/version_lock", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json), (200, {"id": "v01", "name": "Heavy"}))
+        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"], [{"id": "v01", "name": "Heavy", "locked": True, "built": "2026-11-23T12:40:24Z"}])
+        self.assertEqual(self.post("/api/version_lock", {"tune": "ax01", "version": "v01"}).status, 200)
+        r = self.post("/api/version_unlock", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json), (200, {"id": "v01", "name": "Heavy"}))
+        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"], [{"id": "v01", "name": "Heavy", "locked": False, "built": "2026-11-23T12:40:24Z"}])
+        self.assertEqual(self.post("/api/version_unlock", {"tune": "ax01", "version": "v01"}).status, 200)
+        self.assertEqual(self.post("/api/set", {"tune": "ax01", "version": "v01", "id": "limiter", "value": "9100"}).status, 200)
+
+    def test_version_lock_without_a_kept_build_or_with_unbuilt_changes_is_400(self):
+        r = self.post("/api/version_lock", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json), (400, {"error": "version v01 (Heavy) has no kept build: Apply first, then lock it"}))
+        self.keep_build()
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9100}, "v01", "ax01")
+        r = self.post("/api/version_lock", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json), (400, {"error": "version v01 (Heavy) has changes that are not built yet: Apply first, then lock it"}))
+        self.assertFalse(self.get("/api/state?tune=ax01").json["versions"][0]["locked"])
+
+    def test_version_lock_and_unlock_errors_are_400(self):
+        for route in ("/api/version_lock", "/api/version_unlock"):
+            for body, text in (({"tune": "ax01"}, "need version (text)"), ({"tune": "ax01", "version": 1}, "need version (text)"),
+                               ({"tune": "ax01", "version": "v07"}, "ks_x has no version v07 of ax01"),
+                               ({"tune": "draft", "version": "v01"}, "a version needs a modded car"),
+                               ({"version": "v01"}, "a version needs a modded car")):
+                with self.subTest(route=route, body=body):
+                    r = self.post(route, body)
+                    self.assertEqual((r.status, r.json), (400, {"error": text}))
+
+    def test_version_lock_and_unlock_are_refused_while_a_job_runs(self):
+        self.keep_build()
+        self.hold_jobs()
+        self.assertEqual(self.post("/api/apply", {"tune": "ax01"}).status, 202)
+        for route in ("/api/version_lock", "/api/version_unlock"):
+            with self.subTest(route):
+                r = self.post(route, {"tune": "ax01", "version": "v01"})
+                self.assertEqual((r.status, r.json), (409, JOB_RUNNING))
+        self.finish_held_job()
+
+    def test_version_lock_and_unlock_are_post_routes_with_the_header_check(self):
+        for route in ("/api/version_lock", "/api/version_unlock"):
+            with self.subTest(route):
+                self.assertEqual(self.get(route).status, 404)
+                r = self.post(route, {"tune": "ax01", "version": "v01"}, headers={"X-Tuner": None})
+                self.assertEqual((r.status, r.json), (403, {"error": "missing header X-Tuner: 1"}))
+
+    def assert_locked_refusals(self, routes, text="version v01 (Heavy) is locked; unlock it to change it"):
+        before = self.version_state()
+        for route, body in routes:
+            with self.subTest(route):
+                r = self.post(route, dict(body, tune="ax01", version="v01"))
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual(self.version_state(), before)
+
+    def test_the_setting_routes_and_rename_answer_400_on_a_locked_version(self):
+        self.keep_build()
+        self.assertEqual(self.post("/api/version_lock", {"tune": "ax01", "version": "v01"}).status, 200)
+        self.assert_locked_refusals((("/api/set", {"id": "limiter", "value": "9100"}), ("/api/unset", {"id": "limiter"}), ("/api/reset_all", {}),
+                                     ("/api/turbo_set", {"donor": "ks_b"}), ("/api/sound_set", {"slot": "turbo", "key": T_RX7}),
+                                     ("/api/version_rename", {"name": "Other"})))
+        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"][0]["name"], "Heavy")
+
+    def test_the_reset_routes_answer_400_on_a_locked_version_that_has_something_to_reset(self):
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000, tune.TURBO_KEY: {"donor": "ks_b"}, tune.SOUND_KEY: {"turbo": T_RX7}},
+                                "v01", "ax01")
+        self.keep_build()
+        self.assertEqual(self.post("/api/version_lock", {"tune": "ax01", "version": "v01"}).status, 200)
+        self.assert_locked_refusals((("/api/reset_all", {}), ("/api/turbo_reset", {}), ("/api/sound_reset", {}),
+                                     ("/api/sound_reset", {"slot": "turbo"})))
+        self.assertEqual(sorted(ts.VERSION_POST_ROUTES), sorted(["/api/set", "/api/unset", "/api/reset_all", "/api/garage_set", "/api/garage_reset",
+                                                                  "/api/turbo_set", "/api/turbo_reset", "/api/sound_set", "/api/sound_reset"]))
+
     def test_there_is_no_route_that_deletes_a_version(self):
-        self.assertEqual([r for r in list(ts.GET_ROUTES) + list(ts.POST_ROUTES) if "version" in r], ["/api/version_add", "/api/version_rename"])
+        self.assertEqual([r for r in list(ts.GET_ROUTES) + list(ts.POST_ROUTES) if "version" in r],
+                         ["/api/version_add", "/api/version_rename", "/api/version_lock", "/api/version_unlock"])
         self.assertEqual(self.post("/api/version_delete", {"tune": "ax01", "version": "v01"}).status, 404)
 
     def test_version_writes_are_refused_while_a_job_runs(self):
@@ -4823,6 +4906,26 @@ class TestVersionGarage(TyreCase):
         r = self.post("/api/garage_reset", {"tune": "ax01", "version": vid})
         self.assertEqual((r.status, r.json["removed"]), (200, True))
         self.assertEqual(tune.read_version_state(self.work, "ks_x", vid, "ax01"), {})
+
+    def test_garage_set_and_reset_answer_400_on_a_locked_version(self):
+        self.make_tyre("Soft")
+        self.make_tyre("Hard")
+        self.make_tune("ax01", {"name_suffix": "_A"})
+        vid = tune.add_version(self.work, "ks_x", "Heavy", "ax01")
+        self.assertEqual(self.post("/api/garage_set", {"keys": ["own:soft"], "tune": "ax01", "version": vid}).status, 200)
+        state = tune.read_version_state(self.work, "ks_x", vid, "ax01")
+        folder = os.path.join(tune.version_dir(self.work, "ks_x", "ax01", vid), "build")
+        os.makedirs(os.path.join(folder, "files", "data"))
+        with open(os.path.join(folder, "files", "data", "CarData_v01.car"), "wb") as f:
+            f.write(b"car")
+        tune.save_json(os.path.join(folder, "build.json"), {"tune": "ax01", "preset": "p", "sound_part": None, "files": ["data/CarData_v01.car"],
+                                                            "time": "2026-11-23T12:40:24Z", "state": state})
+        self.assertEqual(self.post("/api/version_lock", {"tune": "ax01", "version": vid}).status, 200)
+        for route, body in (("/api/garage_set", {"keys": ["own:hard"]}), ("/api/garage_reset", {})):
+            with self.subTest(route):
+                r = self.post(route, dict(body, tune="ax01", version=vid))
+                self.assertEqual((r.status, r.json), (400, {"error": "version v01 (Heavy) is locked; unlock it to change it"}))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", vid, "ax01"), state)
 
 
 # -------------------------------------------------------------------------------------------------- job lifecycle

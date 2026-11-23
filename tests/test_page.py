@@ -257,7 +257,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 38, calls)
+        self.assertEqual(len(calls), 40, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -1329,7 +1329,7 @@ class TestVersions(unittest.TestCase):
         self.assertLess(MARKUP.index('id="car-select"'), MARKUP.index('id="version-select"'))
         self.assertIn('<label id="version-field" class="selectrow" hidden>Version', MARKUP)
         body = function_body("renderCars")
-        self.assertIn('[["", "Base"]].concat(versions.map((v) => [v.id, v.name]))', body)
+        self.assertIn('[["", "Base"]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))', body)
         self.assertIn("o.value = id;", body)
         self.assertIn('versionSelect.value = selection.version || "";', body)
         self.assertIn('$("version-field").hidden = !moddedEntry();', body)
@@ -1420,6 +1420,71 @@ class TestVersions(unittest.TestCase):
         body = function_body("summaryApply")
         self.assertIn("if (res.versions && res.versions.length) {", body)
         self.assertIn('"versions: " + res.versions.map((v) => v.name + " (" + v.files + (v.files === 1 ? " file" : " files") + " of its own)").join(", ")', body)
+
+    def test_the_lock_button_sits_next_to_rename_and_toggles_between_lock_and_unlock(self):
+        self.assertIn('<button id="btn-version-lock" type="button" hidden disabled>Lock version</button>', MARKUP)
+        self.assertLess(MARKUP.index('id="btn-version-rename"'), MARKUP.index('id="btn-version-lock"'))
+        self.assertIn('$("btn-version-lock").addEventListener("click", toggleVersionLock);', CODE)
+        body = function_body("renderButtons")
+        self.assertIn('$("btn-version-lock").textContent = lockedNow ? "Unlock version" : "Lock version";', body)
+        self.assertIn('$("btn-version-lock").hidden = !moddedSelected;', body)
+        self.assertIn('$("btn-version-lock").disabled = whyRename !== "";', body)
+
+    def test_the_lock_button_posts_the_lock_or_unlock_route_for_the_selected_version_and_shows_an_error_as_a_local_error(self):
+        body = function_body("toggleVersionLock")
+        self.assertIn('if (current.locked) await api("/api/version_unlock", { version: target.version }, target);', body)
+        self.assertIn('else await api("/api/version_lock", { version: target.version }, target);', body)
+        self.assertIn("localError = e.message;", body)
+        self.assertIn("await refresh();", body)
+        self.assertIn("if (!serverState || !current || jobRunning()) return;", body)
+        self.assertNotIn("switchCar", body)
+
+    def test_a_locked_version_is_read_only_but_add_version_and_apply_stay_on(self):
+        self.assertEqual(function_body("selectedVersionLocked").count("v.locked === true"), 1)
+        self.assertIn("if (selectedVersionLocked()) return", function_body("panelLockReason"))
+        body = function_body("renderButtons")
+        locked = body[body.index("if (selectedVersionLocked()) {"):body.index("if (selection.version) {")]
+        self.assertIn('$("btn-reset-all").disabled = true;', locked)
+        self.assertIn("r.field.disabled = true;", locked)
+        self.assertIn("r.reset.disabled = true;", locked)
+        self.assertIn('$("btn-version-rename").disabled = whyRename !== "" || lockedNow;', body)
+        self.assertIn('$("btn-version-add").disabled = whyVersion !== "";', body)
+        self.assertIn('$("btn-apply").disabled = why !== "";', body)
+        for name in ("lockGarage", "lockTurbo", "lockSounds"):
+            self.assertIn("panelLockReason()", function_body(name), name)
+        self.assertNotIn("hidden", locked)
+
+    def test_a_locked_version_shows_the_notice_with_the_time_of_its_build(self):
+        self.assertIn('<p id="version-note" class="msg warn" role="status" hidden></p>', MARKUP)
+        body = function_body("renderButtons")
+        self.assertIn('$("version-note").hidden = !lockedEntry;', body)
+        self.assertIn("\"Locked: Apply keeps this version's files from its build of \"", body)
+        self.assertIn("new Date(lockedEntry.built).toLocaleString()", body)
+        self.assertIn('". Unlock it to change it."', body)
+
+    def test_the_apply_summary_shows_one_line_per_version_after_the_base_changes(self):
+        body = function_body("summaryApply")
+        self.assertIn("for (const v of res.versions || []) summaryVersion(box, v);", body)
+        self.assertLess(body.index("Changes ("), body.index("summaryVersion(box, v)"))
+        self.assertLess(body.index("summaryVersion(box, v)"), body.index('"versions: "'))
+        one = function_body("summaryVersion")
+        self.assertIn('const label = v.id + " " + v.name + ": ";', one)
+        self.assertIn('label + "locked, not rebuilt (kept from its build of " + new Date(v.built).toLocaleString() + ")"', one)
+        self.assertIn('label + "first build of this version: " + ch.total', one)
+        self.assertIn('" changed settings") +', one)
+        self.assertIn('" compared to the stock car"', one)
+        self.assertIn('label + count + (count === 1 ? " change" : " changes") + " since its last build"', one)
+        self.assertIn('label + "no change since its last build"', one)
+        self.assertIn("details.open = true;", one)
+        self.assertIn('el("summary", "", "Changes (" + count + ")")', one)
+        self.assertIn('c.id + ": " + fmtVal("", c.from) + " -> " + fmtVal("", c.to)', one)
+        self.assertIn('for (const e of ch.extras) ul.appendChild(el("li", "", e.text));', one)
+        self.assertNotIn("innerHTML", one)
+
+    def test_no_top_level_function_is_shadowed_by_a_const_let_or_var_of_the_same_name(self):
+        functions = set(re.findall(r"(?m)^(?:async )?function (\w+)\(", CODE))
+        declared = set(re.findall(r"\b(?:const|let|var)\s+(\w+)\b", CODE))
+        self.assertEqual(sorted(functions & declared), [])
 
     def test_the_server_sends_the_state_fields_of_the_versions_the_page_reads(self):
         read = set(re.findall(r"\bserverState\.(\w+)", CODE))

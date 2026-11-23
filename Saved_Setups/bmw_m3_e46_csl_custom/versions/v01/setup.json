@@ -55,7 +55,6 @@
   "display_power_ps": 579.0,
   "nominal_rpm": 8600.0,
   "diff_type": "Spool",
-  "name_suffix": "Drift",
   "limiter": 8800,
   "_turbo": {
     "donor": "ks_bmw_m4_csl"

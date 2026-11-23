@@ -6,6 +6,7 @@ import json
 import os
 import shutil
 import unittest
+import uuid
 
 from support import FakeCar, Sandbox, backfire, engine, mini_catalogue, mini_setting, turbo
 
@@ -21,6 +22,28 @@ PRESET = CAR + "presets\\p.mechanicalcarpreset"
 THUMBS = ["generated/thumbnails/ax_x-p-vis.texture", "generated/thumbnails/ax_x-p-vis.texturemips"]
 V_THUMBS = ["generated/thumbnails/ax_x-p_v01-vis.texture", "generated/thumbnails/ax_x-p_v01-vis.texturemips"]
 LOC = "uiresources/localization/en.cars.loc"
+ENGINE_TYPE = "CarPartType_Mechanics_Engine"
+DRIVETRAIN_TYPE = "CarPartType_Mechanics_Differential"
+SUSPENSION_TYPE = "CarPartType_Mechanics_SuspensionGeometry_Front"
+ZERO_GUID = "00000000-0000-0000-0000-000000000000"
+
+
+def compat(version, kind):
+    """The game path of the compatiblepart of a version's car part (sound, drivetrain, suspension)."""
+    return CAR + "presets\\parts\\physics\\ax_x_%s_%s.compatiblepart" % (version, kind)
+
+
+def world_parts(version):
+    """The files of the parts that a version of World gets (its car file names an engine and a setup): the sound and the suspension part."""
+    return sorted(["data/parts/ax_x_%s_engine.tuningpart" % version, "data/parts/ax_x_%s_setup.tuningpart" % version]
+                  + ["presets/parts/physics/ax_x_%s_%s.%s" % (version, kind, ext) for kind in ("sound", "suspension") for ext in ("carpart", "compatiblepart")])
+
+
+def world_entries(version, link=None):
+    """The parts entries of a carfinalstate of a version of World (suspension, then sound) for a livery_linker link."""
+    guid = str(uuid.UUID(int=(link or {}).get("b", 0)))
+    return [{"path": compat(version, "suspension"), "guid": guid, "pguid": dict(link or {}), "type": SUSPENSION_TYPE},
+            {"path": compat(version, "sound"), "guid": guid, "pguid": dict(link or {}), "type": ENGINE_TYPE}]
 
 
 def cat():
@@ -137,33 +160,36 @@ class TestAVersionWithValues(World):
         self.version("Grip", {"limiter": 8000, "mass": 1800})
         self.res = self.apply({})
 
-    def test_the_package_has_the_version_copy_of_the_car_file_pointing_at_the_version_engine(self):
+    def test_the_package_has_no_car_file_of_the_version_and_its_tuning_parts_name_the_version_engine_and_setup(self):
         res = self.res
-        car = self.built(res, "data/CarData_v01.car")
-        self.assertEqual(car["general"]["totalMass"], 1800.0)
-        self.assertEqual(car["engine"]["limiter"], 8000)
-        self.assertEqual(car["engine_path"], CAR + "data\\engine_v01.carengine")
-        self.assertEqual(car["stock_setup"], CAR + "data\\setup_v01.carsetup")
+        self.assertNotIn("data/CarData_v01.car", self.tree(res))
+        self.assertEqual(self.built(res, "data/parts/ax_x_v01_engine.tuningpart"),
+                         {"engine": {"path": CAR + "data\\engine_v01.carengine"}, "car_part_type": ENGINE_TYPE})
+        self.assertEqual(self.built(res, "data/parts/ax_x_v01_setup.tuningpart"), {"setup": {"path": CAR + "data\\setup_v01.carsetup"}})
         engine_copy = self.built(res, "data/engine_v01.carengine")
         self.assertEqual((engine_copy["limiter"], engine_copy["minimum"], engine_copy["powerCurve"]), (8000, 800, CAR + "data\\power_v01.curve"))
 
-    def test_the_files_of_the_base_are_unchanged(self):
+    def test_the_files_of_the_base_are_unchanged_but_for_the_forbidden_parts_of_the_version(self):
         res = self.res
         car = self.built(res, "data/CarData.car")
         self.assertEqual((car["general"]["totalMass"], car["engine"]["limiter"], car["engine_path"]), (1400.0, 7000, CAR + "data\\engine.carengine"))
         self.assertEqual(self.built(res, "data/engine.carengine")["limiter"], 7000)
         self.assertEqual(self.built(res, "presets/p.mechanicalcarpreset"),
-                         {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True})
+                         {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                          "not_compatible_part_paths": [compat("v01", "sound"), compat("v01", "suspension")]})
         final = self.built(res, "presets/ax_x_p_vis.carfinalstate")
         self.assertEqual((final["car_data"], final["body"]["path"]), (CAR + "data\\CarData.car", PRESET))
+        self.assertNotIn("parts", final)
 
     def test_the_version_preset_has_the_name_of_the_version(self):
         self.assertEqual(self.built(self.res, "presets/p_v01.mechanicalcarpreset"),
-                         {"brand": "Brand", "description": "Name Preset Grip", "note": "Grip", "is_oem": False})
+                         {"brand": "Brand", "description": "Name Preset Grip", "note": "Grip", "is_oem": False,
+                          "forced_compatible_part_paths": [compat("v01", "sound"), compat("v01", "suspension")]})
 
-    def test_the_version_carfinalstate_is_named_after_the_version_preset_and_points_at_the_version_files(self):
+    def test_the_version_carfinalstate_is_named_after_the_version_preset_and_keeps_the_base_car_file_and_gets_the_parts(self):
         final = self.built(self.res, "presets/ax_x_p_v01_vis.carfinalstate")
-        self.assertEqual(final["car_data"], CAR + "data\\CarData_v01.car")
+        self.assertEqual(final["car_data"], CAR + "data\\CarData.car")
+        self.assertEqual(final["parts"], world_entries("v01"))
         self.assertEqual(final["body"], {"path": CAR + "presets\\p_v01.mechanicalcarpreset", "design": CAR + "presets\\vis.visualcarpreset"})
         self.assertEqual(final["actor_data"], CAR + "ax_x.actor")
 
@@ -176,9 +202,9 @@ class TestAVersionWithValues(World):
         for name in THUMBS + V_THUMBS:
             self.assertIn(name, tree)
 
-    def test_the_version_has_its_own_copy_of_every_data_file_and_nothing_else_is_added(self):
-        own = ["data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
-               "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"]
+    def test_the_version_has_its_own_copy_of_every_data_file_but_the_car_file_and_nothing_else_is_added(self):
+        own = ["data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
+               "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + world_parts("v01")
         base = sorted(set(self.tree(self.res)) - set(own) - set(V_THUMBS))
         self.assertEqual(base, ["ax_x.actor", "data/CarData.car", "data/engine.carengine", "data/power.curve", "data/setup.carsetup", *THUMBS,
                                 "presets/ax_x_p_vis.carfinalstate", "presets/p.mechanicalcarpreset", "presets/vis.visualcarpreset", LOC])
@@ -186,9 +212,9 @@ class TestAVersionWithValues(World):
 
     def test_the_result_lists_the_version_and_one_note_tells_its_files(self):
         res = self.res
-        self.assertEqual(res["versions"], [{"id": "v01", "name": "Grip", "files": 6, "locked": False, "changes": {
+        self.assertEqual(res["versions"], [{"id": "v01", "name": "Grip", "files": 11, "locked": False, "changes": {
             "since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}, {"id": "mass", "from": 1400.0, "to": 1800.0}], "extras": [], "total": 2}}])
-        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE, "note: version v01 (Grip): 6 files of its own"])
+        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE, "note: version v01 (Grip): 11 files of its own"])
 
     def test_the_build_record_and_the_changes_are_those_of_the_base(self):
         self.assertEqual(self.res["applied"], [])
@@ -202,18 +228,74 @@ class TestAVersionWithValues(World):
 
 
 class TestAVersionThatChangesNothing(World):
-    def test_it_gets_its_own_copy_of_every_data_file_the_preset_and_the_finalstate(self):
+    def test_it_gets_its_own_copy_of_every_data_file_but_the_car_file_the_preset_the_finalstate_and_the_parts(self):
         plain = set(self.tree(self.apply({})))
         self.version("Same", {})
         res = self.apply({})
-        self.assertEqual(res["versions"], [{"id": "v01", "name": "Same", "files": 6, "locked": False,
+        self.assertEqual(res["versions"], [{"id": "v01", "name": "Same", "files": 11, "locked": False,
                                             "changes": {"since": None, "settings": [], "extras": [], "total": 0}}])
         self.assertEqual(sorted(set(self.tree(res)) - plain),
-                         sorted(["data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
-                                 "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + V_THUMBS + [LOC]))
-        car = self.built(res, "data/CarData_v01.car")
-        self.assertEqual((car["engine_path"], car["general"]["totalMass"]), (CAR + "data\\engine_v01.carengine", 1400.0))
+                         sorted(["data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
+                                 "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + world_parts("v01") + V_THUMBS + [LOC]))
+        self.assertEqual(self.built(res, "data/CarData.car")["general"]["totalMass"], 1400.0)
         self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["note"], "Same")
+
+
+class TestAVersionOwnSharedValue(World):
+    """mass is shared by all versions here: a version's own saved mass is ignored by the build and apply notes it when it differs from the base's."""
+
+    def setUp(self):
+        super().setUp()
+        self.cat = mini_catalogue(*self.cat["settings"][:3], mini_setting("mass", targets=[("@car", "general.totalMass")], shared=True))
+
+    def ignored(self, res):
+        return [n for n in res["notes"] if "is ignored" in n]
+
+    def masses(self):
+        """{version: totalMass of the car file of its build}, recorded when the build is merged (the car file is not part of the package)."""
+        seen, real = {}, tune.merge_version
+
+        def watch(part, vpart, new_id, version, *more):
+            seen[version] = self.x.store[self.x.key(os.path.join(vpart, "content", "cars", new_id, "data", "CarData.car"))]["general"]["totalMass"]
+            return real(part, vpart, new_id, version, *more)
+        self.patch(tune, "merge_version", watch)
+        return seen
+
+    def test_a_different_own_value_is_ignored_and_noted_against_the_stock_default_of_a_base_without_a_value(self):
+        self.version("Heavy", {"mass": 1800})
+        seen = self.masses()
+        res = self.apply({})
+        self.assertEqual(self.ignored(res), ["note: version v01 (Heavy): its own mass 1800.0 is ignored (shared by all versions, 1400.0)"])
+        self.assertEqual(seen, {"v01": 1400.0})
+        self.assertEqual(res["versions"][0]["changes"]["settings"], [])
+
+    def test_the_base_value_is_the_saved_one_and_the_note_comes_after_the_version_notes(self):
+        self.version("Heavy", {"mass": 1800, "limiter": 8000})
+        seen = self.masses()
+        res = self.apply({"mass": 1500})
+        self.assertEqual(res["notes"][-2:], ["note: version v01 (Heavy): 11 files of its own",
+                                             "note: version v01 (Heavy): its own mass 1800.0 is ignored (shared by all versions, 1500.0)"])
+        self.assertEqual(seen, {"v01": 1500.0})
+
+    def test_an_equal_own_value_and_a_version_without_one_give_no_note(self):
+        self.version("Same", {"mass": 1400})
+        self.version("None", {"limiter": 8000})
+        self.assertEqual(self.ignored(self.apply({})), [])
+        self.assertEqual(self.ignored(self.apply({"mass": 1800})), ["note: version v01 (Same): its own mass 1400.0 is ignored (shared by all versions, 1800.0)"])
+
+    def test_a_locked_version_gives_no_note_and_its_state_file_is_not_rewritten(self):
+        v = self.version("Heavy", {"mass": 1800})
+        self.apply({})
+        tune.lock_version(self.work, "ks_x", v)
+        self.assertEqual(self.ignored(self.apply({})), [])
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", v), {"mass": 1800})
+
+    def test_an_unlocked_version_is_noted_for_each_shared_id_and_the_meta_settings_are_not(self):
+        self.cat = mini_catalogue(*self.cat["settings"][:3], mini_setting("mass", targets=[("@car", "general.totalMass")], shared=True),
+                                  mini_setting("limiter2", type="int", targets=[("@engine", "limiter")], shared=True))
+        self.version("Heavy", {"mass": 1800, "limiter2": 8000, "name_suffix": "Own"})
+        self.assertEqual(self.ignored(self.apply({})), ["note: version v01 (Heavy): its own mass 1800.0 is ignored (shared by all versions, 1400.0)",
+                                                        "note: version v01 (Heavy): its own limiter2 8000 is ignored (shared by all versions, 7000)"])
 
 
 class TestSeveralVersions(World):
@@ -222,15 +304,15 @@ class TestSeveralVersions(World):
         self.version("Heavy", {"mass": 1800})
         res = self.apply({})
         self.assertEqual(res["versions"], [
-            {"id": "v01", "name": "Grip", "files": 6, "locked": False, "changes": {"since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}], "extras": [], "total": 1}},
-            {"id": "v02", "name": "Heavy", "files": 6, "locked": False, "changes": {"since": None, "settings": [{"id": "mass", "from": 1400.0, "to": 1800.0}], "extras": [], "total": 1}}])
-        self.assertEqual(res["notes"][-2:], ["note: version v01 (Grip): 6 files of its own", "note: version v02 (Heavy): 6 files of its own"])
-        self.assertEqual(self.built(res, "data/CarData_v01.car")["engine_path"], CAR + "data\\engine_v01.carengine")
-        self.assertEqual(self.built(res, "data/CarData_v01.car")["general"]["totalMass"], 1400.0)
-        self.assertEqual(self.built(res, "data/CarData_v02.car")["engine_path"], CAR + "data\\engine_v02.carengine")
-        self.assertEqual(self.built(res, "data/CarData_v02.car")["general"]["totalMass"], 1800.0)
+            {"id": "v01", "name": "Grip", "files": 11, "locked": False, "changes": {"since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}], "extras": [], "total": 1}},
+            {"id": "v02", "name": "Heavy", "files": 11, "locked": False, "changes": {"since": None, "settings": [{"id": "mass", "from": 1400.0, "to": 1800.0}], "extras": [], "total": 1}}])
+        self.assertEqual(res["notes"][-2:], ["note: version v01 (Grip): 11 files of its own", "note: version v02 (Heavy): 11 files of its own"])
+        self.assertEqual([t for t in self.tree(res) if "CarData_" in t], [])
+        self.assertEqual(self.built(res, "data/parts/ax_x_v01_engine.tuningpart")["engine"]["path"], CAR + "data\\engine_v01.carengine")
+        self.assertEqual(self.built(res, "data/parts/ax_x_v02_engine.tuningpart")["engine"]["path"], CAR + "data\\engine_v02.carengine")
+        self.assertEqual(self.built(res, "data/CarData.car")["general"]["totalMass"], 1400.0)
         self.assertEqual(self.built(res, "data/engine_v02.carengine")["limiter"], 7000)
-        self.assertEqual(self.built(res, "presets/ax_x_p_v02_vis.carfinalstate")["car_data"], CAR + "data\\CarData_v02.car")
+        self.assertEqual(self.built(res, "presets/ax_x_p_v02_vis.carfinalstate")["car_data"], CAR + "data\\CarData.car")
         self.assertEqual(self.built(res, "presets/ax_x_p_v02_vis.carfinalstate")["body"]["path"], CAR + "presets\\p_v02.mechanicalcarpreset")
         self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["mechanical_car_presets"],
                          [PRESET, CAR + "presets\\p_v01.mechanicalcarpreset", CAR + "presets\\p_v02.mechanicalcarpreset"])
@@ -269,6 +351,7 @@ class TestVersionSounds(World):
 
     SOUND = ["presets/parts/physics/ax_x_v01_sound.carpart", "presets/parts/physics/ax_x_v01_sound.compatiblepart",
              "data/parts/ax_x_v01_engine.tuningpart"]
+    SUSPENSION = compat("v01", "suspension")
     COMPATIBLE = CAR + "presets\\parts\\physics\\ax_x_v01_sound.compatiblepart"
 
     def loud(self, state=None):
@@ -277,9 +360,9 @@ class TestVersionSounds(World):
 
     def test_a_version_with_another_turbo_gets_a_sound_part_and_the_notes_tell_it(self):
         res = self.loud()
-        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE, "note: version v01 (Loud): 9 files of its own",
+        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE, "note: version v01 (Loud): 11 files of its own",
                                         "note: version v01 (Loud): own sounds turbo=turbo_rx7"])
-        self.assertEqual(res["versions"], [{"id": "v01", "name": "Loud", "files": 9, "locked": False, "changes": {
+        self.assertEqual(res["versions"], [{"id": "v01", "name": "Loud", "files": 11, "locked": False, "changes": {
             "since": None, "settings": [], "extras": [{"kind": "sound", "slot": "turbo", "from": None, "to": "event:/parts/turbos/turbo_rx7",
                                                       "text": "Sound turbo: own sound -> turbo_rx7"}], "total": 0}}])
         self.assertTrue(set(self.SOUND) <= set(self.tree(res)))
@@ -308,12 +391,12 @@ class TestVersionSounds(World):
 
     def test_the_presets_and_the_actor_list_the_compatible_part_and_the_actor_keeps_the_base_sounds(self):
         res = self.loud()
-        self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["forced_compatible_part_paths"], [self.COMPATIBLE])
+        self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["forced_compatible_part_paths"], [self.COMPATIBLE, self.SUSPENSION])
         base = self.built(res, "presets/p.mechanicalcarpreset")
-        self.assertEqual(base["not_compatible_part_paths"], [self.COMPATIBLE])
+        self.assertEqual(base["not_compatible_part_paths"], [self.COMPATIBLE, self.SUSPENSION])
         self.assertNotIn("forced_compatible_part_paths", base)
         actor = self.built(res, "ax_x.actor")["car"]
-        self.assertEqual(actor["customization"]["aftermarket_parts"], [self.COMPATIBLE])
+        self.assertEqual(actor["customization"]["aftermarket_parts"], [self.COMPATIBLE, self.SUSPENSION])
         self.assertEqual(actor["audio_events"][1:], [turbo("turbo_none"), backfire("backfire_a")])
         self.assertEqual(actor["customization"]["mechanical_car_presets"], [PRESET, CAR + "presets\\p_v01.mechanicalcarpreset"])
         self.assertNotIn("ax_x_v01.actor", self.tree(res))
@@ -322,36 +405,43 @@ class TestVersionSounds(World):
         self.x.store[self.x.key(os.path.join(self.x.car_root, "ks_x.actor"))]["car"]["customization"]["aftermarket_parts"] = ["other"]
         self.x.store[self.x.key(os.path.join(self.x.car_root, "presets", "p.mechanicalcarpreset"))]["not_compatible_part_paths"] = ["n"]
         res = self.loud()
-        self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], ["other", self.COMPATIBLE])
-        self.assertEqual(self.built(res, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"], ["n", self.COMPATIBLE])
+        self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], ["other", self.COMPATIBLE, self.SUSPENSION])
+        self.assertEqual(self.built(res, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"], ["n", self.COMPATIBLE, self.SUSPENSION])
 
-    def test_a_version_with_the_same_sounds_gets_no_sound_part(self):
+    def test_a_version_with_the_same_sounds_still_gets_the_sound_part_of_its_engine_without_audio_events(self):
         self.version("Same", {"_sounds": {"turbo": "event:/parts/turbos/turbo_none"}})
         res = self.apply({})
-        self.assertEqual(res["notes"][-1], "note: version v01 (Same): 6 files of its own")
-        self.assertFalse(set(self.SOUND) & set(self.tree(res)))
-        self.assertNotIn("aftermarket_parts", self.built(res, "ax_x.actor")["car"]["customization"])
-        self.assertNotIn("forced_compatible_part_paths", self.built(res, "presets/p_v01.mechanicalcarpreset"))
-        self.assertNotIn("not_compatible_part_paths", self.built(res, "presets/p.mechanicalcarpreset"))
+        self.assertEqual(res["notes"][-1], "note: version v01 (Same): 11 files of its own")
+        self.assertTrue(set(self.SOUND) <= set(self.tree(res)))
+        part = self.built(res, self.SOUND[0])
+        self.assertEqual(part["logic_parts"], [{"tuning_part_path": CAR + "data\\parts\\ax_x_v01_engine.tuningpart"}])
+        self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], [self.COMPATIBLE, self.SUSPENSION])
+
+    def test_a_version_with_other_sounds_but_no_engine_tuning_is_refused(self):
+        self.x.add("data/x.car", {"stock_setup": self.x.game_path("data/setup.carsetup"), "engine": {"limiter": 7000}, "general": {"totalMass": 1400.0}})
+        self.version("Loud", {"_sounds": {"turbo": "event:/parts/turbos/turbo_rx7"}})
+        with self.assertRaisesRegex(ValueError, "^the car file of version v01 has no engine_path to name the tuning part after$"):
+            self.apply({})
+        self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
 
     def test_a_version_without_a_sound_choice_has_no_note(self):
         self.version("Quiet", {})
-        self.assertEqual(self.apply({})["notes"][-1], "note: version v01 (Quiet): 6 files of its own")
+        self.assertEqual(self.apply({})["notes"][-1], "note: version v01 (Quiet): 11 files of its own")
 
     def test_the_sound_part_files_and_the_compatible_part_are_kept_in_their_final_state(self):
         res = self.loud()
         folder = tune.version_dir(self.work, "ks_x", "ax_x", "v01")
         with open(os.path.join(folder, "build", "build.json"), encoding="utf-8") as f:
             record = json.load(f)
-        self.assertEqual(record["sound_part"], self.COMPATIBLE)
+        self.assertEqual(record["parts"], [self.COMPATIBLE, self.SUSPENSION])
         self.assertTrue(set(self.SOUND) <= set(record["files"]))
         self.assertEqual(record["files"], sorted(set(record["files"])))
-        self.assertEqual(len(record["files"]), 9 + len(V_THUMBS))
+        self.assertEqual(len(record["files"]), 11 + len(V_THUMBS))
         for rel in record["files"]:
             with open(os.path.join(folder, "build", "files", *rel.split("/")), "rb") as f, open(os.path.join(self.root(res), *rel.split("/")), "rb") as g:
                 self.assertEqual(f.read(), g.read(), rel)
         with open(os.path.join(folder, "build", "files", "presets", "p_v01.mechanicalcarpreset"), encoding="utf-8") as f:
-            self.assertEqual(json.load(f)["forced_compatible_part_paths"], [self.COMPATIBLE])
+            self.assertEqual(json.load(f)["forced_compatible_part_paths"], [self.COMPATIBLE, self.SUSPENSION])
 
 
 class TestWithoutVersions(World):
@@ -370,10 +460,10 @@ class TestWithoutVersions(World):
         self.version("Grip", {"limiter": 8000, "mass": 1800})
         with_version = self.snapshot(self.apply({"limiter": 8000}))
         changed = {k for k in plain if with_version.get(k) != plain[k]}
-        self.assertEqual({k.replace(os.sep, "/") for k in changed}, {"/ax_x.actor"})
+        self.assertEqual({k.replace(os.sep, "/") for k in changed}, {"/ax_x.actor", "/presets/p.mechanicalcarpreset"})
         self.assertEqual(set(with_version) - set(plain), {os.sep + os.path.join(*p.split("/")) for p in (
-            "data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
-            "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset")})
+            "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
+            "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset", *world_parts("v01"))})
 
 
 class TestVersionRefusals(World):
@@ -421,8 +511,9 @@ class TestEveryFileTheTunerWritesIsTheVersions(World):
 
     def test_the_version_has_its_own_copy_of_every_file_below_data_at_any_depth(self):
         tree = self.tree(self.res)
-        for rel in ("data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup", "data/sub/deep_v01.curve"):
+        for rel in ("data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup", "data/sub/deep_v01.curve"):
             self.assertIn(rel, tree)
+        self.assertNotIn("data/CarData_v01.car", tree)
         self.assertEqual(self.built(self.res, "data/sub/deep_v01.curve"), {"points": []})
         self.assertEqual(self.built(self.res, "data/sub/deep.curve"), {"points": []})
 
@@ -437,12 +528,12 @@ class TestEveryFileTheTunerWritesIsTheVersions(World):
         self.assertIn("presets/sub/nested.compatibletyres", tree)
 
     def test_the_result_counts_the_copies(self):
-        self.assertEqual(self.res["versions"][0]["files"], 8)
+        self.assertEqual(self.res["versions"][0]["files"], 13)
 
 
 class TestTheKeptBuildOfAVersion(World):
-    FILES = ["data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
-             "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + V_THUMBS
+    FILES = ["data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
+             "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + world_parts("v01") + V_THUMBS
 
     def setUp(self):
         super().setUp()
@@ -456,10 +547,10 @@ class TestTheKeptBuildOfAVersion(World):
 
     def test_build_json_tells_the_tune_the_preset_the_files_and_the_state(self):
         record = self.record()
-        self.assertEqual(sorted(record), ["files", "preset", "sound_part", "state", "time", "tune"])
+        self.assertEqual(sorted(record), ["files", "parts", "preset", "state", "time", "tune"])
         self.assertEqual(record["tune"], "ax_x")
         self.assertEqual(record["preset"], CAR + "presets\\p_v01.mechanicalcarpreset")
-        self.assertIsNone(record["sound_part"])
+        self.assertEqual(record["parts"], [compat("v01", "sound"), compat("v01", "suspension")])
         self.assertEqual(record["files"], sorted(self.FILES))
         self.assertEqual(record["state"], tune.read_version_state(self.work, "ks_x", self.v, "ax_x"))
         self.assertEqual(record["state"], {"limiter": 8000, "mass": 1800})
@@ -578,6 +669,7 @@ class TestALockedVersion(World):
     """v01 and v03 stay unlocked, v02 (another turbo sound, so it has a sound part) is locked after its build."""
     TURBO = "event:/parts/turbos/turbo_rx7"
     COMPATIBLE = CAR + "presets\\parts\\physics\\ax_x_v02_sound.compatiblepart"
+    SUSPENSION = CAR + "presets\\parts\\physics\\ax_x_v02_suspension.compatiblepart"
 
     def setUp(self):
         super().setUp()
@@ -636,23 +728,35 @@ class TestALockedVersion(World):
         with open(os.path.join(self.root(res), "data", "engine_v02.carengine"), "rb") as f:
             self.assertEqual(json.loads(f.read())["limiter"], 7000)
 
-    def test_the_actor_lists_the_presets_in_id_order_and_the_sound_part_is_listed_and_forbidden_in_the_base_preset(self):
+    def pair(self, version):
+        return [compat(version, "sound"), compat(version, "suspension")]
+
+    def forbidden(self, res, preset):
+        return self.built(res, "presets/%s.mechanicalcarpreset" % preset)["not_compatible_part_paths"]
+
+    def test_the_actor_lists_the_presets_in_id_order_and_the_parts_of_every_version_are_listed_and_forbidden_in_the_base_preset(self):
         res = self.apply({"limiter": 9000})
         actor = self.built(res, "ax_x.actor")["car"]["customization"]
         self.assertEqual(actor["mechanical_car_presets"], [PRESET] + [CAR + "presets\\p_%s.mechanicalcarpreset" % v for v in ("v01", "v02", "v03")])
-        self.assertEqual(actor["aftermarket_parts"], [self.COMPATIBLE])
-        self.assertEqual(self.built(res, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"], [self.COMPATIBLE])
+        self.assertEqual(actor["aftermarket_parts"], self.pair("v01") + self.pair("v02") + self.pair("v03"))
+        self.assertEqual(self.forbidden(res, "p"), self.pair("v01") + self.pair("v02") + self.pair("v03"))
         self.assertEqual(self.kept["preset"], CAR + "presets\\p_v02.mechanicalcarpreset")
-        self.assertEqual(self.kept["sound_part"], self.COMPATIBLE)
+        self.assertEqual(self.kept["parts"], [self.COMPATIBLE, self.SUSPENSION])
         with open(os.path.join(self.root(res), "presets", "p_v02.mechanicalcarpreset"), "rb") as f:
-            self.assertEqual(json.loads(f.read())["forced_compatible_part_paths"], [self.COMPATIBLE])
+            self.assertEqual(json.loads(f.read())["forced_compatible_part_paths"], [self.COMPATIBLE, self.SUSPENSION])
 
-    def test_the_sound_parts_of_locked_and_unlocked_versions_are_all_listed_and_forbidden(self):
+    def test_the_parts_of_locked_and_unlocked_versions_are_all_listed_and_forbidden_in_the_other_presets_but_a_locked_preset_stays(self):
         self.version("Loud too", {"_sounds": {"turbo": self.TURBO}})
+        locked = self.disk(self.folder)["build/files/presets/p_v02.mechanicalcarpreset"]
         res = self.apply({})
-        other = CAR + "presets\\parts\\physics\\ax_x_v04_sound.compatiblepart"
-        self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], [self.COMPATIBLE, other])
-        self.assertCountEqual(self.built(res, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"], [self.COMPATIBLE, other])
+        every = self.pair("v01") + self.pair("v02") + self.pair("v03") + self.pair("v04")
+        self.assertEqual(self.built(res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], every)
+        self.assertEqual(self.forbidden(res, "p"), every)
+        self.assertEqual(self.forbidden(res, "p_v01"), self.pair("v02") + self.pair("v03") + self.pair("v04"))
+        self.assertEqual(self.forbidden(res, "p_v03"), self.pair("v01") + self.pair("v02") + self.pair("v04"))
+        self.assertEqual(self.forbidden(res, "p_v04"), self.pair("v01") + self.pair("v02") + self.pair("v03"))
+        with open(os.path.join(self.root(res), "presets", "p_v02.mechanicalcarpreset"), "rb") as f:
+            self.assertEqual(f.read(), locked)
 
     def test_it_is_not_built_and_its_build_folder_and_snapshot_stay_byte_for_byte(self):
         before = self.kept_bytes()
@@ -682,9 +786,9 @@ class TestALockedVersion(World):
         self.assertEqual((by_id["v01"]["locked"], by_id["v03"]["locked"]), (False, False))
         self.assertIn("changes", by_id["v01"])
         self.assertEqual([v["id"] for v in res["versions"]], ["v01", "v02", "v03"])
-        self.assertEqual(res["notes"][-3:], ["note: version v01 (Grip): 6 files of its own",
+        self.assertEqual(res["notes"][-3:], ["note: version v01 (Grip): 11 files of its own",
                                              "note: version v02 (Loud): locked, %d files kept from its build of %s" % (count, self.kept["time"]),
-                                             "note: version v03 (Heavy): 6 files of its own"])
+                                             "note: version v03 (Heavy): 11 files of its own"])
         self.assertEqual([n for n in res["notes"] if "v02" in n], [res["notes"][-2]])
 
     def test_the_change_lines_tell_that_it_is_not_rebuilt_in_the_place_of_its_block(self):
@@ -728,18 +832,18 @@ class TestALockedVersion(World):
                     self.write(os.path.join(build, *rel.split("/")), data, binary=True)
 
     def test_a_name_that_is_taken_in_the_build_is_an_error(self):
-        self.hook = lambda root: self.write(os.path.join(root, "data", "CarData_v02.car"), b"x", binary=True)
-        with self.assertRaisesRegex(ValueError, r"^cannot copy data/CarData_v02.car of version v02: the name is taken$"):
+        self.hook = lambda root: self.write(os.path.join(root, "data", "engine_v02.carengine"), b"x", binary=True)
+        with self.assertRaisesRegex(ValueError, r"^cannot copy data/engine_v02.carengine of version v02: the name is taken$"):
             self.apply({})
-        with open(os.path.join(self.folder, "build", "files", "data", "CarData_v02.car"), "rb") as f:
+        with open(os.path.join(self.folder, "build", "files", "data", "engine_v02.carengine"), "rb") as f:
             self.assertNotEqual(f.read(), b"x")
 
     def test_after_unlocking_the_version_is_built_again_and_its_kept_build_is_replaced(self):
         tune.unlock_version(self.work, "ks_x", "v02")
-        tune.set_value(self.work, "ks_x", "mass", "1900", version="v02")
+        tune.set_value(self.work, "ks_x", "limiter", "9100", version="v02")
         res = self.apply({})
         self.assertEqual([v["locked"] for v in res["versions"]], [False, False, False])
-        self.assertEqual(self.built(res, "data/CarData_v02.car")["general"]["totalMass"], 1900.0)
+        self.assertEqual(self.built(res, "data/engine_v02.carengine")["limiter"], 9100)
         self.assertEqual(tune.kept_build(self.work, "ks_x", "v02")["state"], tune.read_version_state(self.work, "ks_x", "v02"))
         self.assertNotEqual(tune.kept_build(self.work, "ks_x", "v02")["state"], self.kept["state"])
 
@@ -759,7 +863,7 @@ class TestListVersionsWithADamagedMeta(World):
         v = self.version("Grip", {})
         self.write(os.path.join(self.work, "ks_x", "versions", v, "meta.json"), "[]")
         res = self.apply({})
-        self.assertEqual(res["versions"], [{"id": "v01", "name": "v01", "files": 6, "locked": False,
+        self.assertEqual(res["versions"], [{"id": "v01", "name": "v01", "files": 11, "locked": False,
                                             "changes": {"since": None, "settings": [], "extras": [], "total": 0}}])
         self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["note"], "v01")
 
@@ -839,7 +943,7 @@ class TestAVersionWithItsOwnVisualPreset(VisualWorld):
         res, tree = self.res, self.tree(self.res)
         final = self.built(res, self.FINAL_V01)
         self.assertEqual((final["car_data"], final["body"]),
-                         (CAR + "data\\CarData_v01.car", {"path": CAR + "presets\\p_v01.mechanicalcarpreset", "design": CAR + "presets\\vis_v01.visualcarpreset"}))
+                         (CAR + "data\\CarData.car", {"path": CAR + "presets\\p_v01.mechanicalcarpreset", "design": CAR + "presets\\vis_v01.visualcarpreset"}))
         self.assertNotIn("presets/ax_x_p_v01_vis.carfinalstate", tree)
         for ext in (".texture", ".texturemips"):
             self.assertIn("generated/thumbnails/ax_x-p_v01-vis_v01" + ext, tree)
@@ -867,7 +971,7 @@ class TestAVersionWithItsOwnVisualPreset(VisualWorld):
         for rel in ("presets/vis_v01.visualcarpreset", "presets/design_v01.cardesign", "presets/rim_v01.compatiblerim", self.FINAL_V01,
                     "generated/thumbnails/ax_x-p_v01-vis_v01.texture", "generated/thumbnails/ax_x-p_v01-vis_v01.texturemips"):
             self.assertIn(rel, kept["files"])
-        self.assertEqual(sorted(kept), sorted(["files", "preset", "sound_part", "state", "time", "tune"]))
+        self.assertEqual(sorted(kept), sorted(["files", "parts", "preset", "state", "time", "tune"]))
 
 
 class TestAVisualPresetThatIsNotCopied(VisualWorld):
@@ -896,7 +1000,7 @@ class TestWithoutVisualPresetsInTheActor(World):
     def test_a_version_of_a_car_whose_actor_has_no_such_lists_gets_none(self):
         self.version("Grip", {})
         custom = self.built(self.apply({}), "ax_x.actor")["car"]["customization"]
-        self.assertEqual(sorted(custom), ["mechanical_car_presets"])
+        self.assertEqual(sorted(custom), ["aftermarket_parts", "mechanical_car_presets"])
 
 
 class TestTheLocalizationLinesOfVersions(VisualWorld):
@@ -1226,6 +1330,485 @@ class TestAVersionThatWouldCrashTheGame(RimWorld):
         other = CAR + "presets\\design_zzz.cardesign"
         self.before_names(lambda root: self.entry(root, "presets/vis_v01.visualcarpreset").update({"car_design_path": other}))
         self.refuse("%s: car_design_path %s is not in car.customization.car_designs of the actor" % (self.VIS_V01, other), "not show in the game")
+
+
+class FullCar:
+    """A mixin for World and VisualWorld: the car file names every file that the parts of a version are made of (engine, drivetrain, gearbox,
+    clutch, the two suspension geometries and coilovers, brakes, setup limits, setup); the carfinalstate has the livery_linker b=72."""
+    FINAL = "presets/ax_x_p_v01_vis.carfinalstate"
+    GUID = "00000000-0000-0000-0000-000000000048"
+    FILES = {"drivetrain": "data/drivetrain.drivetrain", "gearbox": "data/gearbox.gearbox", "clutch": "data/clutch.clutch",
+             "brakes": "data/brakes.brakesystem", "limits": "data/limits.carsetuplimits", "front": "data/susp_f.suspension",
+             "rear": "data/susp_r.suspension", "coil_front": "data/coil_f.coilover", "coil_rear": "data/coil_r.coilover"}
+
+    def car_fields(self):
+        gp, f = self.x.game_path, self.FILES
+        return {"engine_path": gp("data/engine.carengine"), "drivetrain_path": gp(f["drivetrain"]), "gearbox_path": gp(f["gearbox"]),
+                "clutch_path": gp(f["clutch"]), "brakes_path": gp(f["brakes"]), "stock_setup": gp("data/setup.carsetup"), "setupLimits": gp(f["limits"]),
+                "suspensions": {"front_suspension_path": gp(f["front"]), "rear_suspension_path": gp(f["rear"]),
+                                "coilover_front_path": gp(f["coil_front"]), "coilover_rear_path": gp(f["coil_rear"])},
+                "engine": {"limiter": 7000}, "general": {"totalMass": 1400.0}}
+
+    def setUp(self):
+        super().setUp()
+        for rel in self.FILES.values():
+            self.x.add(rel, {"x": rel})
+        self.x.add("data/x.car", self.car_fields())
+        self.final()
+
+    def final(self, **fields):
+        gp = self.x.game_path
+        state = {"car_data": gp("data/x.car"), "actor_data": gp("ks_x.actor"), "livery_linker": {"b": 72},
+                 "body": {"path": gp("presets/p.mechanicalcarpreset"), "design": gp("presets/vis.visualcarpreset")}}
+        state.update(fields)
+        self.x.add("presets/ks_x_p_vis.carfinalstate", {k: v for k, v in state.items() if v is not None})
+
+    def entries(self, version, link, kinds=("drivetrain", "suspension", "sound")):
+        guid = str(uuid.UUID(int=link.get("b", 0)))
+        types = {"drivetrain": DRIVETRAIN_TYPE, "suspension": SUSPENSION_TYPE, "sound": ENGINE_TYPE}
+        return [{"path": compat(version, kind), "guid": guid, "pguid": dict(link), "type": types[kind]} for kind in kinds]
+
+    def tuning(self, v="v01"):
+        d = lambda name: CAR + "data\\" + name
+        return {
+            "engine": {"engine": {"path": d("engine_%s.carengine" % v)}, "car_part_type": ENGINE_TYPE},
+            "drivetrain": {"drivetrain": {"path": d("drivetrain_%s.drivetrain" % v)}, "car_part_type": "CarPartType_Mechanics_Drivetrain"},
+            "gearbox": {"gearbox": {"path": d("gearbox_%s.gearbox" % v)}, "car_part_type": "CarPartType_Mechanics_Gearbox"},
+            "clutch": {"clutch": {"path": d("clutch_%s.clutch" % v)}, "car_part_type": "CarPartType_Mechanics_Clutch"},
+            "geometry": {"suspensions_geometry": {"geometry_path_front": d("susp_f_%s.suspension" % v), "geometry_path_rear": d("susp_r_%s.suspension" % v)},
+                         "car_part_type": SUSPENSION_TYPE},
+            "coilovers": {"suspensions": {"coilover_path_front": d("coil_f_%s.coilover" % v), "coilover_path_rear": d("coil_r_%s.coilover" % v)},
+                          "car_part_type": "CarPartType_Mechanics_SuspensionCoilover_Front"},
+            "brakes": {"brake_system": {"path": d("brakes_%s.brakesystem" % v)}},
+            "setuplimits": {"setup_limits": {"path": d("limits_%s.carsetuplimits" % v)}},
+            "setup": {"setup": {"path": d("setup_%s.carsetup" % v)}}}
+
+
+class FullWorld(FullCar, World):
+    pass
+
+
+class TestTheCarPartsOfAVersion(FullWorld):
+    def setUp(self):
+        super().setUp()
+        self.version("Grip", {"limiter": 8000, "mass": 1800})
+        self.res = self.apply({})
+
+    def test_every_tuning_part_names_the_copies_of_the_files_of_the_version(self):
+        for key, expected in self.tuning().items():
+            with self.subTest(key):
+                self.assertEqual(self.built(self.res, "data/parts/ax_x_v01_%s.tuningpart" % key), expected)
+
+    def test_the_three_car_parts_hold_their_tuning_parts_in_order(self):
+        parts = {key: CAR + "data\\parts\\ax_x_v01_%s.tuningpart" % key for key in self.tuning()}
+        base = {"no_specialization": {}, "brand": "Brand"}
+        self.assertEqual(self.built(self.res, "presets/parts/physics/ax_x_v01_drivetrain.carpart"), dict(
+            base, description="Grip drivetrain", note="Grip drivetrain", part_type=DRIVETRAIN_TYPE,
+            logic_parts=[{"tuning_part_path": parts[k]} for k in ("drivetrain", "gearbox", "clutch")]))
+        self.assertEqual(self.built(self.res, "presets/parts/physics/ax_x_v01_suspension.carpart"), dict(
+            base, description="Grip suspension", note="Grip suspension", part_type=SUSPENSION_TYPE,
+            logic_parts=[{"tuning_part_path": parts[k]} for k in ("geometry", "coilovers", "brakes", "setuplimits", "setup")]))
+        self.assertEqual(self.built(self.res, "presets/parts/physics/ax_x_v01_sound.carpart"), dict(
+            base, description="Grip sound", note="Grip sound", part_type=ENGINE_TYPE, logic_parts=[{"tuning_part_path": parts["engine"]}]))
+
+    def test_the_compatible_parts_sit_on_the_engine_bone_for_the_sound_part_only(self):
+        for kind in ("sound", "drivetrain", "suspension"):
+            expected = tune.compatible_part(CAR + "presets\\parts\\physics\\ax_x_v01_%s.carpart" % kind)
+            if kind != "sound":
+                del expected["attachment_bone"]
+            self.assertEqual(self.built(self.res, "presets/parts/physics/ax_x_v01_%s.compatiblepart" % kind), expected)
+        self.assertEqual(self.built(self.res, "presets/parts/physics/ax_x_v01_sound.compatiblepart")["attachment_bone"], "ENGINE")
+        self.assertNotIn("attachment_bone", self.built(self.res, "presets/parts/physics/ax_x_v01_drivetrain.compatiblepart"))
+
+    def test_the_version_has_no_car_file_and_the_base_car_file_is_the_base_one(self):
+        self.assertEqual([t for t in self.tree(self.res) if t.startswith("data/CarData")], ["data/CarData.car"])
+        car = self.built(self.res, "data/CarData.car")
+        self.assertEqual((car["engine"]["limiter"], car["general"]["totalMass"], car["engine_path"]), (7000, 1400.0, CAR + "data\\engine.carengine"))
+        for rel in self.FILES.values():
+            self.assertIn(tune.version_rel(rel, "v01"), self.tree(self.res))
+        self.assertEqual(self.built(self.res, "data/engine_v01.carengine")["limiter"], 8000)
+
+    def test_the_files_count_is_the_copies_and_the_part_files(self):
+        self.assertEqual(self.res["versions"][0]["files"], 12 + 2 + 15)
+        self.assertEqual(self.res["notes"][-1], "note: version v01 (Grip): 29 files of its own")
+        record = tune.kept_build(self.work, "ks_x", "v01")
+        self.assertEqual(len([f for f in record["files"] if "/parts/" in f or f.startswith("data/parts/")]), 15)
+
+    def test_the_forced_list_and_the_parts_of_the_carfinalstate_follow_the_order(self):
+        self.assertEqual(self.built(self.res, "presets/p_v01.mechanicalcarpreset")["forced_compatible_part_paths"],
+                         [compat("v01", "sound"), compat("v01", "drivetrain"), compat("v01", "suspension")])
+        final = self.built(self.res, self.FINAL)
+        self.assertEqual(final["car_data"], CAR + "data\\CarData.car")
+        self.assertEqual(final["parts"], self.entries("v01", {"b": 72}))
+        self.assertEqual(final["parts"][0]["guid"], self.GUID)
+        self.assertNotIn("parts", self.built(self.res, "presets/ax_x_p_vis.carfinalstate"))
+
+    def test_the_kept_build_lists_the_parts_in_the_order_sound_drivetrain_suspension(self):
+        record = tune.kept_build(self.work, "ks_x", "v01")
+        self.assertEqual(record["parts"], [compat("v01", "sound"), compat("v01", "drivetrain"), compat("v01", "suspension")])
+        self.assertNotIn("sound_part", record)
+        self.assertNotIn("data/CarData_v01.car", record["files"])
+
+
+class TestAVersionWithoutSomeFields(FullWorld):
+    def car_fields(self):
+        fields = super().car_fields()
+        del fields["clutch_path"], fields["brakes_path"]
+        return fields
+
+    def test_only_the_tunings_the_car_file_has_are_written(self):
+        self.version("Grip", {})
+        res = self.apply({})
+        tuned = sorted(t for t in self.tree(res) if t.startswith("data/parts/"))
+        self.assertEqual(tuned, ["data/parts/ax_x_v01_%s.tuningpart" % k for k in ("coilovers", "drivetrain", "engine", "gearbox", "geometry", "setup", "setuplimits")])
+        logic = lambda kind: [os.path.basename(l["tuning_part_path"].replace("\\", "/")) for l in
+                              self.built(res, "presets/parts/physics/ax_x_v01_%s.carpart" % kind)["logic_parts"]]
+        self.assertEqual(logic("drivetrain"), ["ax_x_v01_drivetrain.tuningpart", "ax_x_v01_gearbox.tuningpart"])
+        self.assertEqual(logic("suspension"), ["ax_x_v01_%s.tuningpart" % k for k in ("geometry", "coilovers", "setuplimits", "setup")])
+
+    def test_an_empty_text_is_no_field(self):
+        self.x.add("data/x.car", dict(self.car_fields(), clutch_path="", brakes_path=""))
+        self.version("Grip", {})
+        self.assertNotIn("data/parts/ax_x_v01_clutch.tuningpart", self.tree(self.apply({})))
+
+
+class TestACarWithoutAnyOfThePartFields(World):
+    def test_a_version_gets_no_part_at_all_and_its_preset_actor_and_finalstate_stay_as_they_are(self):
+        self.x.add("data/x.car", {"engine": {"limiter": 7000}, "general": {"totalMass": 1400.0}})
+        self.version("Grip", {})
+        res = self.apply({})
+        self.assertEqual([t for t in self.tree(res) if "parts/" in t], [])
+        self.assertNotIn("forced_compatible_part_paths", self.built(res, "presets/p_v01.mechanicalcarpreset"))
+        self.assertNotIn("not_compatible_part_paths", self.built(res, "presets/p.mechanicalcarpreset"))
+        self.assertNotIn("parts", self.built(res, "presets/ax_x_p_v01_vis.carfinalstate"))
+        self.assertNotIn("aftermarket_parts", self.built(res, "ax_x.actor")["car"]["customization"])
+        self.assertEqual(res["versions"][0]["files"], 5)
+        self.assertEqual(tune.kept_build(self.work, "ks_x", "v01")["parts"], [])
+
+
+class TestAFileSharedOutsideTheCarFolder(FullWorld):
+    def car_fields(self):
+        fields = super().car_fields()
+        fields["gearbox_path"] = "content\\cars\\common_phsx\\data\\gearbox.gearbox"
+        fields["suspensions"]["coilover_front_path"] = "content\\cars\\common_phsx\\data\\coil.coilover"
+        return fields
+
+    def test_it_gives_no_tuning_and_a_pair_with_one_such_file_gives_none_either(self):
+        self.x.add_shared("data/gearbox.gearbox", {"x": 1})
+        self.x.add_shared("data/coil.coilover", {"x": 1})
+        self.version("Grip", {})
+        res = self.apply({})
+        tuned = sorted(t[len("data/parts/ax_x_v01_"):-len(".tuningpart")] for t in self.tree(res) if t.startswith("data/parts/"))
+        self.assertEqual(tuned, ["brakes", "clutch", "drivetrain", "engine", "geometry", "setup", "setuplimits"])
+        self.assertEqual(len(self.built(res, "presets/parts/physics/ax_x_v01_drivetrain.carpart")["logic_parts"]), 2)
+        self.assertEqual(len(self.built(res, "presets/parts/physics/ax_x_v01_suspension.carpart")["logic_parts"]), 4)
+
+
+class TestNoCarFileIsCopied(FullWorld):
+    def test_not_when_the_car_file_differs_nor_when_a_copied_file_names_it(self):
+        gp = self.x.game_path
+        self.x.add("data/names_car.curve", {"car": gp("data/x.car")})
+        self.x.add("presets/names_car.visualcarpreset", {"brand": "Brand", "car_design_path": gp("data/x.car")})
+        self.version("Grip", {"limiter": 8000, "mass": 1800})
+        res = self.apply({})
+        self.assertEqual([t for t in self.tree(res) if "CarData" in t], ["data/CarData.car"])
+        self.assertIn("data/names_car_v01.curve", self.tree(res))
+        self.assertEqual(self.built(res, "data/names_car_v01.curve"), {"car": CAR + "data\\CarData.car"})
+        self.assertEqual(self.built(res, "presets/names_car_v01.visualcarpreset")["car_design_path"], CAR + "data\\CarData.car")
+        record = tune.kept_build(self.work, "ks_x", "v01")
+        self.assertEqual([f for f in record["files"] if "CarData" in f], [])
+        self.assertEqual(self.built(res, "presets/ax_x_p_v01_vis.carfinalstate")["car_data"], CAR + "data\\CarData.car")
+
+
+class TestThePartGuidOfACarfinalstate(FullWorld):
+    def parts(self, **fields):
+        self.final(**fields)
+        self.version("Grip", {})
+        return self.built(self.apply({}), self.FINAL)["parts"]
+
+    def test_the_guid_is_the_uuid_of_b_and_pguid_a_copy_of_the_livery_linker(self):
+        parts = self.parts(livery_linker={"b": 72})
+        self.assertEqual({p["guid"] for p in parts}, {"00000000-0000-0000-0000-000000000048"})
+        self.assertEqual([p["pguid"] for p in parts], [{"b": 72}] * 3)
+
+    def test_a_missing_livery_linker_gives_the_zero_guid_and_an_empty_pguid(self):
+        self.assertEqual(self.parts(livery_linker=None), self.entries("v01", {}))
+        self.assertEqual(self.entries("v01", {})[0]["guid"], ZERO_GUID)
+
+    def test_a_64_bit_b_is_the_low_half_of_the_uuid(self):
+        parts = self.parts(livery_linker={"b": 1 << 63})
+        self.assertEqual(parts[0]["guid"], "00000000-0000-0000-8000-000000000000")
+
+    def test_an_a_of_zero_is_fine(self):
+        self.assertEqual(self.parts(livery_linker={"a": 0, "b": 72}), self.entries("v01", {"a": 0, "b": 72}))
+
+    def test_an_a_other_than_zero_is_refused_and_nothing_is_packed(self):
+        self.final(livery_linker={"a": 5, "b": 72})
+        self.version("Grip", {})
+        with self.assertRaisesRegex(ValueError, "^%s: cannot derive the part guid$" % self.FINAL):
+            self.apply({})
+        self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
+        self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "build", "ax_x")))
+
+    def test_the_existing_parts_stay_first(self):
+        existing = {"path": CAR + "presets\\parts\\other.compatiblepart", "guid": "g", "pguid": {}, "type": "T"}
+        parts = self.parts(parts=[existing])
+        self.assertEqual(parts, [existing] + self.entries("v01", {"b": 72}))
+
+    def test_every_carfinalstate_of_the_version_gets_the_parts_with_its_own_guid(self):
+        gp = self.x.game_path
+        self.x.add("presets/vis2.visualcarpreset", {"brand": "Brand"})
+        self.x.add("presets/ks_x_p_vis2.carfinalstate", {"car_data": gp("data/x.car"), "livery_linker": {"b": 9},
+                                                         "body": {"path": gp("presets/p.mechanicalcarpreset"), "design": gp("presets/vis2.visualcarpreset")}})
+        self.version("Grip", {})
+        res = self.apply({})
+        self.assertEqual(self.built(res, self.FINAL)["parts"], self.entries("v01", {"b": 72}))
+        self.assertEqual(self.built(res, "presets/ax_x_p_v01_vis2.carfinalstate")["parts"], self.entries("v01", {"b": 9}))
+
+
+class TestThePartsOfSeveralVersionsWithALockedOne(FullWorld):
+    def trio(self, v):
+        return [compat(v, "sound"), compat(v, "drivetrain"), compat(v, "suspension")]
+
+    def setUp(self):
+        super().setUp()
+        self.version("Grip", {"limiter": 8000})
+        self.version("Loud", {"limiter": 7500})
+        self.version("Heavy", {"mass": 1800})
+        self.apply({})
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", "v02")
+        tune.lock_version(self.work, "ks_x", "v02")
+        self.kept = tune.kept_build(self.work, "ks_x", "v02")
+        self.before = tree_bytes(os.path.join(self.folder, "build"))
+        self.version("Light", {"mass": 1200})
+        self.res = self.apply({"limiter": 9000})
+
+    def preset(self, name):
+        return self.built(self.res, "presets/%s.mechanicalcarpreset" % name)
+
+    def test_the_actor_lists_sound_drivetrain_suspension_of_every_version_in_the_order_of_the_versions(self):
+        self.assertEqual(self.built(self.res, "ax_x.actor")["car"]["customization"]["aftermarket_parts"], self.trio("v01") + self.trio("v02") + self.trio("v03") + self.trio("v04"))
+
+    def test_the_base_and_the_unlocked_versions_forbid_the_parts_of_the_others(self):
+        self.assertEqual(self.preset("p")["not_compatible_part_paths"], self.trio("v01") + self.trio("v02") + self.trio("v03") + self.trio("v04"))
+        self.assertEqual(self.preset("p_v01")["not_compatible_part_paths"], self.trio("v02") + self.trio("v03") + self.trio("v04"))
+        self.assertEqual(self.preset("p_v03")["not_compatible_part_paths"], self.trio("v01") + self.trio("v02") + self.trio("v04"))
+        self.assertEqual(self.preset("p_v04")["not_compatible_part_paths"], self.trio("v01") + self.trio("v02") + self.trio("v03"))
+
+    def test_the_preset_of_the_locked_version_is_byte_equal_to_its_kept_build(self):
+        with open(os.path.join(self.root(self.res), "presets", "p_v02.mechanicalcarpreset"), "rb") as f:
+            self.assertEqual(f.read(), self.before["files/presets/p_v02.mechanicalcarpreset"])
+        kept = json.loads(self.before["files/presets/p_v02.mechanicalcarpreset"])
+        self.assertEqual(kept["not_compatible_part_paths"], self.trio("v01") + self.trio("v03"))
+        self.assertEqual(kept["forced_compatible_part_paths"], self.trio("v02"))
+
+    def test_the_locked_version_is_put_in_byte_for_byte_with_its_parts(self):
+        self.assertEqual(self.kept["parts"], self.trio("v02"))
+        for rel in self.kept["files"]:
+            with open(os.path.join(self.root(self.res), *rel.split("/")), "rb") as f:
+                self.assertEqual(f.read(), self.before["files/" + rel], rel)
+        self.assertTrue({"presets/parts/physics/ax_x_v02_sound.carpart", "presets/parts/physics/ax_x_v02_drivetrain.compatiblepart",
+                         "data/parts/ax_x_v02_gearbox.tuningpart", "presets/ax_x_p_v02_vis.carfinalstate"} <= set(self.kept["files"]))
+        self.assertEqual(tree_bytes(os.path.join(self.folder, "build")), self.before)
+
+    def test_a_version_that_already_forbids_a_part_is_not_listed_twice(self):
+        again = self.apply({"limiter": 9000})
+        self.assertEqual(len(self.built(again, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"]), 12)
+
+
+class TestForbiddingThatDoesNotListYet(FullWorld):
+    def test_an_entry_the_preset_lists_already_in_another_spelling_is_not_added_again(self):
+        gp = self.x.game_path
+        self.x.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                                                     "not_compatible_part_paths": [gp("presets/parts/physics/ks_x_v01_sound.compatiblepart").replace("\\", "/").upper()]})
+        self.version("Grip", {})
+        res = self.apply({})
+        forbidden = self.built(res, "presets/p.mechanicalcarpreset")["not_compatible_part_paths"]
+        self.assertEqual(forbidden[1:], [compat("v01", "drivetrain"), compat("v01", "suspension")])
+        self.assertEqual(len(forbidden), 3)
+
+
+class TestTheCarPartTypeOfTheBasePreset(FullWorld):
+    CONFLICT = CAR + "presets\\parts\\other.compatiblepart"
+
+    def force(self, part_type):
+        gp = self.x.game_path
+        self.x.add("presets/parts/other.compatiblepart", {"car_part_path": gp("presets/parts/other.carpart")})
+        self.x.add("presets/parts/other.carpart", {"part_type": part_type})
+        self.x.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                                                     "forced_compatible_part_paths": [gp("presets/parts/other.compatiblepart")]})
+        actor = self.actor()
+        actor["car"]["customization"]["aftermarket_parts"] = [gp("presets/parts/other.compatiblepart")]
+        self.x.add("ks_x.actor", actor)
+        self.final(parts=[{"path": gp("presets/parts/other.compatiblepart"), "guid": "g", "pguid": {}, "type": part_type}])
+
+    def test_a_forced_part_of_one_of_the_three_types_is_refused_before_anything_is_packed_and_kept_builds_stay(self):
+        v = self.version("Grip", {})
+        self.apply({})
+        folder = tune.version_dir(self.work, "ks_x", "ax_x", v)
+        package, kept = tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x")), tree_bytes(folder)
+        self.calls.clear()
+        for part_type in (ENGINE_TYPE, DRIVETRAIN_TYPE, SUSPENSION_TYPE):
+            with self.subTest(part_type):
+                self.force(part_type)
+                with self.assertRaises(ValueError) as caught:
+                    self.apply({})
+                self.assertEqual(str(caught.exception), "version v01: the preset of the car already forces a %s part (%s)" % (part_type, self.CONFLICT))
+                self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
+                self.assertEqual(tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x")), package)
+                self.assertEqual(tree_bytes(folder), kept)
+
+    def test_a_forced_part_of_another_type_is_fine(self):
+        self.force("CarPartType_Wing")
+        self.version("Grip", {})
+        res = self.apply({})
+        forced = self.built(res, "presets/p_v01.mechanicalcarpreset")["forced_compatible_part_paths"]
+        self.assertEqual(forced, [self.CONFLICT, compat("v01", "sound"), compat("v01", "drivetrain"), compat("v01", "suspension")])
+
+
+class TestTheOwnSoundsOfAVersionWithParts(FullWorld):
+    def setUp(self):
+        super().setUp()
+        self.x.store[self.x.key(os.path.join(self.x.car_root, "ks_x.actor"))] = self.actor(engine(), turbo("turbo_none"), backfire("backfire_a"))
+        donor = FakeCar(self.work, "ks_a")
+        donor.store = self.x.store
+        donor.add("ks_a.actor", {"car": {"audio_events": [engine(), turbo("turbo_rx7")]}})
+        self.addCleanup(tune._actor_options.clear)
+
+    def test_the_sound_part_carries_the_differing_events_and_the_other_two_parts_carry_none(self):
+        self.version("Loud", {"_sounds": {"turbo": "event:/parts/turbos/turbo_rx7"}})
+        res = self.apply({})
+        sound = self.built(res, "presets/parts/physics/ax_x_v01_sound.carpart")
+        self.assertEqual(sound["logic_parts"], [{"tuning_part_path": CAR + "data\\parts\\ax_x_v01_engine.tuningpart", "car_audio_events": [turbo("turbo_rx7")]}])
+        for kind in ("drivetrain", "suspension"):
+            for logic in self.built(res, "presets/parts/physics/ax_x_v01_%s.carpart" % kind)["logic_parts"]:
+                self.assertEqual(list(logic), ["tuning_part_path"])
+        self.assertEqual(res["notes"][-1], "note: version v01 (Loud): own sounds turbo=turbo_rx7")
+        self.assertEqual(res["notes"][-2], "note: version v01 (Loud): 29 files of its own")
+
+    def test_the_same_sounds_give_the_sound_part_without_the_key_and_no_note(self):
+        self.version("Same", {})
+        res = self.apply({})
+        self.assertEqual(self.built(res, "presets/parts/physics/ax_x_v01_sound.carpart")["logic_parts"],
+                         [{"tuning_part_path": CAR + "data\\parts\\ax_x_v01_engine.tuningpart"}])
+        self.assertEqual([n for n in res["notes"] if "own sounds" in n], [])
+
+
+class TestAKeptBuildOfTheOldForm(World):
+    def setUp(self):
+        super().setUp()
+        self.v = self.version("Grip", {"limiter": 8000})
+        self.apply({})
+        self.path = os.path.join(tune.version_dir(self.work, "ks_x", "ax_x", self.v), "build", "build.json")
+        with open(self.path, encoding="utf-8") as f:
+            self.record = json.load(f)
+
+    def rewrite(self, **changes):
+        record = dict(self.record, **changes)
+        for key in [k for k, v in changes.items() if v is KeyError]:
+            del record[key]
+        self.write(self.path, record)
+
+    def test_the_form_with_parts_is_valid_and_an_empty_list_too(self):
+        self.assertEqual(tune.kept_build(self.work, "ks_x", self.v, "ax_x"), self.record)
+        self.rewrite(parts=[])
+        self.assertIsNotNone(tune.kept_build(self.work, "ks_x", self.v, "ax_x"))
+
+    def test_a_record_with_sound_part_and_no_parts_is_no_kept_build(self):
+        self.rewrite(parts=KeyError, sound_part=None)
+        self.assertIsNone(tune.kept_build(self.work, "ks_x", self.v, "ax_x"))
+
+    def test_parts_must_be_a_list_of_non_empty_texts(self):
+        for bad in (None, "x", {}, [""], [5], ["a", None]):
+            with self.subTest(parts=bad):
+                self.rewrite(parts=bad)
+                self.assertIsNone(tune.kept_build(self.work, "ks_x", self.v, "ax_x"))
+        self.rewrite(parts=KeyError)
+        self.assertIsNone(tune.kept_build(self.work, "ks_x", self.v, "ax_x"))
+
+    def test_lock_refuses_it_and_apply_refuses_a_locked_version_with_it(self):
+        tune.lock_version(self.work, "ks_x", self.v)
+        self.rewrite(parts=KeyError, sound_part=None)
+        self.calls.clear()
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(Grip\) is locked but its kept build is missing or damaged; unlock it$"):
+            self.apply({})
+        self.assertEqual(self.calls, [])
+        tune.unlock_version(self.work, "ks_x", self.v)
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(Grip\) has no kept build: Apply first, then lock it$"):
+            tune.lock_version(self.work, "ks_x", self.v)
+
+
+class TestAVersionThatWouldCrashTheGameByItsParts(FullCar, VisualWorld):
+    FINAL = "presets/ax_x_p_v01_vis_v01.carfinalstate"
+    SOUND = compat("v01", "sound")
+    SOUND_PART = CAR + "presets\\parts\\physics\\ax_x_v01_sound.carpart"
+    TUNING = CAR + "data\\parts\\ax_x_v01_engine.tuningpart"
+    ENGINE = CAR + "data\\engine_v01.carengine"
+
+    def setUp(self):
+        super().setUp()
+        self.v = self.version("Grip", {"limiter": 8000})
+        self.apply({})
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", self.v)
+        self.package = tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x"))
+        self.kept = tree_bytes(os.path.join(self.folder, "build"))
+        self.record = tree_bytes(self.folder)["snapshot.json"]
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000}, self.v)
+        self.calls.clear()
+
+    def before_names(self, mutate):
+        names = tune.add_version_names
+
+        def wrapped(part, new_id, versions):
+            mutate(tune.car_root_of(part, new_id))
+            return names(part, new_id, versions)
+        self.patch(tune, "add_version_names", wrapped)
+
+    def entry(self, root, rel):
+        return self.x.store[self.x.key(os.path.join(root, *rel.split("/")))]
+
+    def refuse(self, text):
+        with self.assertRaises(ValueError) as caught:
+            self.apply({})
+        self.assertEqual(str(caught.exception), "version v01 (Grip) would crash the game: " + text)
+        self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
+        self.assertEqual(tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x")), self.package)
+        self.assertEqual(tree_bytes(os.path.join(self.folder, "build")), self.kept)
+        self.assertEqual(tree_bytes(self.folder)["snapshot.json"], self.record)
+
+    def test_a_carfinalstate_whose_car_data_is_not_in_the_build(self):
+        gone = CAR + "data\\gone.car"
+        self.before_names(lambda root: self.entry(root, self.FINAL).update({"car_data": gone}))
+        self.refuse("%s: car_data %s is not in the build" % (self.FINAL, gone))
+
+    def test_a_forced_part_that_the_actor_does_not_list(self):
+        self.patch(tune, "add_version_parts", lambda *a: None)
+        self.refuse("%s is not in car.customization.aftermarket_parts of the actor" % self.SOUND)
+
+    def test_a_forced_part_that_a_carfinalstate_does_not_list(self):
+        self.before_names(lambda root: self.entry(root, self.FINAL).update({"parts": []}))
+        self.refuse("%s: %s is not in its parts" % (self.FINAL, self.SOUND))
+
+    def test_a_compatible_part_that_is_not_in_the_build(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "presets", "parts", "physics", "ax_x_v01_sound.compatiblepart")))
+        self.refuse("%s is not in the build" % self.SOUND)
+
+    def test_a_car_part_that_is_not_in_the_build(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "presets", "parts", "physics", "ax_x_v01_sound.carpart")))
+        self.refuse("%s (car_part_path of %s) is not in the build" % (self.SOUND_PART, self.SOUND))
+
+    def test_a_tuning_part_that_is_not_in_the_build(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "data", "parts", "ax_x_v01_engine.tuningpart")))
+        self.refuse("%s (tuning_part_path of %s) is not in the build" % (self.TUNING, self.SOUND_PART))
+
+    def test_a_file_of_the_car_folder_that_a_tuning_part_names_and_the_build_lacks(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "data", "engine_v01.carengine")))
+        self.refuse("%s (named by %s) is not in the build" % (self.ENGINE, self.TUNING))
+
+    def test_a_path_outside_the_car_folder_is_not_checked(self):
+        shared = "content\\cars\\common_phsx\\data\\gone.gearbox"
+        self.before_names(lambda root: self.entry(root, "data/parts/ax_x_v01_gearbox.tuningpart")["gearbox"].update({"path": shared}))
+        self.assertEqual(self.apply({})["versions"][0]["id"], "v01")
 
 
 if __name__ == "__main__":

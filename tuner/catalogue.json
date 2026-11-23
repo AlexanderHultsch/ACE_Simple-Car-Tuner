@@ -430,7 +430,7 @@
     {
       "id": "steer_rod_ratio", "group": "Steering", "label": "Steering rod ratio", "kind": "value", "type": "float", "unit": "",
       "description": "The linear steer rod ratio matches the steering wheel lock to the tyre lock. This is the steering rod ratio of the car (SteerControlsData.linearSteerRodRatio, stored in the .car only): front wheel angle per steering movement. Raising it gives more front wheel angle for the same hand movement (BMW stock 0.0017, the other tested cars 0.001975 to 0.0022). Effect in the game not confirmed.",
-      "verified": false, "min": 0.0005, "max": 0.005,
+      "verified": false, "min": 0.0005, "max": 0.005, "shared": true,
       "targets": [
         {"file": "@car", "path": "controls.linearSteerRodRatio"}
       ]
@@ -438,7 +438,7 @@
     {
       "id": "ff_mult", "group": "Steering", "label": "Force feedback multiplier", "kind": "value", "type": "float", "unit": "x",
       "description": "FF Mult adjusts the baseline force feedback output of the car. This is the force feedback multiplier of the car (SteerControlsData.ffMult, stored in the .car only): the game multiplies the car's steering force by it before it reaches the wheel. Measured on 2026-11-22: the game's live force feedback signal (ffb_strength in the shared memory) was weaker on the BMW M3 E46 CSL Drift (ffMult 1.75) than on the Toyota Supra MKIV Drift preset (ffMult 1.5), so the axle and tyres matter as much; raise it in small steps, a signal above 1.0 probably clips at the wheel.",
-      "verified": false, "min": 0, "max": 5,
+      "verified": false, "min": 0, "max": 5, "shared": true,
       "targets": [
         {"file": "@car", "path": "controls.ffMult"}
       ]
@@ -515,7 +515,7 @@
     {
       "id": "steer_lock_deg", "group": "Steering", "label": "Steering lock", "kind": "value", "type": "float", "unit": "deg",
       "description": "Steer lock is the angle from the centre to the maximum lock, so the total range is twice this value. This is the steering lock of the car (SteerControlsData.steer_lock, stored in the .car only). Assumed to be degrees of steering wheel rotation, not confirmed. Raising it allows more wheel rotation, and with it more front wheel angle.",
-      "verified": false, "min": 90, "max": 1440,
+      "verified": false, "min": 90, "max": 1440, "shared": true,
       "targets": [
         {"file": "@car", "path": "controls.steer_lock"}
       ]
@@ -523,7 +523,7 @@
     {
       "id": "car_mass", "group": "Vehicle (hardware)", "label": "Car mass", "kind": "value", "type": "float", "unit": "kg",
       "description": "Physics mass of the car (GeneralCarData.totalMass, stored in the .car only). The displayed weight on the spec sheet is separate text. Raising it makes the car heavier to accelerate, brake and turn.",
-      "verified": true, "min": 500, "max": 3000,
+      "verified": true, "min": 500, "max": 3000, "shared": true,
       "targets": [
         {"file": "@car", "path": "general.totalMass"}
       ]
@@ -901,7 +901,7 @@
     {
       "id": "arb_stiffness_front", "group": "Suspension (physical)", "label": "Front anti-roll bar stiffness (physical)", "kind": "value", "type": "float", "unit": "N/m",
       "description": "ARBs in the car file are not relevant because the setup overwrites them, unless ARB controllers are defined. This is the physical stiffness of the front anti-roll bar (suspensions.arbFront.stiffness, stored in the .car only); cars that do not store it show it as absent and create it when you set it. It is the physical value in the car data; the setup values (spring_front, spring_rear, damper_*, arb_front, arb_rear) are the in-game setup defaults.",
-      "verified": false, "min": 0, "max": 200000, "create_missing": true,
+      "verified": false, "min": 0, "max": 200000, "create_missing": true, "shared": true,
       "targets": [
         {"file": "@car", "path": "suspensions.arbFront.stiffness"}
       ]
@@ -909,7 +909,7 @@
     {
       "id": "arb_stiffness_rear", "group": "Suspension (physical)", "label": "Rear anti-roll bar stiffness (physical)", "kind": "value", "type": "float", "unit": "N/m",
       "description": "ARBs in the car file are not relevant because the setup overwrites them, unless ARB controllers are defined. This is the physical stiffness of the rear anti-roll bar (suspensions.arbRear.stiffness, stored in the .car only); cars that do not store it show it as absent and create it when you set it. It is the physical value in the car data; the setup values (spring_front, spring_rear, damper_*, arb_front, arb_rear) are the in-game setup defaults.",
-      "verified": false, "min": 0, "max": 200000, "create_missing": true,
+      "verified": false, "min": 0, "max": 200000, "create_missing": true, "shared": true,
       "targets": [
         {"file": "@car", "path": "suspensions.arbRear.stiffness"}
       ]
@@ -1337,7 +1337,7 @@
     {
       "id": "driver_aids_off", "group": "Electronics", "label": "Driver aids off", "kind": "flag", "type": "bool", "unit": "",
       "description": "Levels are counted from 0 and the car must define Setting 1 (level 0) as no intervention for the aid to be switchable off; whether this car does is not confirmed. This is a switch: when on, traction control (tc1, tc2) and stability control (esc) are set to 0 in every performance (driving) mode of the car and in the setup defaults, so no driver aid steps in; ABS is not touched. Fields the car does not store are not added.",
-      "verified": false, "value": 0,
+      "verified": false, "value": 0, "shared": true,
       "targets": [
         {"file": "@car", "path": "performance_modes[*].electronics_settings.tc1", "optional": true},
         {"file": "@car", "path": "performance_modes[*].electronics_settings.tc2", "optional": true},

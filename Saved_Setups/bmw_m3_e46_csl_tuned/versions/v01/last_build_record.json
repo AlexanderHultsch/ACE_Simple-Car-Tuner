@@ -89,21 +89,10 @@
     "backfire": "event:/parts/backfires/backfire_supra"
   },
   "name": "BMW M3 E46 CSL Tuned",
-  "time": "2026-11-23T17:00:46Z",
+  "time": "2026-11-23T19:17:23Z",
   "changes": {
     "since": "last build",
-    "settings": [
-      {
-        "id": "steer_rod_ratio",
-        "from": 0.0025,
-        "to": 0.0022
-      },
-      {
-        "id": "arb_rear",
-        "from": 30000.0,
-        "to": 40000.0
-      }
-    ],
+    "settings": [],
     "extras": [],
     "total": 72
   }

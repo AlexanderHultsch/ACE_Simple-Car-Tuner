@@ -1390,14 +1390,14 @@ class TestVersions(unittest.TestCase):
         self.assertIn('(selection.version ? "" : "select a version to rename it, the base has no version name")', body)
         self.assertIn('whyVersion = "a job is running";', body)
 
-    def test_the_meta_rows_of_a_version_are_read_only_with_a_note(self):
+    def test_the_meta_and_shared_rows_of_a_version_are_read_only_with_a_note(self):
         body = function_body("renderButtons")
         view = body[body.index("if (selection.version) {"):]
-        self.assertIn('if (r.data.kind === "meta") {', view)
+        self.assertIn('if (r.data.kind === "meta" || r.data.shared) {', view)
         self.assertIn("r.field.disabled = true;", view)
         self.assertIn("r.reset.disabled = true;", view)
         self.assertIn("Shared by all versions; change it on the base", function_body("buildHeaderRow"))
-        self.assertIn('if (target.version && data.kind === "meta") valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));',
+        self.assertIn('if (target.version && (data.kind === "meta" || data.shared)) valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));',
                       function_body("buildRow"))
 
     def test_create_and_duplicate_are_off_with_a_version_and_apply_stays_on(self):
@@ -1413,6 +1413,7 @@ class TestVersions(unittest.TestCase):
         self.assertIn("paths.package", body)
         self.assertIn("paths.versions_folder", body)
         self.assertIn("To remove a version, delete its folder by hand, then press Apply. The page never deletes.", body)
+        self.assertIn(" Painted cars you saved in the game use the version's files: if you remove a version, do not select its painted cars any more, the game may crash.", body)
         self.assertIn("renderModPaths();", function_body("refresh"))
         self.assertNotIn("version_delete", CODE)
 

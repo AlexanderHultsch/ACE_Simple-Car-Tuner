@@ -4701,6 +4701,28 @@ class TestVersionRoutes(SoundCase):
                 self.assertEqual((r.status, r.json), (400, {"error": "name_suffix is shared by all versions, set it on the base"}))
         self.assertEqual((self.version_state(), self.tune_state("ax01")), ({"limiter": 9000}, {"name_suffix": "_A", "limiter": 8000}))
 
+    def share_aids_off(self):
+        next(s for s in self.cat["settings"] if s["id"] == "aids_off")["shared"] = True
+
+    def test_the_rows_carry_the_shared_flag_only_for_the_settings_marked_shared(self):
+        self.share_aids_off()
+        for query in ("?tune=ax01&version=v01", "?tune=ax01"):
+            rows = {r["id"]: r for r in self.get("/api/settings" + query).json}
+            self.assertEqual({i for i, r in rows.items() if r.get("shared")}, {"aids_off"}, query)
+            self.assertEqual([r["shared"] for r in rows.values() if "shared" in r], [True], query)
+
+    def test_a_shared_setting_cannot_be_set_or_unset_on_a_version_but_can_on_the_base(self):
+        self.share_aids_off()
+        for route, body in (("/api/set", {"id": "aids_off", "value": True}), ("/api/unset", {"id": "aids_off"})):
+            with self.subTest(route):
+                r = self.post(route, dict(body, tune="ax01", version="v01"))
+                self.assertEqual((r.status, r.json), (400, {"error": "aids_off is shared by all versions, set it on the base"}))
+        self.assertEqual((self.version_state(), self.tune_state("ax01")), ({"limiter": 9000}, {"name_suffix": "_A", "limiter": 8000}))
+        r = self.post("/api/set", {"tune": "ax01", "id": "aids_off", "value": True})
+        self.assertEqual((r.status, r.json["row"]["shared"]), (200, True))
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000, "aids_off": True})
+        self.assertEqual(self.post("/api/unset", {"tune": "ax01", "id": "aids_off"}).status, 200)
+
     def test_reset_all_with_a_version_clears_only_that_version(self):
         tune.save_version_state(self.work, "ks_x", {"limiter": 9000, "aids_off": True}, "v01", "ax01")
         other = tune.add_version(self.work, "ks_x", "Light", "ax01", "v01")
@@ -4799,7 +4821,7 @@ class TestVersionRoutes(SoundCase):
         os.makedirs(os.path.join(folder, "files", "data"))
         with open(os.path.join(folder, "files", "data", "CarData_v01.car"), "wb") as f:
             f.write(b"car")
-        tune.save_json(os.path.join(folder, "build.json"), {"tune": tune_id, "preset": "p", "sound_part": None, "files": ["data/CarData_v01.car"],
+        tune.save_json(os.path.join(folder, "build.json"), {"tune": tune_id, "preset": "p", "parts": [], "files": ["data/CarData_v01.car"],
                                                             "time": time, "state": self.version_state(version, tune_id)})
 
     def test_version_lock_locks_a_version_with_a_matching_kept_build_and_unlock_frees_it(self):
@@ -4918,7 +4940,7 @@ class TestVersionGarage(TyreCase):
         os.makedirs(os.path.join(folder, "files", "data"))
         with open(os.path.join(folder, "files", "data", "CarData_v01.car"), "wb") as f:
             f.write(b"car")
-        tune.save_json(os.path.join(folder, "build.json"), {"tune": "ax01", "preset": "p", "sound_part": None, "files": ["data/CarData_v01.car"],
+        tune.save_json(os.path.join(folder, "build.json"), {"tune": "ax01", "preset": "p", "parts": [], "files": ["data/CarData_v01.car"],
                                                             "time": "2026-11-23T12:40:24Z", "state": state})
         self.assertEqual(self.post("/api/version_lock", {"tune": "ax01", "version": vid}).status, 200)
         for route, body in (("/api/garage_set", {"keys": ["own:hard"]}), ("/api/garage_reset", {})):

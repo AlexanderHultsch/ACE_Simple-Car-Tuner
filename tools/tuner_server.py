@@ -39,8 +39,9 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         /api/unset, /api/reset_all, /api/garage, /api/garage_set, /api/garage_reset, /api/turbo, /api/turbo_set,
                         /api/turbo_reset, /api/sounds, /api/sound_set and /api/sound_reset take an optional "version" (an id of
                         "versions": query parameter for GET, body field or query parameter for POST; empty is the base) and then work on
-                        that version's state; 400 for a version without a modded car, for an unknown version and for a meta setting
-                        (name suffix) of a version, which all versions share. reset_all with a version clears only that version.
+                        that version's state; 400 for a version without a modded car, for an unknown version and for a meta or shared
+                        setting (name suffix, steer_rod_ratio, ff_mult, ...: "shared": true in its row, also on the base) of a version,
+                        which all versions share; POST /api/set and /api/unset of one answer 400 "<id> is shared by all versions, set it on the base". reset_all with a version clears only that version.
   POST /api/version_add {"tune": ..., "name": ..., "from": version id (optional, default the base)}   adds a version as a copy
                         of the base (or of version "from"); answers {"id"}
   POST /api/version_rename {"tune": ..., "version": ..., "name": ...}   answers {"id", "name"}; there is no route that deletes a version
@@ -398,7 +399,7 @@ def apply_task(car_id, new_id, created):
 def row_json(row, setting, base_range=None):
     out = {k: row[k] for k in ("id", "group", "label", "kind", "type", "unit", "description", "verified",
                                "default", "value", "changed", "absent", "copies_differ")}
-    out.update({k: setting[k] for k in ("min", "max", "choices", "ui", "advanced") if k in setting})
+    out.update({k: setting[k] for k in ("min", "max", "choices", "ui", "advanced", "shared") if k in setting})
     if row["copies_differ"]:
         out["copy_values"] = row["copy_values"]
     if base_range:

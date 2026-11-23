@@ -16,6 +16,8 @@
     "turbo_wastegate_2": 1.5,
     "max_turbo_boost": 1.8,
     "autoshift_up_rpm": 8700,
+    "steer_rod_ratio": 0.0022,
+    "ff_mult": 2.1,
     "brake_torque": 4700.0,
     "car_mass": 1450.0
   },
@@ -33,11 +35,11 @@
     "turbo": "event:/parts/turbos/turbo_quattro"
   },
   "name": "BMW M3 E46 CSL Tuned",
-  "time": "2026-11-23T17:00:46Z",
+  "time": "2026-11-23T19:17:23Z",
   "changes": {
     "since": "last build",
     "settings": [],
     "extras": [],
-    "total": 17
+    "total": 19
   }
 }

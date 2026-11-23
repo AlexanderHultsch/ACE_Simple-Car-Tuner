@@ -21,5 +21,7 @@
   "max_turbo_boost": 1.8,
   "autoshift_up_rpm": 8700,
   "brake_torque": 4700.0,
-  "car_mass": 1450.0
+  "car_mass": 1450.0,
+  "ff_mult": 2.1,
+  "steer_rod_ratio": 0.0022
 }

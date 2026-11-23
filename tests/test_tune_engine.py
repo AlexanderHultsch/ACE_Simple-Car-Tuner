@@ -2522,7 +2522,7 @@ class TestVersions(CarCase):
         """A kept build for the version made from its state as it is now (build/files/data/a.bin and build/build.json); over replaces keys of build.json."""
         folder = self.vpath(version, "build", tune_id=tune_id)
         self.write(os.path.join(folder, "files", "data", "a.bin"), b"A", binary=True)
-        record = {"tune": tune_id or "ax_x", "preset": "content\\cars\\ax_x\\presets\\p_v01.mechanicalcarpreset", "sound_part": None, "files": ["data/a.bin"],
+        record = {"tune": tune_id or "ax_x", "preset": "content\\cars\\ax_x\\presets\\p_v01.mechanicalcarpreset", "parts": [], "files": ["data/a.bin"],
                   "time": "2026-11-23T10:00:00Z", "state": tune.read_version_state(self.work, "ks_x", version, tune_id)}
         record.update(over)
         self.write(os.path.join(folder, "build.json"), record)
@@ -2577,14 +2577,14 @@ class TestVersions(CarCase):
         build = self.vpath("v01", "build", "build.json")
         good = self.keep("v01")
         bad = [("files", []), ("files", "data/a.bin"), ("files", [5]), ("files", ["data/missing.bin"]), ("files", ["../x"]), ("files", ["data//a.bin"]),
-               ("files", ["/data/a.bin"]), ("preset", ""), ("preset", None), ("sound_part", ""), ("sound_part", 5), ("time", None), ("time", 5),
+               ("files", ["/data/a.bin"]), ("preset", ""), ("preset", None), ("parts", None), ("parts", ""), ("parts", [""]), ("parts", [5]), ("parts", {}), ("time", None), ("time", 5),
                ("state", []), ("state", None), ("tune", "ax01"), ("tune", None)]
         for key, value in bad:
             with self.subTest(key=key, value=value):
                 self.write(build, dict(good, **{key: value}))
                 self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
                 self.assertEqual(tune.list_versions(self.work, "ks_x")[0]["built"], None)
-        for key in ("files", "preset", "sound_part", "time", "state", "tune"):
+        for key in ("files", "preset", "parts", "time", "state", "tune"):
             with self.subTest(missing=key):
                 self.write(build, {k: v for k, v in good.items() if k != key})
                 self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
@@ -2592,8 +2592,10 @@ class TestVersions(CarCase):
             with self.subTest(text=text):
                 self.write(build, text)
                 self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
-        self.write(build, dict(good, sound_part="content\\cars\\ax_x\\presets\\parts\\physics\\ax_x_v01_sound.compatiblepart"))
+        self.write(build, dict(good, parts=["content\\cars\\ax_x\\presets\\parts\\physics\\ax_x_v01_sound.compatiblepart"]))
         self.assertIsNotNone(tune.kept_build(self.work, "ks_x", "v01"))
+        self.write(build, dict({k: v for k, v in good.items() if k != "parts"}, sound_part=None))
+        self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
         os.remove(build)
         self.assertIsNone(tune.kept_build(self.work, "ks_x", "v01"))
 
@@ -2792,6 +2794,84 @@ class TestVersions(CarCase):
         self.assertEqual(out, self.main("defaults")[1])
         self.assertEqual(self.main("defaults", "--version", "v05")[::2], (1, "error: ks_x has no version v05 of ax_x\n"))
         self.assertEqual(self.main("defaults", "--version", "v01", "--tune", "ax01")[::2], (1, "error: ks_x has no version v01 of ax01\n"))
+
+
+class TestSharedSettingsOfVersions(CarCase):
+    """The settings with "shared": true (m here) are edited on the base only: a version takes them from the base like the meta settings."""
+    main, vpath, values, keep, lock = TestVersions.main, TestVersions.vpath, TestVersions.values, TestVersions.keep, TestVersions.lock
+    MESSAGE = "m is shared by all versions, set it on the base"
+
+    def setUp(self):
+        super().setUp()
+        self.cars(("ks_x", "Car X"))
+        self.stock_info()
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        self.cat = mini_catalogue(*metas(), limiter(), mini_setting("m", type="int", targets=[("@engine", "minimum")], shared=True))
+        self.patch(tune, "load_catalogue", lambda path=None: self.cat)
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "Base", "m": 700})
+
+    def test_shared_ids_are_the_meta_ids_and_the_settings_marked_shared(self):
+        self.assertEqual(tune.shared_ids(self.cat), {"name_suffix", "variant_name", "m"})
+        self.assertEqual(tune.shared_ids(mini_catalogue(*metas(), limiter())), {"name_suffix", "variant_name"})
+        self.assertEqual(tune.meta_ids(self.cat), {"name_suffix", "variant_name"})
+
+    def test_a_version_takes_the_shared_value_of_the_base_and_ignores_its_own(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 6500, "m": 900, "name_suffix": "Ignored"}, "v01")
+        self.assertEqual(tune.load_version_state(self.work, "ks_x", "v01"), {"limiter": 6500, "m": 700, "name_suffix": "Base"})
+        self.assertEqual(self.values("v01")["m"], (700, True))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {"limiter": 6500, "m": 900, "name_suffix": "Ignored"})
+
+    def test_without_a_saved_value_of_the_base_the_stock_default_applies(self):
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "Base"})
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"m": 900}, "v01")
+        self.assertEqual(tune.load_version_state(self.work, "ks_x", "v01"), {"name_suffix": "Base"})
+        self.assertEqual(self.values("v01")["m"], (800, False))
+
+    def test_a_new_version_holds_no_shared_setting_whether_it_copies_the_base_or_another_version(self):
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Drift"), "v01")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {"limiter": 8000})
+        tune.save_version_state(self.work, "ks_x", {"limiter": 6500, "m": 900, "name_suffix": "Own"}, "v01")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Copy", source="v01"), "v02")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v02"), {"limiter": 6500})
+
+    def test_set_and_unset_of_a_shared_setting_on_a_version_are_refused_and_write_nothing(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        before = tune.read_version_state(self.work, "ks_x", "v01")
+        for call in (lambda: tune.set_value(self.work, "ks_x", "m", "900", version="v01"), lambda: tune.unset_value(self.work, "ks_x", "m", version="v01")):
+            with self.assertRaisesRegex(ValueError, "^%s$" % self.MESSAGE):
+                call()
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), before)
+        self.assertEqual(tune.load_state(self.work, "ks_x")["m"], 700)
+
+    def test_a_shared_setting_can_be_set_and_unset_on_the_base(self):
+        self.assertEqual(tune.set_value(self.work, "ks_x", "m", "900")["value"], 900)
+        self.assertEqual(tune.load_state(self.work, "ks_x")["m"], 900)
+        self.assertEqual(tune.unset_value(self.work, "ks_x", "m"), {"id": "m", "removed": True})
+        self.assertNotIn("m", tune.load_state(self.work, "ks_x"))
+
+    def test_a_locked_version_gives_its_locked_error_before_the_shared_one(self):
+        v = self.lock()
+        for call in (lambda: tune.set_value(self.work, "ks_x", "m", "900", version=v), lambda: tune.unset_value(self.work, "ks_x", "m", version=v)):
+            with self.assertRaisesRegex(ValueError, r"^version v01 \(Drift\) is locked; unlock it to change it$"):
+                call()
+
+    def test_set_and_unset_with_a_version_on_the_command_line_are_runtime_errors(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        text = "error: m is shared by all versions, set it on the base\n"
+        self.assertEqual(self.main("set", "m", "900", "--version", "v01")[::2], (1, text))
+        self.assertEqual(self.main("unset", "m", "--version", "v01")[::2], (1, text))
+        self.assertEqual(self.main("set", "m", "900")[::2], (0, ""))
+
+    def test_show_with_a_version_prints_the_value_of_the_base_for_a_shared_setting(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 6500, "m": 900}, "v01")
+        code, out, err = self.main("show", "--version", "v01")
+        rows = {l.split(" | ")[1].strip(): [c.strip(" |") for c in l.split(" | ")] for l in out.splitlines()[2:]}
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(rows["m"][2:4], ["700", "800"])
+        self.assertEqual(rows["limiter"][2:4], ["6500", "7000"])
 
 
 # --------------------------------------------------------------------------------------------- work folder

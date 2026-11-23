@@ -15,7 +15,7 @@ import tune
 CARS = ROOT / "tuner" / "cars.json"
 KNOWN_KEYS = set(tune.REQUIRED) | {"min", "max", "default", "default_template", "choices", "choice_values", "targets",
                                    "needs", "curve_from", "handler", "hide_if_absent", "create_missing", "ui", "value",
-                                   "advanced"}
+                                   "advanced", "shared"}
 ROLE_NAMES = set(tune.MANIFEST_ROLES) | set(tune.TYRE_ROLES) | {"car", "mech_preset", "turbo"}
 TEMPLATE_FIELDS = {"stock_display_name", "stock_variant_name"}
 COMMON = "content\\cars\\common_phsx\\"
@@ -267,6 +267,15 @@ class TestCatalogueData(unittest.TestCase):
                 self.assertIs(BY_ID[sid]["advanced"], True)
                 self.assertIn("should not be adjusted manually", BY_ID[sid]["description"])
 
+    def test_exactly_the_settings_that_live_only_in_the_car_file_are_shared_by_the_versions(self):
+        flagged = [s["id"] for s in SETTINGS if "shared" in s]
+        self.assertEqual(sorted(flagged), sorted(["steer_rod_ratio", "ff_mult", "steer_lock_deg", "car_mass", "arb_stiffness_front",
+                                                  "arb_stiffness_rear", "driver_aids_off"]))
+        for sid in flagged:
+            with self.subTest(sid):
+                self.assertIs(BY_ID[sid]["shared"], True)
+        self.assertEqual(tune.shared_ids(tune.load_catalogue()), set(flagged) | {"name_suffix", "variant_name"})
+
     def test_choices_only_on_enums_and_unique(self):
         for s in SETTINGS:
             with self.subTest(s["id"]):
@@ -381,6 +390,9 @@ class TestLoaderValidation(unittest.TestCase):
             ("hide_if_absent text", [good(hide_if_absent=1)], "hide_if_absent"),
             ("advanced text", [good(advanced="yes")], "advanced"),
             ("advanced number", [good(advanced=1)], "advanced"),
+            ("shared text", [good(shared="yes")], "shared"),
+            ("shared number", [good(shared=1)], "shared"),
+            ("shared false", [good(shared=False)], "shared"),
             ("optional text", [dict(good(), targets=[{"file": "@car", "path": "a", "optional": "yes"}])], "optional"),
             ("unknown role", [dict(good(), targets=[{"file": "@bogus", "path": "a"}])], "unknown file role '@bogus'"),
             ("role with a text index", [dict(good(), targets=[{"file": "@turbo[x]", "path": "a"}])], "unknown file role"),
@@ -410,6 +422,19 @@ class TestLoaderValidation(unittest.TestCase):
         cat = self.load(mini_setting("a", targets=[("@engine", "limiter")], advanced=True),
                         mini_setting("b", targets=[("@engine", "limiter")], advanced=False))
         self.assertEqual([s["advanced"] for s in cat["settings"]], [True, False])
+
+    def test_shared_true_is_accepted_and_means_a_setting_the_versions_share(self):
+        cat = self.load(mini_setting("a", targets=[("@engine", "limiter")], shared=True), mini_setting("b", targets=[("@engine", "limiter")]))
+        self.assertEqual([s.get("shared") for s in cat["settings"]], [True, None])
+        self.assertEqual(tune.shared_ids(cat), {"a"})
+
+    def test_a_refused_shared_names_the_file_and_the_setting(self):
+        with tmp() as d:
+            path = write_json(d, "c.json", mini_catalogue(mini_setting("a", targets=[("@engine", "limiter")], shared="yes")))
+            with self.assertRaises(ValueError) as cm:
+                tune.load_catalogue(path)
+        self.assertIn(path, str(cm.exception))
+        self.assertIn("'a'", str(cm.exception))
 
     def test_a_refused_advanced_names_the_file_and_the_setting(self):
         with tmp() as d:

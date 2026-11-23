@@ -851,7 +851,8 @@ function renderStatus() {
 function renderModPaths() {
   const paths = serverState && serverState.tune !== DRAFT ? serverState.mod_paths : null;
   showText("mod-paths", paths ? "Where it lives: package " + paths.package + "; versions folder " + paths.versions_folder +
-    ". To remove a version, delete its folder by hand, then press Apply. The page never deletes." : "");
+    ". To remove a version, delete its folder by hand, then press Apply. The page never deletes." +
+    " Painted cars you saved in the game use the version's files: if you remove a version, do not select its painted cars any more, the game may crash." : "");
 }
 
 function optionText(c) {
@@ -977,7 +978,7 @@ function renderButtons() {
   }
   if (selection.version) {
     for (const r of headerRow ? rows.concat(headerRow) : rows) {
-      if (r.data.kind === "meta") {
+      if (r.data.kind === "meta" || r.data.shared) {
         r.field.disabled = true;
         r.reset.disabled = true;
       }
@@ -1355,7 +1356,7 @@ function buildRow(data, target, withRange) {
   valueCell.appendChild(wrap);
   valueCell.appendChild(r.msg);
   if (data.applicable === false) valueCell.appendChild(el("div", "msg warn", "Not applicable: " + data.reason));
-  if (target.version && data.kind === "meta") valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));
+  if (target.version && (data.kind === "meta" || data.shared)) valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));
 
   const descCell = el("td");
   descCell.appendChild(document.createTextNode(data.description));

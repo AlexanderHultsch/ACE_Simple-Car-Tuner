@@ -93,21 +93,23 @@ versions: lists the base and the versions of a modded car (library functions lis
           in <tune folder>/versions/<id>/{tune_state.json, meta.json = {"name": text}} (the tune folder is <work>/<car> for the default
           tune, <work>/<car>/tunes/<id> for any other; the draft has no versions). The ids are v01 .. v99 (the first free number); the
           state has the format of tune_state.json (setting ids, _turbo, _sounds, _tyres). Every setting may differ per version except
-          the meta settings (kind "meta": name_suffix, variant_name): a version always uses the value of the base, the meta entries of
-          its state are ignored on load. The name is free text: 1 to 40 characters after trimming, no control characters, unique among
+          the shared settings (kind "meta": name_suffix, variant_name, and the settings with "shared": true in the catalogue, the ones
+          that live only in the .car file, which the game takes from the base for a version: steer_rod_ratio, ff_mult, steer_lock_deg,
+          car_mass, arb_stiffness_front, arb_stiffness_rear, driver_aids_off; library function shared_ids): a version always uses the
+          value of the base (the stock default when the base has none), the entries of its state for them are ignored on load. The name is free text: 1 to 40 characters after trimming, no control characters, unique among
           the versions of the tune ignoring case. The command prints "base" and then "<id>: <name>" of each version ("<id>: <name> (locked)"
           for a locked one).
 version-add: creates a version named <name> as a copy of the base state (--from ID: of that version's state) and prints its id. The
-          meta settings are not copied. version-rename: gives a version another name (same rules, the id stays).
+          shared settings are not copied. version-rename: gives a version another name (same rules, the id stays).
 version-lock: locks a version (library functions lock_version, unlock_version, kept_build): "locked": true in its meta.json (the other keys
           stay). Only possible when the build kept for the version (<version folder>/build/{build.json, files/}, written by apply) was made
           from the state the version has now ("Apply first, then lock it"). apply does not rebuild a locked version: the files of its kept
           build go into the package byte for byte; it cannot be changed (state, rename) until version-unlock removes the lock.
           --version ID (set, unset, show, defaults; library functions effective_rows, effective_row, changed_settings,
           unknown_state_ids, warn_unknown_state, set_value, unset_value, resolve_defaults, root_for take version=) works on the state of
-          that version of the tune given by --tune (default: the default tune): the values come from the version's state (meta settings
+          that version of the tune given by --tune (default: the default tune): the values come from the version's state (shared settings
           from the base), the defaults and the build root are those of the tune except that the turbo kit is the version's own "_turbo".
-          set and unset of a meta setting refuse with "<id> is shared by all versions, set it on the base"; --version cannot be combined
+          set and unset of a shared setting refuse with "<id> is shared by all versions, set it on the base"; --version cannot be combined
           with --variant or --draft. apply builds every version into the package as a further mechanical preset of the car (see apply).
 set/unset/show: edit and print <work>/<car>/tune_state.json ({setting id: value}). show lists applicable settings
           only, set refuses a setting that is not applicable to the car. Entries of the state whose id is not in the
@@ -137,10 +139,12 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           Versions (library functions build_state, build_versions, merge_version): the base is built as above; each version of the tune
           (by id) is then built from its own state into <new_id>_<version>.partial with the same tune id and merged into the build, the
           temporary folder removed. A version's own files are the files of its build that differ from the base build or are missing there,
-          the car file, the base mechanical preset and its carfinalstate(s), every file below data/ and every presets/*.compatibletyres
+          the base mechanical preset and its carfinalstate(s), every file below data/ and every presets/*.compatibletyres
           (the files the tuner writes, so a version shares none of them with the base), plus every file that names one of them (by game path,
-          repeated); the actor, the moddedcarcontent, uiresources and generated files are never among them. They are copied with
-          _<version> before the extension (data/CarData_v01.car; the carfinalstate becomes <car id>_<preset>_<version>_<visual preset the version
+          repeated); the car file (data/CarData.car), the actor, the moddedcarcontent, uiresources and generated files are never among them
+          (the game saves a painted version with the base's data/CarData.car, so a version has no car file of its own and its carfinalstate
+          keeps naming the base's; its physics reach the car as forced car parts, see below). They are copied with
+          _<version> before the extension (data/engine_v01.carengine; the carfinalstate becomes <car id>_<preset>_<version>_<visual preset the version
           uses>.carfinalstate, with <visual preset>_<version> there when the version has its own copy of the visual preset, else the base's)
           and the copies name each other; the version's preset gets the version name as note and description (a trailing Base replaced; " <version>"
           added when its slug, the description lower-cased with every run of non-word characters replaced by "_", equals another preset's) and
@@ -161,17 +165,34 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           The result lists "versions" = [{id, name, files, locked, changes}] and one note per version. After the pack each built version keeps
           its build in <version folder>/build (files/ and build.json, see store_version_build) and its own record snapshot.json with its "changes".
           A locked version (version-lock) is not built: apply copies the files of its kept build into the build (a name that is taken is
-          an error), lists its preset and sound part like a built one's, forbids its sound part in the base preset, leaves its build/ and
+          an error), lists its preset and parts like a built one's, leaves its build/ and
           snapshot.json untouched and reports {id, name, files, locked: true, built: time of its kept build} and the note "locked, <N> files
           kept from its build of <time>"; a locked version whose kept build is missing or damaged is an error before anything is built.
-          A version whose sound choice gives another actor than the base build gets a sound part of its own (add_version_sound, add_version_parts)
-          instead of an actor of its own: the audio entries of its actor that differ from the base's (by slot, see Sound picker) are the car_audio_events of
-          presets/parts/physics/<new id>_<version>_sound.carpart (CarPartData, part type CarPartType_Mechanics_Engine, brand of the base preset)
-          whose logic part names data/parts/<new id>_<version>_engine.tuningpart (the engine file of the version's car file) and
-          presets/parts/physics/<new id>_<version>_sound.compatiblepart (bone ENGINE) is listed in the forced_compatible_part_paths of the
-          version's preset, in the not_compatible_part_paths of the base preset and in car.customization.aftermarket_parts of the actor
-          (the Supra MKIV's drift parts work this way); the 3 files count among the version's own files and the note
-          "note: version <id> (<name>): own sounds <slot>=<event>, ..." tells the sounds. The actor of the build is the base's.
+          A version gets its physics and sounds as car parts of its own instead of a car file and an actor of its own (add_version_physics,
+          add_version_parts): from the car file of its build the tuning parts data/parts/<new id>_<version>_<key>.tuningpart (TuningPart) for
+          engine, drivetrain, gearbox, clutch, geometry (suspensions.front_suspension_path, rear_suspension_path), coilovers
+          (suspensions.coilover_front_path, coilover_rear_path), brakes (brakes_path), setuplimits (setupLimits) and setup (stock_setup),
+          each written only when the car file has the field(s) as text and the file(s) are among the version's copies (a file shared outside
+          the car folder gives none), naming the copies. They sit in the car parts presets/parts/physics/<new id>_<version>_<kind>.carpart
+          (CarPartData, description and note "<version name> <kind>", brand of the base preset; written when they have a tuning): sound (part
+          type CarPartType_Mechanics_Engine: engine, and as car_audio_events the audio entries of the version's actor that differ from the
+          base's, see Sound picker; a version with differing sounds but no engine tuning is refused), drivetrain
+          (CarPartType_Mechanics_Differential: drivetrain, gearbox, clutch) and suspension (CarPartType_Mechanics_SuspensionGeometry_Front:
+          geometry, coilovers, brakes, setuplimits, setup), each with a .compatiblepart (CompatiblePartData; bone ENGINE for the sound part
+          only). The compatible parts, in the order sound, drivetrain, suspension, are listed in the forced_compatible_part_paths of the
+          version's preset, in the parts of each carfinalstate of the version ({path, guid, pguid, type}, after its existing ones, in the order
+          drivetrain, suspension, sound; guid = the UUID with the number b of the carfinalstate's livery_linker, a livery_linker with an a other
+          than 0 is refused) and, for every version in the order of the versions, in car.customization.aftermarket_parts of the actor; the base
+          preset and the preset of every unlocked version list the compatible parts of the other versions in not_compatible_part_paths (the
+          preset of a locked version is never changed). A base preset that already forces a part of one of the three part types is refused
+          with "version <id>: the preset of the car already forces a <part type> part (<path>)". A version the game would crash on (its
+          carfinalstate's car_data or a forced part, its car part, tuning part or a file of the car folder those name missing in the build, a
+          forced part that the actor's aftermarket_parts or the carfinalstate's parts do not list) is refused like a rim fault. The files
+          of the parts count among the version's own files and the note "note: version <id> (<name>): own sounds <slot>=<event>, ..." tells
+          differing sounds. The actor of the build is the base's. The kept build's build.json lists the compatible parts as "parts" (a
+          build.json of the older form, with "sound_part", is no kept build: apply, then lock again).
+          An unlocked version whose own state file holds a shared setting (not meta) with a value other than the base's effective value
+          adds the note "note: version <id> (<name>): its own <setting id> <value> is ignored (shared by all versions, <base value>)".
           --tune ID builds that modded car: its own state, its id as the new id, its name suffix; --tune and --new-id
           cannot be combined. A suffix that another modded car of the same stock car uses is refused before building.
           --new-id ID alone builds the state of the tune with that id (the default tune when it is left out); an id
@@ -280,7 +301,7 @@ ranges:       the soft borders for the settings page (library functions compute_
 <work> defaults to %USERPROFILE%\\ace_modded_cars_work. --game is accepted by cars and init only; the other commands use the default Steam path of the game package for what they extract on first need. Writes nothing outside <work> and the mods folder. File
 operations on car trees use extended-length paths (kspkg.long_path), so deep Windows paths work.
 
-Catalogue settings: id, group, label, kind (value, curve_scale, meta, flag), type (int, float, string, enum, bool), unit, description and verified are required. min/max are a suggested range (a value outside it only gives a warning). Kind value writes the value into all its targets; the default is read from the first required target. Kind curve_scale has a default factor and curve_from (file role and path of a curve file name); apply multiplies the value of every point of that curve by the factor. Kind meta needs a handler (variant_name, name_suffix) and a default or a default_template (text with {stock_display_name} and {stock_variant_name}, replaced by the stock display name and the stock variant text). An enum lists its choices.
+Catalogue settings: id, group, label, kind (value, curve_scale, meta, flag), type (int, float, string, enum, bool), unit, description and verified are required. shared (optional, only true) marks a setting that all versions of a modded car share: it is edited on the base only (shared_ids). min/max are a suggested range (a value outside it only gives a warning). Kind value writes the value into all its targets; the default is read from the first required target. Kind curve_scale has a default factor and curve_from (file role and path of a curve file name); apply multiplies the value of every point of that curve by the factor. Kind meta needs a handler (variant_name, name_suffix) and a default or a default_template (text with {stock_display_name} and {stock_variant_name}, replaced by the stock display name and the stock variant text). An enum lists its choices.
 
 Catalogue field paths (inside the JSON that car_json decodes): dot-separated names, name[3] = list element by index,
 name[key=VALUE] = the list element whose field key equals VALUE, name[*] = every element of the list (all existing
@@ -337,6 +358,7 @@ import struct
 import subprocess
 import sys
 import threading
+import uuid
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 import car_json  # noqa: E402
@@ -395,6 +417,20 @@ TYRE_KEY = "_tyres"
 TURBO_KEY = "_turbo"
 SOUND_KEY = "_sounds"
 SOUND_PART_TYPE = "CarPartType_Mechanics_Engine"
+VERSION_PARTS = (("sound", SOUND_PART_TYPE, ("engine",)),
+                 ("drivetrain", "CarPartType_Mechanics_Differential", ("drivetrain", "gearbox", "clutch")),
+                 ("suspension", "CarPartType_Mechanics_SuspensionGeometry_Front", ("geometry", "coilovers", "brakes", "setuplimits", "setup")))
+TUNING_SPECS = (("engine", "", ("engine_path",), "engine", ("path",), SOUND_PART_TYPE),
+                ("drivetrain", "", ("drivetrain_path",), "drivetrain", ("path",), "CarPartType_Mechanics_Drivetrain"),
+                ("gearbox", "", ("gearbox_path",), "gearbox", ("path",), "CarPartType_Mechanics_Gearbox"),
+                ("clutch", "", ("clutch_path",), "clutch", ("path",), "CarPartType_Mechanics_Clutch"),
+                ("geometry", "suspensions", ("front_suspension_path", "rear_suspension_path"), "suspensions_geometry",
+                 ("geometry_path_front", "geometry_path_rear"), "CarPartType_Mechanics_SuspensionGeometry_Front"),
+                ("coilovers", "suspensions", ("coilover_front_path", "coilover_rear_path"), "suspensions",
+                 ("coilover_path_front", "coilover_path_rear"), "CarPartType_Mechanics_SuspensionCoilover_Front"),
+                ("brakes", "", ("brakes_path",), "brake_system", ("path",), None),
+                ("setuplimits", "", ("setupLimits",), "setup_limits", ("path",), None),
+                ("setup", "", ("stock_setup",), "setup", ("path",), None))
 KIT_DIR = "kit"
 SNAPSHOT_DIR = "snapshots"
 SNAPSHOT_VERSION = 1
@@ -599,6 +635,8 @@ def check_setting_options(s, path):
         raise ValueError("%s: setting %r has a hide_if_absent that is not true or false" % (path, s["id"]))
     if type(s.get("advanced", False)) is not bool:
         raise ValueError("%s: setting %r has an advanced that is not true or false" % (path, s["id"]))
+    if "shared" in s and s["shared"] is not True:
+        raise ValueError("%s: setting %r has a shared that is not true" % (path, s["id"]))
 
 
 def check_setting_files(s, path):
@@ -760,9 +798,14 @@ def meta_ids(catalogue):
     return {s["id"] for s in catalogue["settings"] if s["kind"] == "meta"}
 
 
+def shared_ids(catalogue):
+    """The ids a version takes from its base: the meta settings and the settings with "shared": true (kept in the .car file, which the game takes from the base)."""
+    return meta_ids(catalogue) | {s["id"] for s in catalogue["settings"] if s.get("shared") is True}
+
+
 def load_version_state(work, car_id, version, tune=None, catalogue=None):
-    """The state of a version with the meta settings of the base state of the tune instead of its own."""
-    ids = meta_ids(catalogue or load_catalogue())
+    """The state of a version with the shared settings (shared_ids) of the base state of the tune instead of its own; a shared setting the base has no value for is left out, so its stock default applies."""
+    ids = shared_ids(catalogue or load_catalogue())
     state = {k: v for k, v in read_version_state(work, car_id, version, tune).items() if k not in ids}
     state.update({k: v for k, v in load_state(work, car_id, tune).items() if k in ids})
     return state
@@ -807,7 +850,7 @@ def save_tune_state(work, car_id, state, tune=None, version=None):
 
 def kept_build(work, car_id, version, tune=None):
     """The parsed build.json of the kept build of a version (see store_version_build) when it is valid for the tune (None: the default
-    tune): an object with "tune" the id of the tune, "preset" a text, "sound_part" a text or null, "files" a list of texts (paths
+    tune): an object with "tune" the id of the tune, "preset" a text, "parts" a list of texts (the game paths of the compatible parts of the version, may be empty), "files" a list of texts (paths
     relative to the car folder, none empty, "." or ".." in it) that all exist below build/files, "time" a text and "state" an object;
     else None."""
     folder = os.path.join(version_dir(work, car_id, tune, version), "build")
@@ -819,7 +862,7 @@ def kept_build(work, car_id, version, tune=None):
         return None
     files = record.get("files")
     if not (record.get("tune") == (tune or new_id_for(car_id)) and isinstance(record.get("preset"), str) and record["preset"]
-            and "sound_part" in record and (record["sound_part"] is None or isinstance(record["sound_part"], str) and record["sound_part"])
+            and isinstance(record.get("parts"), list) and all(isinstance(p, str) and p for p in record["parts"])
             and isinstance(files, list) and files and all(isinstance(f, str) and not {"", ".", ".."} & set(f.split("/")) for f in files)
             and isinstance(record.get("time"), str) and isinstance(record.get("state"), dict)):
         return None
@@ -858,13 +901,13 @@ def check_version_name(work, car_id, name, tune=None, exclude=None):
 
 def add_version(work, car_id, name, tune=None, source=None):
     """Add a version to a tune (None: the default tune): a copy of the base state, or of the state of the version source, without
-    its meta settings, under the first free id v01 .. v99; returns the id. The name must pass check_version_name. Nothing is
+    its shared settings (shared_ids), under the first free id v01 .. v99; returns the id. The name must pass check_version_name. Nothing is
     written on an error."""
     folder = version_dir(work, car_id, tune)
     if is_extra_tune(car_id, tune) and not os.path.isfile(kspkg.long_path(state_path(work, car_id, tune))):
         raise ValueError("%s has no tune %s" % (car_id, tune))
     name = check_version_name(work, car_id, name, tune)
-    ids = meta_ids(load_catalogue())
+    ids = shared_ids(load_catalogue())
     state = load_state(work, car_id, tune) if source is None else read_version_state(work, car_id, source, tune)
     taken = set(os.listdir(kspkg.long_path(folder))) if os.path.isdir(kspkg.long_path(folder)) else set()
     free = next((v for v in ("v%02d" % n for n in range(1, 100)) if v not in taken), None)
@@ -1007,10 +1050,11 @@ def same(s, a, b):
 
 
 def set_value(work, car_id, setting_id, value, catalogue=None, tune=None, version=None):
-    """Check one value, save it in the state of the tune (of its version when given) and return {id, value, warnings}; the setting must be applicable to the car and, for a version, no meta setting."""
+    """Check one value, save it in the state of the tune (of its version when given) and return {id, value, warnings}; the setting must be applicable to the car and, for a version, no shared setting (shared_ids)."""
     cat = catalogue or load_catalogue()
     s = find_setting(cat, setting_id)
-    if version is not None and s["kind"] == "meta":
+    if version is not None and setting_id in shared_ids(cat):
+        check_unlocked(work, car_id, version, tune)
         raise ValueError("%s is shared by all versions, set it on the base" % setting_id)
     coerced = coerce(s, value)
     row = resolve_defaults(work, car_id, dict(cat, settings=[s]), hidden=True, tune=new_id_for(car_id) if tune is None else tune, version=version)[0]
@@ -1029,8 +1073,9 @@ def set_value(work, car_id, setting_id, value, catalogue=None, tune=None, versio
 
 
 def unset_value(work, car_id, setting_id, catalogue=None, tune=None, version=None):
-    """Remove one setting from the state of the tune (of its version when given, never a meta setting); returns {id, removed}."""
-    if version is not None and setting_id in meta_ids(catalogue or load_catalogue()):
+    """Remove one setting from the state of the tune (of its version when given, never a shared setting); returns {id, removed}."""
+    if version is not None and setting_id in shared_ids(catalogue or load_catalogue()):
+        check_unlocked(work, car_id, version, tune)
         raise ValueError("%s is shared by all versions, set it on the base" % setting_id)
     state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     # a name that is not in the state must be a catalogue setting; _tyres, _turbo and _sounds are no settings, so they are refused as unknown here (their own commands remove them)
@@ -2299,19 +2344,21 @@ def copy_version_files(vroot, root, car_id, names, edit):
 
 def merge_version(part, vpart, new_id, version, name, taken=()):
     """Merge the build vpart of a version of a tune (the same tune id, built from the state of the version) into the build part of the
-    base. The version's own files are the files whose bytes differ from the base build or are missing there, the car file, the base
+    base. The version's own files are the files whose bytes differ from the base build or are missing there, the base
     mechanical preset and its carfinalstate(s), every file of the version build below data/ (any depth) and every presets/*.compatibletyres
     directly in presets/ (the files the tuner writes, so the version shares none of them with the base), and every file that refers to
-    one of them (version_files). They are copied under the
+    one of them (version_files), but never the car file: the game saves a painted version with the base's data/CarData.car, so the
+    version's carfinalstate(s) keep pointing at it and the version's physics reach the car through forced car parts (add_version_physics).
+    They are copied under the
     name with _<version> before the extension (the carfinalstate: <car id>_<version preset>_<visual preset the version uses>.carfinalstate,
     where that is <visual preset>_<version> when the version has its own copy of presets/<visual preset>.visualcarpreset, else the base's
     visual preset) and point at each other; the preset gets the name of the version as note, its description (version_description, followed by
     " <version>" when the description_slug of it is one of taken: the slugs of the base preset and of the other versions of the build) and
     is_oem false; the thumbnails <car id>-<base preset>-<visual preset> of the base's carfinalstate(s) are copied as
     <car id>-<version preset>-<visual preset the version uses>. The actor, the moddedcarcontent, uiresources
-    and generated files are never copied. Returns (number of own files, game path of the version's preset, whether the actor of the
-    version build differs from the one of the base build, notes, the paths written into the car folder of the build part (the copies
-    and the thumbnail copies, relative to it)); the list of presets in the actor is the caller's."""
+    and generated files are never copied. Returns (number of own files, game path of the version's preset, notes, the paths written into
+    the car folder of the build part (the copies and the thumbnail copies, relative to it), {game_path_key of a copied file: game path of
+    its copy}, the paths of the carfinalstate copies relative to the car folder); the list of presets in the actor is the caller's."""
     root, vroot = car_root_of(part, new_id), car_root_of(vpart, new_id)
     rels = tree_files(vroot)
     own = {r for r in rels if not version_excluded(r) and (not os.path.isfile(kspkg.long_path(tree_path(root, r)))
@@ -2320,7 +2367,8 @@ def merge_version(part, vpart, new_id, version, name, taken=()):
     finals = version_finals(vroot, rels, new_id, preset, version)
     tuner_files = {r for r in rels if not version_excluded(r) and (r.lower().startswith("data/") or (
         r.lower().startswith("presets/") and "/" not in r[len("presets/"):] and r.lower().endswith(".compatibletyres")))}
-    files = version_files(vroot, rels, own | tuner_files | {resolve_file("@car", vpart, new_id, {}), preset} | set(finals))
+    car = resolve_file("@car", vpart, new_id, {})
+    files = version_files(vroot, rels, own | tuner_files | {car, preset} | set(finals)) - {car}
     finals = version_finals(vroot, rels, new_id, preset, version, files)
     names = {r: finals[r][0] if r in finals else version_rel(r, version) for r in files}
 
@@ -2344,9 +2392,8 @@ def merge_version(part, vpart, new_id, version, name, taken=()):
                 written.add(dst)
             else:
                 notes.append("note: version %s: no thumbnail %s to copy" % (version, src))
-    actor = new_id + ".actor"
-    differs = not same_file(find_ci(root, actor), find_ci(vroot, actor))
-    return len(files), game_path_of(new_id, names[preset]), differs, notes, sorted(written)
+    copies = {game_path_key(game_path_of(new_id, old)): game_path_of(new_id, new) for old, new in names.items()}
+    return len(files), game_path_of(new_id, names[preset]), notes, sorted(written), copies, sorted(finals[r][0] for r in finals)
 
 
 def add_version_presets(part, new_id, presets):
@@ -2466,8 +2513,11 @@ def check_versions(part, new_id, versions, presets):
     (when it has one) and the rims.path of each of its carfinalstates (when present) must be listed in car.customization.compatible_rims or
     aftermarket_rims of the actor, the compatible_rim must exist in the build (the game crashes in the paint shop on a rim the actor does not
     list), the body.design of each carfinalstate (when present) must be one of the visual_preset_paths of the preset and the car_design_path
-    of each visual preset must be in car.customization.car_designs. Raises ValueError "version <id> (<name>) would not show in the game:
-    <what is missing>" for the first fault found, "version <id> (<name>) would crash the game: <what>" for a rim fault. Thumbnails are not
+    of each visual preset must be in car.customization.car_designs, the car_data of each carfinalstate must exist in the build and every
+    forced_compatible_part_paths entry of the preset that lies in the car folder must be listed in car.customization.aftermarket_parts, be in
+    the parts of each carfinalstate and exist with its car part, the tuning parts of it and the files of the car folder those name.
+    Raises ValueError "version <id> (<name>) would not show in the game:
+    <what is missing>" for the first fault found, "version <id> (<name>) would crash the game: <what>" for a rim or part fault. Thumbnails are not
     checked."""
     if not versions:
         return
@@ -2476,6 +2526,7 @@ def check_versions(part, new_id, versions, presets):
     listed = {game_path_key(v) for v in get_value(actor, "car.customization.visual_car_presets", missing_ok=True)[0] or []}
     rims = {game_path_key(r) for field in ("compatible_rims", "aftermarket_rims") for r in get_value(actor, "car.customization." + field, missing_ok=True)[0] or []}
     designs = {game_path_key(d) for d in get_value(actor, "car.customization.car_designs", missing_ok=True)[0] or []}
+    listed_parts = {game_path_key(p) for p in get_value(actor, "car.customization.aftermarket_parts", missing_ok=True)[0] or []}
     loc_path = tree_path(root, "/".join(clone_car.LOC_PATH))
     keys = set()
     if os.path.isfile(kspkg.long_path(loc_path)):
@@ -2505,15 +2556,16 @@ def check_versions(part, new_id, versions, presets):
             missing = "the localization line %s is missing in %s" % (key, "/".join(clone_car.LOC_PATH))
         crash = None
         if not missing:
-            crash, missing = version_faults(root, new_id, preset, stem, rims, designs)
+            crash, missing = version_faults(root, new_id, preset, stem, rims, designs, listed_parts)
         if missing:
             raise ValueError("version %s (%s) would %s: %s" % (v["id"], v["name"], "crash the game" if crash else "not show in the game", missing))
 
 
-def version_faults(root, new_id, preset, stem, rims, designs):
+def version_faults(root, new_id, preset, stem, rims, designs, listed_parts):
     """The first fault of a version preset (game path preset, its stem stem) beyond those of check_versions' visual presets and
-    localization: (True, text) for a rim that would crash the game, (False, text) for a design that would not show, (None, None) for
-    none. rims and designs are the game_path_keys that the actor lists in compatible_rims and aftermarket_rims, and in car_designs."""
+    localization: (True, text) for a rim, a car file or a forced part that would crash the game, (False, text) for a design that would not
+    show, (None, None) for none; the part faults come last. rims, designs and listed_parts are the game_path_keys that the actor lists in
+    compatible_rims and aftermarket_rims, in car_designs and in aftermarket_parts."""
     obj = preset_of_game_path(root, preset)
     rim = obj.get("compatible_rim")
     if rim and game_path_key(rim) not in rims:
@@ -2535,6 +2587,39 @@ def version_faults(root, new_id, preset, stem, rims, designs):
         design = load_msg(tree_path(root, visual.split("\\", 3)[3].replace("\\", "/")))[0].get("car_design_path")
         if design and game_path_key(design) not in designs:
             return False, "%s: car_design_path %s is not in car.customization.car_designs of the actor" % (visual, design)
+    folder = game_path_key(game_path_of(new_id, ""))
+
+    def missing(path):
+        return game_path_key(path).startswith(folder) and not os.path.isfile(kspkg.long_path(tree_path(root, path.split("\\", 3)[3].replace("\\", "/"))))
+
+    for final, state in states:
+        data = state.get("car_data")
+        if data and missing(data):
+            return True, "%s: car_data %s is not in the build" % (final, data)
+    for forced in obj.get("forced_compatible_part_paths") or []:
+        if not game_path_key(forced).startswith(folder):
+            continue
+        if game_path_key(forced) not in listed_parts:
+            return True, "%s is not in car.customization.aftermarket_parts of the actor" % forced
+        for final, state in states:
+            if game_path_key(forced) not in {game_path_key(p.get("path", "")) for p in state.get("parts") or []}:
+                return True, "%s: %s is not in its parts" % (final, forced)
+        if missing(forced):
+            return True, "%s is not in the build" % forced
+        car_part = load_msg(tree_path(root, forced.split("\\", 3)[3].replace("\\", "/")))[0].get("car_part_path")
+        if not car_part or not game_path_key(car_part).startswith(folder):
+            continue
+        if missing(car_part):
+            return True, "%s (car_part_path of %s) is not in the build" % (car_part, forced)
+        for logic in load_msg(tree_path(root, car_part.split("\\", 3)[3].replace("\\", "/")))[0].get("logic_parts") or []:
+            tuning = logic.get("tuning_part_path")
+            if not tuning or not game_path_key(tuning).startswith(folder):
+                continue
+            if missing(tuning):
+                return True, "%s (tuning_part_path of %s) is not in the build" % (tuning, car_part)
+            for text in text_values(load_msg(tree_path(root, tuning.split("\\", 3)[3].replace("\\", "/")))[0]):
+                if missing(text):
+                    return True, "%s (named by %s) is not in the build" % (text, tuning)
     return None, None
 
 
@@ -2554,25 +2639,85 @@ def compatible_part(part_path):
                               "wheel_rr": dict(wheel), "animations": {}}}
 
 
-def forbid_in_base_preset(root, base_preset, compatible):
-    """Append the game path of the compatible part of a version's sound part to the not_compatible_part_paths of the base mechanical
-    preset (base_preset: its path relative to the car folder root)."""
-    path = tree_path(root, base_preset)
-    obj, kind = load_msg(path)
-    append_paths(obj, "not_compatible_part_paths", [compatible])
-    save_msg(path, kind, obj)
+def forbid_version_parts(root, base_preset, presets, locked, parts):
+    """Forbid the compatible parts of the versions in the other mechanical presets: the base mechanical preset (base_preset: its path
+    relative to the car folder root) and the preset of every unlocked version (game paths presets in the order of the versions; locked =
+    whether each is a locked version; the preset of a locked version is never changed) get every compatible part of the other versions
+    (parts = for each version its game paths in the order sound, drivetrain, suspension) that their not_compatible_part_paths does not list
+    yet (game_path_key) appended, the versions in order."""
+    targets = [(base_preset, None)] + [(preset.split("\\", 3)[3].replace("\\", "/"), i) for i, (preset, is_locked) in enumerate(zip(presets, locked))
+                                      if not is_locked]
+    for rel, own in targets:
+        file = tree_path(root, rel)
+        obj, kind = load_msg(file)
+        known = {game_path_key(p) for p in obj.get("not_compatible_part_paths") or []}
+        forbidden = []
+        for i, paths in enumerate(parts):
+            for path in paths if i != own else ():
+                if game_path_key(path) not in known:
+                    known.add(game_path_key(path))
+                    forbidden.append(path)
+        if forbidden:
+            append_paths(obj, "not_compatible_part_paths", forbidden)
+            save_msg(file, kind, obj)
 
 
-def add_version_sound(part, vpart, new_id, version, name, preset):
-    """Give the version the sounds its build has in the actor, which the game takes from the actor only for the base: a car part of its
-    own, forced by the version's preset like the Supra MKIV's drift parts. The audio entries of the actor of the version build vpart that
-    differ from those of the base build part (same slot and place, or no such entry there) become the car_audio_events of
-    presets/parts/physics/<new id>_<version>_sound.carpart, whose logic part names the tuning part data/parts/<new id>_<version>_engine.tuningpart
-    (the engine file the version's car file names); presets/parts/physics/<new id>_<version>_sound.compatiblepart is appended to the
-    forced_compatible_part_paths of the version's preset (game path preset) and to the not_compatible_part_paths of the base mechanical
-    preset. Returns (game path of the compatiblepart or None when no entry differs, number of files written, notes, their paths
-    relative to the car folder); listing the
-    compatiblepart in the aftermarket_parts of the actor is the caller's (add_version_parts)."""
+def check_forced_parts(root, base_preset, version):
+    """Refuse a version when the base mechanical preset (base_preset: its path relative to the car folder root) already forces a compatible
+    part whose car part has one of the part types of the version's own car parts (VERSION_PARTS): the game takes one forced part per type."""
+    types = {part_type for _, part_type, _ in VERSION_PARTS}
+    for forced in load_msg(tree_path(root, base_preset))[0].get("forced_compatible_part_paths") or []:
+        compatible = tree_path(root, forced.split("\\", 3)[3].replace("\\", "/"))
+        if not os.path.isfile(kspkg.long_path(compatible)):
+            continue
+        car_part = load_msg(compatible)[0].get("car_part_path")
+        car_part = tree_path(root, car_part.split("\\", 3)[3].replace("\\", "/")) if car_part else None
+        if car_part and os.path.isfile(kspkg.long_path(car_part)):
+            part_type = load_msg(car_part)[0].get("part_type")
+            if part_type in types:
+                raise ValueError("version %s: the preset of the car already forces a %s part (%s)" % (version, part_type, forced))
+
+
+def version_tunings(car, copies):
+    """The tuning parts of a version (TUNING_SPECS) as {key: decoded TuningPart}: the decoded car file car names the files in its fields; a
+    tuning is there when all its fields are non-empty texts and all the files they name are among the copies ({game_path_key of a file: game
+    path of its copy}); it names the copies."""
+    tunings = {}
+    for key, folder, fields, member, names, part_type in TUNING_SPECS:
+        source = car.get(folder) if folder else car
+        values = [source.get(f) if isinstance(source, dict) else None for f in fields]
+        if all(isinstance(v, str) and v and game_path_key(v) in copies for v in values):
+            tuning = {member: {n: copies[game_path_key(v)] for n, v in zip(names, values)}}
+            if part_type:
+                tuning["car_part_type"] = part_type
+            tunings[key] = tuning
+    return tunings
+
+
+def part_guid(link, rel):
+    """The guid text of a carfinalstate's livery_linker (a message with the 64-bit fields a and b; a missing field is 0): the UUID with
+    the number b. An a other than 0 or a b that is no 64-bit number cannot be derived (ValueError naming the file rel)."""
+    a, b = link.get("a", 0), link.get("b", 0)
+    if a != 0 or type(b) is not int or not 0 <= b < 1 << 64:
+        raise ValueError("%s: cannot derive the part guid" % rel)
+    return str(uuid.UUID(int=b))
+
+
+def add_version_physics(part, vpart, new_id, version, name, preset, copies, finals):
+    """Give the version its physics and sounds as car parts, which the game takes from the base's car file otherwise (it saves a painted
+    version with the base's data/CarData.car plus the parts of the version's carfinalstate, like the Supra MKIV Drift). From the car file of
+    the version build vpart the tuning parts data/parts/<new id>_<version>_<key>.tuningpart (version_tunings: engine, drivetrain, gearbox,
+    clutch, geometry, coilovers, brakes, setuplimits, setup; copies = {game_path_key: game path of the copy} of the files the merge
+    copied) go into the car parts presets/parts/physics/<new id>_<version>_<kind>.carpart (VERSION_PARTS: sound, drivetrain, suspension; each
+    written when it has a tuning; description and note "<version name> <kind>", brand of the base mechanical preset), each with its
+    .compatiblepart (bone ENGINE for the sound part only). The audio entries of the actor of the version build that differ from those of the
+    base build part (same slot and place, or no such entry there) become the car_audio_events of the sound part's logic part; a version with
+    such entries but no engine tuning is an error. The compatible parts are appended in the order sound, drivetrain, suspension to the
+    forced_compatible_part_paths of the version's preset (game path preset), and to the parts of each carfinalstate copy of the version
+    (finals: their paths relative to the car folder) as {path, guid, pguid, type} entries in the order drivetrain, suspension, sound after
+    its existing ones (guid and pguid from the livery_linker of that carfinalstate, part_guid). Returns (game paths of the compatible parts
+    in the order sound, drivetrain, suspension, number of files written, notes, their paths relative to the car folder); listing them in
+    the aftermarket_parts of the actor and forbidding them in the other presets is the caller's (add_version_parts, forbid_version_parts)."""
     root, vroot = car_root_of(part, new_id), car_root_of(vpart, new_id)
     actor = new_id + ".actor"
     base_actor, version_actor = load_msg(find_ci(root, actor))[0], load_msg(find_ci(vroot, actor))[0]
@@ -2582,36 +2727,57 @@ def add_version_sound(part, vpart, new_id, version, name, preset):
         found = [e for i, (_, e) in enumerate(sounds.slot_entries(version_actor, slot)) if i >= len(own) or e != own[i]]
         events += [copy.deepcopy(e) for e in found]
         changed += ["%s=%s" % (slot, short_event(sounds.option_of(e)["key"])) for e in found[:1]]
-    if not events:
-        return None, 0, [], []
     base_preset = resolve_file("@mech_preset", vpart, new_id, {})
     version_preset = preset.split("\\", 3)[3].replace("\\", "/")
     brand = load_msg(tree_path(root, base_preset))[0].get("brand")
-    car = load_msg(tree_path(root, version_rel(resolve_file("@car", vpart, new_id, {}), version)))[0]
-    engine = car.get("engine_path")
-    if not isinstance(engine, str) or not engine:
+    car = load_msg(tree_path(vroot, resolve_file("@car", vpart, new_id, {})))[0]
+    tunings = version_tunings(car, copies)
+    if events and "engine" not in tunings:
         raise ValueError("the car file of version %s has no engine_path to name the tuning part after" % version)
     stem = "%s_%s" % (new_id, version)
-    rels = {"carpart": "presets/parts/physics/%s_sound.carpart" % stem, "compatiblepart": "presets/parts/physics/%s_sound.compatiblepart" % stem,
-            "tuningpart": "data/parts/%s_engine.tuningpart" % stem}
-    for rel in rels.values():
+    tuning_rels = {key: "data/parts/%s_%s.tuningpart" % (stem, key) for key in tunings}
+    written = [(kind, part_type, [k for k in keys if k in tunings]) for kind, part_type, keys in VERSION_PARTS if any(k in tunings for k in keys)]
+    rels = {kind: ("presets/parts/physics/%s_%s.carpart" % (stem, kind), "presets/parts/physics/%s_%s.compatiblepart" % (stem, kind))
+            for kind, _, _ in written}
+    paths = {kind: game_path_of(new_id, rel[1]) for kind, rel in rels.items()}
+    edits = []
+    for rel in finals if written else ():
+        state, kind = load_msg(tree_path(root, rel))
+        link = state.get("livery_linker") or {}
+        guid = part_guid(link, rel)
+        order = [w for w in written if w[0] != "sound"] + [w for w in written if w[0] == "sound"]
+        edits.append((rel, state, kind, [{"path": paths[k], "guid": guid, "pguid": copy.deepcopy(link), "type": t} for k, t, _ in order]))
+    files = list(tuning_rels.values()) + [r for pair in rels.values() for r in pair]
+    for rel in files:
         if os.path.exists(kspkg.long_path(tree_path(root, rel))):
             raise ValueError("cannot write %s: the name is taken" % rel)
+    for rel in files:
         os.makedirs(kspkg.long_path(os.path.dirname(tree_path(root, rel))), exist_ok=True)
-    car_part = {"description": "%s sound" % name, "part_type": SOUND_PART_TYPE, "note": "%s sound" % name}
-    if brand:
-        car_part["brand"] = brand
-    car_part.update({"no_specialization": {}, "logic_parts": [{"tuning_part_path": game_path_of(new_id, rels["tuningpart"]), "car_audio_events": events}]})
-    save_msg(tree_path(root, rels["tuningpart"]), "TuningPart", {"engine": {"path": engine}, "car_part_type": SOUND_PART_TYPE})
-    save_msg(tree_path(root, rels["carpart"]), "CarPartData", car_part)
-    compatible = game_path_of(new_id, rels["compatiblepart"])
-    save_msg(tree_path(root, rels["compatiblepart"]), "CompatiblePartData", compatible_part(game_path_of(new_id, rels["carpart"])))
-    path = tree_path(root, version_preset)
-    obj, kind = load_msg(path)
-    append_paths(obj, "forced_compatible_part_paths", [compatible])
-    save_msg(path, kind, obj)
-    forbid_in_base_preset(root, base_preset, compatible)
-    return compatible, len(rels), ["note: version %s (%s): own sounds %s" % (version, name, ", ".join(changed))], sorted(rels.values())
+    for key, rel in tuning_rels.items():
+        save_msg(tree_path(root, rel), "TuningPart", tunings[key])
+    for kind, part_type, keys in written:
+        car_part = {"description": "%s %s" % (name, kind), "part_type": part_type, "note": "%s %s" % (name, kind)}
+        if brand:
+            car_part["brand"] = brand
+        logic = [{"tuning_part_path": game_path_of(new_id, tuning_rels[k])} for k in keys]
+        if kind == "sound" and events:
+            logic[0]["car_audio_events"] = events
+        car_part.update({"no_specialization": {}, "logic_parts": logic})
+        save_msg(tree_path(root, rels[kind][0]), "CarPartData", car_part)
+        compatible = compatible_part(game_path_of(new_id, rels[kind][0]))
+        if kind != "sound":
+            del compatible["attachment_bone"]
+        save_msg(tree_path(root, rels[kind][1]), "CompatiblePartData", compatible)
+    for rel, state, kind, entries in edits:
+        set_list(state, "parts", list(state.get("parts") or []) + entries)
+        save_msg(tree_path(root, rel), kind, state)
+    compatibles = [paths[kind] for kind, _, _ in written]
+    if compatibles:
+        path = tree_path(root, version_preset)
+        obj, kind = load_msg(path)
+        append_paths(obj, "forced_compatible_part_paths", compatibles)
+        save_msg(path, kind, obj)
+    return compatibles, len(files), ["note: version %s (%s): own sounds %s" % (version, name, ", ".join(changed))] if events else [], sorted(files)
 
 
 def add_version_parts(part, new_id, parts):
@@ -2695,7 +2861,7 @@ def version_snapshot_path(work, car_id, new_id, version):
 def store_version_build(work, car_id, new_id, version, out_dir, built, snapshot):
     """Keep the build of a version: the record <version folder>/snapshot.json, and in <version folder>/build the files the merge put
     into the packed build out_dir for the version (files/<path relative to the car folder>, byte copies) with build.json = {tune,
-    preset, sound_part, files, time, state}. The new folder is written as build.partial first and then replaces build."""
+    preset, parts, files, time, state}. The new folder is written as build.partial first and then replaces build."""
     folder = version_dir(work, car_id, new_id, version)
     part, final = os.path.join(folder, "build.partial"), os.path.join(folder, "build")
     root = car_root_of(out_dir, new_id)
@@ -2706,7 +2872,7 @@ def store_version_build(work, car_id, new_id, version, out_dir, built, snapshot)
         os.makedirs(kspkg.long_path(os.path.dirname(dst)), exist_ok=True)
         shutil.copyfile(kspkg.long_path(tree_path(root, rel)), kspkg.long_path(dst))
     save_json(kspkg.long_path(os.path.join(part, "build.json")),
-              {"tune": new_id, "preset": built["preset"], "sound_part": built["sound_part"], "files": built["files"],
+              {"tune": new_id, "preset": built["preset"], "parts": built["parts"], "files": built["files"],
                "time": snapshot["time"], "state": built["state"]})
     if os.path.exists(kspkg.long_path(final)):
         remove_tree(work, final)
@@ -2719,6 +2885,18 @@ def same_setting(s, a, b):
     if s["type"] == "float" and not (finite_number(a) and finite_number(b)):
         return a == b
     return same(s, a, b)
+
+
+def ignored_shared_notes(versions, version_states, cat, rows):
+    """One note per unlocked version (version_states: its own state, None for a locked one) and shared setting (not meta) whose own saved value differs from the effective value of the base (rows: the base's effective_rows): the version ignores it."""
+    notes = []
+    for v, state in zip(versions, version_states):
+        for s, row in zip(cat["settings"], rows):
+            if state is not None and s.get("shared") is True and s["kind"] != "meta" and s["id"] in state:
+                own = saved_value(s, state[s["id"]])
+                if not same_setting(s, own, row["value"]):
+                    notes.append("note: version %s (%s): its own %s %s is ignored (shared by all versions, %s)" % (v["id"], v["name"], s["id"], fmt(own), fmt(row["value"])))
+    return notes
 
 
 def kit_text(kit):
@@ -2827,10 +3005,9 @@ def build_state(work, car_id, new_id, out_dir, plan, cat, game):
     return part, meta, notes, applied, changed_sounds
 
 
-def put_locked_version(work, car_id, new_id, root, version, kept, base_preset):
+def put_locked_version(work, car_id, new_id, root, version, kept):
     """Put the kept build of a locked version (kept_build) into the car folder root of the build: every file of its build/files under
-    the same path (a file of that name that exists is an error, found before anything is copied); the compatible part of its sound
-    part is also forbidden in the base mechanical preset base_preset. Returns the number of files."""
+    the same path (a file of that name that exists is an error, found before anything is copied). Returns the number of files."""
     source = os.path.join(version_dir(work, car_id, new_id, version), "build", "files")
     for rel in kept["files"]:
         if os.path.exists(kspkg.long_path(tree_path(root, rel))):
@@ -2839,8 +3016,6 @@ def put_locked_version(work, car_id, new_id, root, version, kept, base_preset):
         dst = tree_path(root, rel)
         os.makedirs(kspkg.long_path(os.path.dirname(dst)), exist_ok=True)
         shutil.copyfile(kspkg.long_path(os.path.join(source, *rel.split("/"))), kspkg.long_path(dst))
-    if kept["sound_part"]:
-        forbid_in_base_preset(root, base_preset, kept["sound_part"])
     return len(kept["files"])
 
 
@@ -2848,16 +3023,17 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
     """Build each unlocked version of the tune (plans from apply_plan, None for a locked version) into its own temporary folder next to
     the build, merge it into the base build in part (merge_version), then put in the kept build (kept, from kept_build, None for an
     unlocked version) of each locked version (put_locked_version), and list the version presets in the actor in the order of the
-    versions. A version whose actor has other sounds than the base gets its own sound part (add_version_sound), listed in the
-    aftermarket parts of the actor (so does the sound part of a locked version). The visual presets and car designs of the version presets are
+    versions. A version gets its physics and sounds as car parts of its own (add_version_physics), listed in the aftermarket parts of the
+    actor (so do the parts of a locked version, in the order of the versions) and forbidden in the base preset and the presets of the
+    unlocked versions (forbid_version_parts); a base preset that forces a part of the same types is refused (check_forced_parts). The visual presets and car designs of the version presets are
     added to the actor's lists (add_version_visuals), the rims of the version presets that the actor does not list are added to its
     car.customization.aftermarket_rims and forbidden in the other mechanical presets (add_version_rims: the base preset, resolved before the
     merges, and the unlocked versions' presets; a locked version's preset stays as kept) and each version gets its line in en.cars.loc
     (add_version_names); the description of an
     unlocked version's preset is made unique by its slug (merge_version) against the base's and the other versions' (the slugs of the locked
     ones are read from their kept presets). Returns ([{id, name, files, locked, built}], notes
-    (by version), [{files (the paths written into the car folder for the version, sorted), preset (game path), sound_part (game path
-    or None), applied (None for a locked version)}] in the order of the versions)."""
+    (by version), [{files (the paths written into the car folder for the version, sorted), preset (game path), parts (the game paths
+    of its compatible parts: sound, drivetrain, suspension), applied (None for a locked version)}] in the order of the versions)."""
     root = car_root_of(part, new_id)
     base_preset = resolve_file("@mech_preset", part, new_id, {}) if versions else None
     merged, notes, built = [None] * len(versions), [None] * len(versions), [None] * len(versions)
@@ -2870,42 +3046,42 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
     for i, (v, plan) in enumerate(zip(versions, plans)):
         if plan is None:
             continue
+        check_forced_parts(root, base_preset, v["id"])
         vout = os.path.join(build_dir(work, car_id), "%s_%s" % (new_id, v["id"]))
         try:
             vpart, applied = build_state(work, car_id, new_id, vout, plan, cat, game)[::3]
-            count, preset, differs, more, files = merge_version(part, vpart, new_id, v["id"], v["name"], taken)
+            count, preset, more, files, copies, finals = merge_version(part, vpart, new_id, v["id"], v["name"], taken)
             taken.add(description_slug(preset_of_game_path(root, preset).get("description", "")))
-            compatible = None
-            if differs:
-                compatible, written, own_notes, sound_files = add_version_sound(part, vpart, new_id, v["id"], v["name"], preset)
-                count += written
-                files = files + sound_files
+            compatibles, written, own_notes, part_files = add_version_physics(part, vpart, new_id, v["id"], v["name"], preset, copies, finals)
+            count += written
+            files = files + part_files
         finally:
             if os.path.exists(kspkg.long_path(vout + ".partial")):
                 remove_tree(work, vout + ".partial")
         merged[i] = {"id": v["id"], "name": v["name"], "files": count, "locked": False}
-        built[i] = {"files": sorted(files), "preset": preset, "sound_part": compatible, "applied": applied}
-        notes[i] = ["note: version %s (%s): %d files of its own" % (v["id"], v["name"], count)] + more + (own_notes if differs else [])
+        built[i] = {"files": sorted(files), "preset": preset, "parts": compatibles, "applied": applied}
+        notes[i] = ["note: version %s (%s): %d files of its own" % (v["id"], v["name"], count)] + more + own_notes
     for i, (v, k) in enumerate(zip(versions, kept)):
         if k is None:
             continue
-        count = put_locked_version(work, car_id, new_id, root, v["id"], k, base_preset)
+        count = put_locked_version(work, car_id, new_id, root, v["id"], k)
         merged[i] = {"id": v["id"], "name": v["name"], "files": count, "locked": True, "built": k["time"]}
-        built[i] = {"files": k["files"], "preset": k["preset"], "sound_part": k["sound_part"], "applied": None}
+        built[i] = {"files": k["files"], "preset": k["preset"], "parts": k["parts"], "applied": None}
         notes[i] = ["note: version %s (%s): locked, %d files kept from its build of %s" % (v["id"], v["name"], count, k["time"])]
     if built:
         add_version_presets(part, new_id, [b["preset"] for b in built])
         add_version_visuals(part, new_id, [b["preset"] for b in built])
         add_version_rims(part, new_id, base_preset, [b["preset"] for b in built], [k is not None for k in kept])
         add_version_names(part, new_id, [(v["name"], b["preset"]) for v, b in zip(versions, built)])
-    parts = [b["sound_part"] for b in built if b["sound_part"]]
+        forbid_version_parts(root, base_preset, [b["preset"] for b in built], [k is not None for k in kept], [b["parts"] for b in built])
+    parts = [p for b in built for p in b["parts"]]
     if parts:
         add_version_parts(part, new_id, parts)
     return merged, [n for each in notes for n in each], built
 
 
 def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
-    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Each unlocked version of the tune is built too and merged into the package as a further mechanical preset (see build_versions); a locked version (lock_version) is not built: the files of its kept build (kept_build) are copied into the package byte for byte, its preset and sound part listed as for a built one, and its build/ and snapshot.json stay as they are; a locked version whose kept build is missing or damaged is an error before anything is written. The snapshot is the base's. A version that the game would not show (check_versions) stops the apply before the pack. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, versions, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
+    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Each unlocked version of the tune is built too and merged into the package as a further mechanical preset (see build_versions); a locked version (lock_version) is not built: the files of its kept build (kept_build) are copied into the package byte for byte, its preset and parts listed as for a built one, and its build/ and snapshot.json stay as they are; a locked version whose kept build is missing or damaged is an error before anything is written. The snapshot is the base's. A version that the game would not show (check_versions) stops the apply before the pack. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, versions, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
     cat = catalogue or load_catalogue()
     new_id = new_id or new_id_for(car_id)
     plan = apply_plan(work, car_id, new_id, install, mods_dir, cat)
@@ -2919,7 +3095,7 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     out_dir = os.path.join(build_dir(work, car_id), new_id)
     part, meta, notes, applied, changed_sounds = build_state(work, car_id, new_id, out_dir, plan, cat, game)
     merged, more, built = build_versions(work, car_id, new_id, part, versions, version_plans, kept, cat, game)
-    notes += more
+    notes += more + ignored_shared_notes(versions, version_states, cat, plan["rows"])
     check_versions(part, new_id, versions, [b["preset"] for b in built])
     pkg = pack_build(work, new_id, part, out_dir)
     records = []

@@ -33,6 +33,17 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         unknown or unreadable variant and for a variant together with a modded car; no POST route takes a variant
   GET  /api/groups      the setting groups of the catalogue in display order ("groups": name, description); static data,
                         the same for every car and tune, needs no base car
+  versions              GET /api/state of a modded car also answers "versions" ([{id, name}], empty for a stock car and the draft) and
+                        "mod_paths" ({package, versions_folder, state}: where the installed package, the folder of the versions and
+                        the state file of the tune live; null for a stock car and the draft). The routes /api/settings, /api/set,
+                        /api/unset, /api/reset_all, /api/garage, /api/garage_set, /api/garage_reset, /api/turbo, /api/turbo_set,
+                        /api/turbo_reset, /api/sounds, /api/sound_set and /api/sound_reset take an optional "version" (an id of
+                        "versions": query parameter for GET, body field or query parameter for POST; empty is the base) and then work on
+                        that version's state; 400 for a version without a modded car, for an unknown version and for a meta setting
+                        (name suffix) of a version, which all versions share. reset_all with a version clears only that version.
+  POST /api/version_add {"tune": ..., "name": ..., "from": version id (optional, default the base)}   adds a version as a copy
+                        of the base (or of version "from"); answers {"id"}
+  POST /api/version_rename {"tune": ..., "version": ..., "name": ...}   answers {"id", "name"}; there is no route that deletes a version
   POST /api/set        {"id": ..., "value": ...}          POST /api/unset  {"id": ...}
                         (value: text, number, or true/false for the settings of type bool, which are on/off switches
                         and appear in the rows with type "bool" and true/false as default and value)
@@ -198,6 +209,10 @@ ACCEPTED = ("/api/init", "/api/apply")
 QUERY_ROUTES = ("/api/tyre", "/api/log_file")
 # GET routes that take the raw query string for the optional parameter variant (a preset of the car, shown read-only)
 VARIANT_ROUTES = ("/api/settings",)
+# routes that work on a version of a modded car when "version" is given (query parameter for GET, body field for POST)
+VERSION_GET_ROUTES = ("/api/settings", "/api/garage", "/api/turbo", "/api/sounds")
+VERSION_POST_ROUTES = ("/api/set", "/api/unset", "/api/reset_all", "/api/garage_set", "/api/garage_reset", "/api/turbo_set",
+                       "/api/turbo_reset", "/api/sound_set", "/api/sound_reset")
 # POST routes that only a client on the PC itself (loopback) may call
 LOCAL_ROUTES = ("/api/log_copy",)
 LOG_FILE_MAX = 1048576
@@ -388,16 +403,16 @@ def row_json(row, setting, base_range=None):
     return out
 
 
-def rows_json(work, car_id, cat, tune_id=None):
+def rows_json(work, car_id, cat, tune_id=None, version=None):
     require_base(work, car_id)
     ranges = tune.load_ranges(work)
     return [row_json(r, tune.find_setting(cat, r["id"]), ranges.get(r["id"]))
-            for r in tune.effective_rows(work, car_id, cat, tune=tune_id)]
+            for r in tune.effective_rows(work, car_id, cat, tune=tune_id, version=version)]
 
 
-def row_of(work, car_id, cat, setting_id, tune_id=None):
+def row_of(work, car_id, cat, setting_id, tune_id=None, version=None):
     require_base(work, car_id)
-    return row_json(tune.effective_row(work, car_id, setting_id, cat, tune=tune_id), tune.find_setting(cat, setting_id),
+    return row_json(tune.effective_row(work, car_id, setting_id, cat, tune=tune_id, version=version), tune.find_setting(cat, setting_id),
                     tune.load_ranges(work).get(setting_id))
 
 
@@ -476,11 +491,26 @@ def car_entry_json(work, c):
     return entry
 
 
+def mod_info(work, car_id, tune_id):
+    """The versions of the selected modded car and where its files live: {"versions": [{id, name}], "mod_paths": {package,
+    versions_folder, state}}; empty versions and no paths for the base car and the draft."""
+    if tune_id in (None, tune.DRAFT):
+        return {"versions": [], "mod_paths": None}
+    try:
+        versions = tune.list_versions(work, car_id, tune_id)
+    except (ValueError, OSError):
+        versions = []
+    return {"versions": versions,
+            "mod_paths": {"package": os.path.join(mods_dir(), tune_id + ".kspkg"),
+                          "versions_folder": tune.version_dir(work, car_id, tune_id),
+                          "state": tune.state_path(work, car_id, tune_id)}}
+
+
 def api_state(car_id, tune_id):
     require_mods()
     work, cars = CONFIG["work"], tune.load_cars()
     applicable, hidden = settings_counts(work, car_id)
-    return dict({"work": work, "car": car_id, "tune": tune_id, "default_car": cars["default"],
+    return dict(mod_info(work, car_id, tune_id), **{"work": work, "car": car_id, "tune": tune_id, "default_car": cars["default"],
                  "cars": [car_entry_json(work, c) for c in tune.list_cars(work, CONFIG["mods"], game=CONFIG["game"], sizes=False)],
                  "base_present": base_present(work, car_id), "game_running": game_running_cached(),
                  "installed": installed_info(car_id, tune_id), "stock_id_length": len(car_id),
@@ -495,14 +525,14 @@ def variant_rows_json(work, car_id, cat, variant):
             for r in tune.resolve_defaults(work, car_id, cat, variant=variant)]
 
 
-def api_settings(car_id, tune_id, query):
+def api_settings(car_id, tune_id, query, version=None):
     variant = (urllib.parse.parse_qs(query).get("variant") or [None])[0]
     if variant is not None and tune_id not in (None, tune.DRAFT):
         raise ApiError(400, "a variant cannot be combined with a modded car")
     with STATE_LOCK, bad_input():
         if variant is not None:
             return variant_rows_json(CONFIG["work"], car_id, tune.load_catalogue(), variant)
-        return rows_json(CONFIG["work"], car_id, tune.load_catalogue(), tune_id)
+        return rows_json(CONFIG["work"], car_id, tune.load_catalogue(), tune_id, version)
 
 
 def api_groups(car_id, tune_id):
@@ -510,7 +540,7 @@ def api_groups(car_id, tune_id):
 
 
 def api_set(car_id, body):
-    work, cat, tune_id = CONFIG["work"], tune.load_catalogue(), body.get("tune")
+    work, cat, tune_id, version = CONFIG["work"], tune.load_catalogue(), body.get("tune"), body.get("version")
     setting_id, value = body.get("id"), body.get("value")
     if not isinstance(setting_id, str) or type(value) not in (str, int, float, bool):
         raise ApiError(400, "need id (text) and value (text, number or true/false)")
@@ -518,14 +548,14 @@ def api_set(car_id, body):
     require_base(work, car_id)
     with STATE_LOCK:
         try:
-            res = tune.set_value(work, car_id, setting_id, value, cat, tune=tune_id)
+            res = tune.set_value(work, car_id, setting_id, value, cat, tune=tune_id, version=version)
         except ValueError as e:
             raise ApiError(400, str(e)) from None
-        return {"row": row_of(work, car_id, cat, setting_id, tune_id), "warnings": res["warnings"]}
+        return {"row": row_of(work, car_id, cat, setting_id, tune_id, version), "warnings": res["warnings"]}
 
 
 def api_unset(car_id, body):
-    work, cat, tune_id = CONFIG["work"], tune.load_catalogue(), body.get("tune")
+    work, cat, tune_id, version = CONFIG["work"], tune.load_catalogue(), body.get("tune"), body.get("version")
     setting_id = body.get("id")
     if not isinstance(setting_id, str):
         raise ApiError(400, "need id (text)")
@@ -533,18 +563,21 @@ def api_unset(car_id, body):
     require_base(work, car_id)
     with STATE_LOCK:
         try:
-            tune.unset_value(work, car_id, setting_id, cat, tune=tune_id)
+            tune.unset_value(work, car_id, setting_id, cat, tune=tune_id, version=version)
         except ValueError as e:
             raise ApiError(400, str(e)) from None
-        return {"row": row_of(work, car_id, cat, setting_id, tune_id)}
+        return {"row": row_of(work, car_id, cat, setting_id, tune_id, version)}
 
 
 def api_reset_all(car_id, body):
-    work, tune_id = CONFIG["work"], body.get("tune")
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
     refuse_while_job_runs()
     require_base(work, car_id)
     with STATE_LOCK:
         state = {}
+        if version is not None:
+            tune.save_version_state(work, car_id, state, version, tune_id)
+            return {"ok": True}
         if tune.is_extra_tune(car_id, tune_id):
             suffix_id = tune.name_suffix_setting()["id"]
             kept = tune.load_state(work, car_id, tune_id)
@@ -552,6 +585,37 @@ def api_reset_all(car_id, body):
                 state[suffix_id] = tune.legacy_suffix(kept[suffix_id])
         tune.save_state(work, car_id, state, tune_id)
     return {"ok": True}
+
+
+def version_name_text(body):
+    name = body.get("name")
+    if not isinstance(name, str):
+        raise ApiError(400, "need name (text)")
+    return name
+
+
+def api_version_add(car_id, body):
+    work, tune_id, source = CONFIG["work"], body.get("tune"), optional_text(body, "from")
+    name = version_name_text(body)
+    if tune_id in (None, tune.DRAFT):
+        raise ApiError(400, "a version needs a modded car")
+    refuse_while_job_runs()
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return {"id": tune.add_version(work, car_id, name, tune_id, source or None)}
+
+
+def api_version_rename(car_id, body):
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
+    name = version_name_text(body)
+    if not isinstance(version, str):
+        raise ApiError(400, "need version (text)")
+    if tune_id in (None, tune.DRAFT):
+        raise ApiError(400, "a version needs a modded car")
+    refuse_while_job_runs()
+    require_base(work, car_id)
+    with STATE_LOCK, bad_input():
+        return {"id": version, "name": tune.rename_version(work, car_id, version, name, tune_id)}
 
 
 def api_init(car_id, body):
@@ -714,110 +778,110 @@ def api_tyre_delete(car_id, body):
     return {"ok": True}
 
 
-def garage_json(work, car_id, tune_id):
-    return dict(tune.garage_choices(work, car_id, tune_id), car=car_id, tune=tune_id)
+def garage_json(work, car_id, tune_id, version=None):
+    return dict(tune.garage_choices(work, car_id, tune_id, version), car=car_id, tune=tune_id)
 
 
-def api_garage(car_id, tune_id):
+def api_garage(car_id, tune_id, version=None):
     work = CONFIG["work"]
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        return garage_json(work, car_id, tune_id)
+        return garage_json(work, car_id, tune_id, version)
 
 
 def api_garage_set(car_id, body):
-    work, tune_id, keys = CONFIG["work"], body.get("tune"), body.get("keys")
+    work, tune_id, version, keys = CONFIG["work"], body.get("tune"), body.get("version"), body.get("keys")
     refuse_while_job_runs()
     if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
         raise ApiError(400, "need keys (a list of text)")
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        result = tune.set_garage(work, car_id, keys, tune_id)
-        return {"result": result, "garage": garage_json(work, car_id, tune_id)}
+        result = tune.set_garage(work, car_id, keys, tune_id, version)
+        return {"result": result, "garage": garage_json(work, car_id, tune_id, version)}
 
 
 def api_garage_reset(car_id, body):
-    work, tune_id = CONFIG["work"], body.get("tune")
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
     refuse_while_job_runs()
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        res = tune.reset_garage(work, car_id, tune_id)
-        return {"removed": res["removed"], "garage": garage_json(work, car_id, tune_id)}
+        res = tune.reset_garage(work, car_id, tune_id, version)
+        return {"removed": res["removed"], "garage": garage_json(work, car_id, tune_id, version)}
 
 
-def turbo_json(work, car_id, tune_id):
-    return dict(tune.turbo_choice(work, car_id, tune_id), car=car_id, tune=tune_id)
+def turbo_json(work, car_id, tune_id, version=None):
+    return dict(tune.turbo_choice(work, car_id, tune_id, version), car=car_id, tune=tune_id)
 
 
-def api_turbo(car_id, tune_id):
+def api_turbo(car_id, tune_id, version=None):
     work = CONFIG["work"]
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        return turbo_json(work, car_id, tune_id)
+        return turbo_json(work, car_id, tune_id, version)
 
 
 def api_turbo_set(car_id, body):
-    work, tune_id, donor = CONFIG["work"], body.get("tune"), body.get("donor")
+    work, tune_id, version, donor = CONFIG["work"], body.get("tune"), body.get("version"), body.get("donor")
     refuse_while_job_runs()
     if not isinstance(donor, str):
         raise ApiError(400, "need donor (text)")
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        result = tune.set_turbo(work, car_id, donor, tune_id)
-        sounds, sound_link = turbo_sound_link(work, car_id, donor, tune_id)
-        return {"result": result, "turbo": turbo_json(work, car_id, tune_id), "sounds": sounds, "sound_link": sound_link}
+        result = tune.set_turbo(work, car_id, donor, tune_id, version)
+        sounds, sound_link = turbo_sound_link(work, car_id, donor, tune_id, version)
+        return {"result": result, "turbo": turbo_json(work, car_id, tune_id, version), "sounds": sounds, "sound_link": sound_link}
 
 
-def turbo_sound_link(work, car_id, donor, tune_id):
+def turbo_sound_link(work, car_id, donor, tune_id, version=None):
     try:
         key = tune.sound_own(work, donor)["turbo"]
         if key is None:
             return None, None
-        view = tune.set_sound(work, car_id, "turbo", key, tune_id)
+        view = tune.set_sound(work, car_id, "turbo", key, tune_id, version)
     except ValueError as e:
         return None, {"error": str(e)}
     return dict(view, car=car_id, tune=tune_id), {"slot": "turbo", "key": key}
 
 
 def api_turbo_reset(car_id, body):
-    work, tune_id = CONFIG["work"], body.get("tune")
+    work, tune_id, version = CONFIG["work"], body.get("tune"), body.get("version")
     refuse_while_job_runs()
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        res = tune.reset_turbo(work, car_id, tune_id)
-        return {"removed": res["removed"], "turbo": turbo_json(work, car_id, tune_id)}
+        res = tune.reset_turbo(work, car_id, tune_id, version)
+        return {"removed": res["removed"], "turbo": turbo_json(work, car_id, tune_id, version)}
 
 
-def sounds_json(work, car_id, tune_id):
-    return dict(tune.sound_choices(work, car_id, tune_id), car=car_id, tune=tune_id)
+def sounds_json(work, car_id, tune_id, version=None):
+    return dict(tune.sound_choices(work, car_id, tune_id, version), car=car_id, tune=tune_id)
 
 
-def api_sounds(car_id, tune_id):
+def api_sounds(car_id, tune_id, version=None):
     work = CONFIG["work"]
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        return sounds_json(work, car_id, tune_id)
+        return sounds_json(work, car_id, tune_id, version)
 
 
 def api_sound_set(car_id, body):
-    work, tune_id, slot, key = CONFIG["work"], body.get("tune"), body.get("slot"), body.get("key")
+    work, tune_id, version, slot, key = CONFIG["work"], body.get("tune"), body.get("version"), body.get("slot"), body.get("key")
     refuse_while_job_runs()
     if not isinstance(slot, str) or not slot.strip() or not (key is None or isinstance(key, str)):
         raise ApiError(400, "need slot (text) and key (text or null)")
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        return dict(tune.set_sound(work, car_id, slot, key, tune_id), car=car_id, tune=tune_id)
+        return dict(tune.set_sound(work, car_id, slot, key, tune_id, version), car=car_id, tune=tune_id)
 
 
 def api_sound_reset(car_id, body):
-    work, tune_id, slot = CONFIG["work"], body.get("tune"), body.get("slot")
+    work, tune_id, version, slot = CONFIG["work"], body.get("tune"), body.get("version"), body.get("slot")
     refuse_while_job_runs()
     if slot is not None and not isinstance(slot, str):
         raise ApiError(400, "slot must be text")
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        tune.reset_sounds(work, car_id, tune_id, slot)
-        return sounds_json(work, car_id, tune_id)
+        tune.reset_sounds(work, car_id, tune_id, slot, version)
+        return sounds_json(work, car_id, tune_id, version)
 
 
 def log_config_json(chan, config):
@@ -957,6 +1021,22 @@ def request_tune(value, query, car_id):
     return value
 
 
+def request_version(value, query, car_id, tune_id):
+    if value is None:
+        value = (urllib.parse.parse_qs(query).get("version") or [None])[0]
+    if value is not None and not isinstance(value, str):
+        raise ApiError(400, "version must be text")
+    if not value:
+        return None
+    if tune_id in (None, tune.DRAFT):
+        raise ApiError(400, "a version needs a modded car")
+    with bad_input():
+        known = [v["id"] for v in tune.list_versions(CONFIG["work"], car_id, tune_id)]
+    if value not in known:
+        raise ApiError(400, "unknown version %s of %s" % (value, tune_id))
+    return value
+
+
 GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyres": api_tyres,
               "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
               "/api/sounds": api_sounds, "/api/log_config": api_log_config, "/api/log_sessions": api_log_sessions,
@@ -964,6 +1044,7 @@ GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/grou
               "/api/log_ai_command": api_log_ai_command, "/api/log_file": api_log_file}
 POST_ROUTES = {"/api/set": api_set, "/api/unset": api_unset, "/api/reset_all": api_reset_all,
                "/api/init": api_init, "/api/duplicate": api_duplicate,
+               "/api/version_add": api_version_add, "/api/version_rename": api_version_rename,
                "/api/apply": api_apply, "/api/tyre_new": api_tyre_new, "/api/tyre_rename": api_tyre_rename,
                "/api/tyre_source": api_tyre_source, "/api/tyre_set": api_tyre_set, "/api/tyre_unset": api_tyre_unset,
                "/api/tyre_reset": api_tyre_reset, "/api/tyre_delete": api_tyre_delete, "/api/garage_set": api_garage_set,
@@ -1109,11 +1190,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = self.read_body()
             car_id = request_car(body.get("car"), query)
             body["tune"] = request_tune(body.get("tune"), query, car_id)
+            if path in VERSION_POST_ROUTES:
+                body["version"] = request_version(body.get("version"), query, car_id, body["tune"])
             payload = route(car_id, body)
         else:
             car_id = request_car(None, query)
             tune_id = request_tune(None, query, car_id)
-            payload = route(car_id, tune_id, query) if path in QUERY_ROUTES + VARIANT_ROUTES else route(car_id, tune_id)
+            version = request_version(None, query, car_id, tune_id) if path in VERSION_GET_ROUTES else None
+            if path in VARIANT_ROUTES:
+                payload = route(car_id, tune_id, query, version)
+            elif path in VERSION_GET_ROUTES:
+                payload = route(car_id, tune_id, version)
+            else:
+                payload = route(car_id, tune_id, query) if path in QUERY_ROUTES else route(car_id, tune_id)
         return (202 if path in ACCEPTED else 200), payload
 
     def handle_request(self, method):

@@ -22,6 +22,7 @@ import tune
 
 REAL_LOAD_CATALOGUE = tune.load_catalogue
 REAL_RENAME = os.rename
+CAR_NOTE = "note: car file: data/x.car renamed to data/CarData.car (the paint shop of a mod car expects that name)"
 USAGE = tune.__doc__.split("\n\n")[1]
 GAME_SHARED = "content\\cars\\common_phsx\\"
 NO_CHANGES = {"since": None, "settings": [], "extras": [], "total": 0}
@@ -2224,6 +2225,335 @@ class TestPerTuneState(CarCase):
         self.assertEqual(sorted(f for f in os.listdir(os.path.join(self.work, "ks_x")) if f.endswith(".json")), ["draft_state.json", "tune_state.json"])
 
 
+# --------------------------------------------------------------------------------------------- versions
+class TestVersions(CarCase):
+    """Versions of the default tune (ax_x) and of the modded car ax01 of the stub car ks_x."""
+
+    def setUp(self):
+        super().setUp()
+        self.cars(("ks_x", "Car X"))
+        self.stock_info()
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        self.cat = mini_catalogue(*metas(), limiter(), mini_setting("m", type="int", targets=[("@engine", "minimum")]))
+        self.patch(tune, "load_catalogue", lambda path=None: self.cat)
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "Base"})
+        tune.save_state(self.work, "ks_x", {"limiter": 9000, "name_suffix": "Mine", "m": 700}, "ax01")
+
+    def main(self, *argv):
+        return self.run_main(*argv, "--work", self.work)
+
+    def vpath(self, *parts, tune_id=None):
+        base = os.path.join(self.work, "ks_x") if tune_id is None else os.path.join(self.work, "ks_x", "tunes", tune_id)
+        return os.path.join(base, "versions", *parts)
+
+    def values(self, version, tune_id=None, hidden=False):
+        return {r["id"]: (r["value"], r["changed"]) for r in tune.effective_rows(self.work, "ks_x", self.cat, hidden, tune_id, version)}
+
+    def test_a_tune_without_versions_lists_none_and_writes_nothing(self):
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [])
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01"), [])
+        self.assertFalse(os.path.exists(self.vpath()))
+
+    def test_added_versions_get_the_next_free_ids_and_are_listed_by_id(self):
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Drift"), "v01")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Grip"), "v02")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Other car", "ax01"), "v01")
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift"}, {"id": "v02", "name": "Grip"}])
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax_x"), tune.list_versions(self.work, "ks_x"))
+        self.assertEqual(tune.list_versions(self.work, "ks_x", "ax01"), [{"id": "v01", "name": "Other car"}])
+        self.assertEqual(tune.read_json(self.vpath("v01", "meta.json")), {"name": "Drift"})
+
+    def test_a_gap_in_the_ids_is_filled_first_and_the_last_id_is_v99(self):
+        for name in ("A", "B", "C"):
+            tune.add_version(self.work, "ks_x", name)
+        shutil.rmtree(self.vpath("v02"))
+        self.assertEqual(tune.add_version(self.work, "ks_x", "D"), "v02")
+        for n in range(4, 100):
+            os.makedirs(self.vpath("v%02d" % n))
+        with self.assertRaisesRegex(ValueError, "no free version id left for ax_x"):
+            tune.add_version(self.work, "ks_x", "E")
+
+    def test_a_version_copies_the_base_state_without_the_meta_settings(self):
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "name_suffix": "Base", "_turbo": {"donor": "ks_y"}, "_tyres": ["own:t"]})
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {"limiter": 8000, "_turbo": {"donor": "ks_y"}, "_tyres": ["own:t"]})
+        self.assertEqual(tune.load_state(self.work, "ks_x")["name_suffix"], "Base")
+
+    def test_a_version_can_copy_another_version_instead_of_the_base(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Copy", source="v01"), "v02")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v02"), {"limiter": 6500})
+        with self.assertRaisesRegex(ValueError, "ks_x has no version v07 of ax_x"):
+            tune.add_version(self.work, "ks_x", "Nope", source="v07")
+        self.assertEqual([v["id"] for v in tune.list_versions(self.work, "ks_x")], ["v01", "v02"])
+
+    def test_names_are_trimmed_and_must_be_1_to_40_characters_without_control_characters(self):
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [])
+        tune.add_version(self.work, "ks_x", "  Drift  ")
+        tune.add_version(self.work, "ks_x", "x" * 40)
+        self.assertEqual([v["name"] for v in tune.list_versions(self.work, "ks_x")], ["Drift", "x" * 40])
+        for bad in ("", "   ", "x" * 41, "a\tb", "a\x7fb", "a\x00b", "\x1f", None, 5):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "a version name must be 1 to 40 characters"):
+                tune.add_version(self.work, "ks_x", bad)
+        self.assertEqual(len(tune.list_versions(self.work, "ks_x")), 2)
+
+    def test_names_are_unique_per_tune_ignoring_case(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        for again in ("Drift", "DRIFT", " drift "):
+            with self.subTest(again), self.assertRaisesRegex(ValueError, "version name .* is already used by v01"):
+                tune.add_version(self.work, "ks_x", again)
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Drift", "ax01"), "v01")
+        self.assertEqual(len(tune.list_versions(self.work, "ks_x")), 1)
+
+    def test_rename_changes_only_the_name_with_the_same_rules(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.add_version(self.work, "ks_x", "Grip")
+        state = tune.read_version_state(self.work, "ks_x", "v02")
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "v02", "  Wet grip "), "Wet grip")
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [{"id": "v01", "name": "Drift"}, {"id": "v02", "name": "Wet grip"}])
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v02"), state)
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "v01", "DRIFT"), "DRIFT")
+        with self.assertRaisesRegex(ValueError, "already used by v01"):
+            tune.rename_version(self.work, "ks_x", "v02", "drift")
+        for bad in ("", "x" * 41, "a\nb"):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "a version name must be"):
+                tune.rename_version(self.work, "ks_x", "v02", bad)
+        with self.assertRaisesRegex(ValueError, "ks_x has no version v05 of ax_x"):
+            tune.rename_version(self.work, "ks_x", "v05", "Name")
+        self.assertEqual([v["name"] for v in tune.list_versions(self.work, "ks_x")], ["DRIFT", "Wet grip"])
+
+    def test_the_draft_and_unknown_tunes_have_no_versions(self):
+        for call in (lambda: tune.list_versions(self.work, "ks_x", tune.DRAFT), lambda: tune.add_version(self.work, "ks_x", "A", tune.DRAFT),
+                     lambda: tune.rename_version(self.work, "ks_x", "v01", "A", tune.DRAFT), lambda: tune.load_version_state(self.work, "ks_x", "v01", tune.DRAFT),
+                     lambda: tune.effective_rows(self.work, "ks_x", self.cat, tune=tune.DRAFT, version="v01"),
+                     lambda: tune.set_value(self.work, "ks_x", "limiter", "7000", tune=tune.DRAFT, version="v01")):
+            with self.assertRaisesRegex(ValueError, "the draft has no versions"):
+                call()
+        with self.assertRaisesRegex(ValueError, "ks_x has no tune ax02"):
+            tune.add_version(self.work, "ks_x", "A", "ax02")
+        for bad in ("ax1", "ks_x", 5):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                tune.list_versions(self.work, "ks_x", bad)
+        self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "draft_state.json")))
+        self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "tunes", "ax02")))
+
+    def test_version_ids_must_be_v01_to_v99(self):
+        for bad in ("v00", "v1", "v100", "V01", "x01", "../v01", "", 1, None):
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "version id must be v01 .. v99"):
+                tune.read_version_state(self.work, "ks_x", bad)
+        os.makedirs(self.vpath("v00"))
+        tune.save_json(self.vpath("v00", "tune_state.json"), {})
+        tune.add_version(self.work, "ks_x", "A")
+        self.assertEqual([v["id"] for v in tune.list_versions(self.work, "ks_x")], ["v01"])
+
+    def test_an_unknown_version_is_an_error_and_loads_nothing(self):
+        for call in (lambda: tune.load_version_state(self.work, "ks_x", "v01"), lambda: tune.effective_rows(self.work, "ks_x", self.cat, version="v01"),
+                     lambda: tune.set_value(self.work, "ks_x", "limiter", "7000", version="v01"),
+                     lambda: tune.unset_value(self.work, "ks_x", "limiter", version="v01"),
+                     lambda: tune.unknown_state_ids(self.work, "ks_x", self.cat, version="v01")):
+            with self.assertRaisesRegex(ValueError, "ks_x has no version v01 of ax_x"):
+                call()
+        self.assertFalse(os.path.exists(self.vpath()))
+
+    def test_the_values_of_a_version_come_from_its_state_and_the_meta_settings_from_the_base(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 6500, "name_suffix": "Ignored", "variant_name": "Ignored"}, "v01")
+        self.assertEqual(tune.load_version_state(self.work, "ks_x", "v01"), {"limiter": 6500, "name_suffix": "Base"})
+        version = self.values("v01")
+        self.assertEqual((version["limiter"], version["name_suffix"]), ((6500, True), ("Base", True)))
+        self.assertEqual(self.values(None)["limiter"], (8000, True))
+        row = tune.effective_row(self.work, "ks_x", "limiter", self.cat, version="v01")
+        self.assertEqual((row["value"], row["default"], row["changed"]), (6500, 7000, True))
+        self.assertEqual(tune.effective_row(self.work, "ks_x", "limiter", self.cat)["value"], 8000)
+
+    def test_a_version_has_its_own_complete_state_so_unset_settings_show_the_default(self):
+        tune.save_state(self.work, "ks_x", {"limiter": 8000, "m": 700})
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.unset_value(self.work, "ks_x", "m", version="v01")
+        self.assertEqual(self.values("v01")["m"], (800, False))
+        self.assertEqual(self.values(None)["m"], (700, True))
+
+    def test_the_base_meta_setting_changes_show_in_every_version(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.set_value(self.work, "ks_x", "name_suffix", "Renamed")
+        self.assertEqual(self.values("v01")["name_suffix"], ("Renamed", True))
+        tune.add_version(self.work, "ks_x", "Own", "ax01")
+        self.assertEqual(self.values("v01", "ax01")["name_suffix"], ("Mine", True))
+        self.assertEqual(self.values("v01", "ax01")["limiter"], (9000, True))
+
+    def test_the_defaults_of_a_version_are_those_of_the_tune(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual([r["default"] for r in tune.resolve_defaults(self.work, "ks_x", self.cat, hidden=True, tune="ax_x", version="v01")],
+                         [r["default"] for r in tune.resolve_defaults(self.work, "ks_x", self.cat, hidden=True, tune="ax_x")])
+        self.assertEqual([r["default"] for r in tune.resolve_defaults(self.work, "ks_x", self.cat, hidden=True, version="v01")],
+                         [r["default"] for r in tune.resolve_defaults(self.work, "ks_x", self.cat, hidden=True)])
+        with self.assertRaisesRegex(ValueError, "a version cannot be combined with a variant"):
+            tune.resolve_defaults(self.work, "ks_x", self.cat, version="v01", variant="q_drift")
+
+    def test_changed_settings_and_unknown_ids_follow_the_version(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        rows, changed = tune.changed_settings(self.work, "ks_x", "ax_x", self.cat, version="v01")
+        self.assertEqual([(s["id"], r["value"]) for s, r in changed], [("name_suffix", "Base"), ("limiter", 6500)])
+        self.assertEqual([(s["id"], r["value"]) for s, r in tune.changed_settings(self.work, "ks_x", "ax_x", self.cat)[1]], [("name_suffix", "Base"), ("limiter", 8000)])
+        tune.save_version_state(self.work, "ks_x", {"old": 1, "_turbo": {"donor": "ks_y"}}, "v01")
+        self.assertEqual(tune.unknown_state_ids(self.work, "ks_x", self.cat, version="v01"), ["old"])
+        self.assertEqual(tune.unknown_state_ids(self.work, "ks_x", self.cat), [])
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            tune.warn_unknown_state(self.work, "ks_x", self.cat, version="v01")
+        self.assertEqual(err.getvalue(), "warning: ignoring unknown setting 'old' in the saved state\n")
+
+    def test_set_and_unset_with_a_version_write_only_that_versions_state(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.add_version(self.work, "ks_x", "Grip")
+        tune.add_version(self.work, "ks_x", "Other", "ax01")
+        before = (tune.load_state(self.work, "ks_x"), tune.load_state(self.work, "ks_x", "ax01"), tune.read_version_state(self.work, "ks_x", "v02"),
+                  tune.read_version_state(self.work, "ks_x", "v01", "ax01"))
+        res = tune.set_value(self.work, "ks_x", "limiter", "6500", version="v01")
+        self.assertEqual(res, {"id": "limiter", "value": 6500, "warnings": []})
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01")["limiter"], 6500)
+        self.assertEqual((tune.load_state(self.work, "ks_x"), tune.load_state(self.work, "ks_x", "ax01"), tune.read_version_state(self.work, "ks_x", "v02"),
+                          tune.read_version_state(self.work, "ks_x", "v01", "ax01")), before)
+        self.assertEqual(tune.unset_value(self.work, "ks_x", "limiter", version="v01"), {"id": "limiter", "removed": True})
+        self.assertEqual(tune.unset_value(self.work, "ks_x", "limiter", version="v01"), {"id": "limiter", "removed": False})
+        self.assertNotIn("limiter", tune.read_version_state(self.work, "ks_x", "v01"))
+        tune.set_value(self.work, "ks_x", "limiter", "6100", tune="ax01", version="v01")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01", "ax01")["limiter"], 6100)
+        self.assertEqual(tune.load_state(self.work, "ks_x", "ax01")["limiter"], 9000)
+        self.assertEqual(tune.load_state(self.work, "ks_x")["limiter"], 8000)
+
+    def test_a_version_set_with_a_range_warning_or_a_bad_value_changes_nothing_more(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(tune.set_value(self.work, "ks_x", "limiter", "20000", version="v01")["warnings"],
+                         ["limiter=20000 is outside the suggested range 3000..12000"])
+        before = tune.read_version_state(self.work, "ks_x", "v01")
+        for setting, text in (("limiter", "fast"), ("nope", "1")):
+            with self.subTest(setting), self.assertRaises(ValueError):
+                tune.set_value(self.work, "ks_x", setting, text, version="v01")
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), before)
+
+    def test_meta_settings_are_refused_for_a_version_in_set_and_unset(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        before = (tune.read_version_state(self.work, "ks_x", "v01"), tune.load_state(self.work, "ks_x"))
+        for fn, args in ((tune.set_value, ("name_suffix", "Other")), (tune.set_value, ("variant_name", "V")), (tune.unset_value, ("name_suffix",)),
+                         (tune.unset_value, ("variant_name",))):
+            with self.subTest(fn.__name__, args=args), self.assertRaisesRegex(ValueError, "^%s is shared by all versions, set it on the base$" % args[0]):
+                fn(self.work, "ks_x", *args, version="v01")
+        self.assertEqual((tune.read_version_state(self.work, "ks_x", "v01"), tune.load_state(self.work, "ks_x")), before)
+        tune.set_value(self.work, "ks_x", "name_suffix", "Other")
+        self.assertEqual(tune.load_state(self.work, "ks_x")["name_suffix"], "Other")
+
+    def test_root_for_takes_the_turbo_kit_of_the_versions_own_state(self):
+        calls = []
+        self.patch(tune, "kit_root", lambda work, car_id, donor: calls.append(donor) or "KIT_" + donor)
+        tune.save_state(self.work, "ks_x", {"_turbo": {"donor": "ks_a"}})
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(tune.root_for(self.work, "ks_x", None), "KIT_ks_a")
+        self.assertEqual(tune.root_for(self.work, "ks_x", None, "v01"), "KIT_ks_a")
+        tune.save_version_state(self.work, "ks_x", {"_turbo": {"donor": "ks_b"}}, "v01")
+        self.assertEqual(tune.root_for(self.work, "ks_x", "ax_x", "v01"), "KIT_ks_b")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 7000}, "v01")
+        self.assertEqual(tune.root_for(self.work, "ks_x", "ax_x", "v01"), tune.base_dir(self.work, "ks_x"))
+        self.assertEqual(tune.root_for(self.work, "ks_x", "ax_x"), "KIT_ks_a")
+        tune.save_version_state(self.work, "ks_x", {"_turbo": "broken"}, "v01")
+        with self.assertRaisesRegex(ValueError, "damaged turbo kit"):
+            tune.root_for(self.work, "ks_x", None, "v01")
+        self.assertEqual(calls, ["ks_a", "ks_a", "ks_b", "ks_a"])
+
+    def test_resolve_defaults_reads_the_kit_root_of_the_version(self):
+        donors = []
+        self.patch(tune, "kit_root", lambda work, car_id, donor: donors.append(donor) or tune.base_dir(work, car_id))
+        tune.save_state(self.work, "ks_x", {"_turbo": {"donor": "ks_a"}})
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"_turbo": {"donor": "ks_b"}}, "v01")
+        tune.resolve_defaults(self.work, "ks_x", self.cat, tune="ax_x", version="v01")
+        tune.resolve_defaults(self.work, "ks_x", self.cat, tune="ax_x")
+        tune.resolve_defaults(self.work, "ks_x", self.cat, version="v01")
+        self.assertEqual(donors, ["ks_b", "ks_a", "ks_b"])
+
+    def test_the_version_is_an_optional_trailing_keyword_after_the_old_arguments(self):
+        for fn, args in ((tune.set_value, ("ks_x", "limiter", "7000", self.cat)), (tune.unset_value, ("ks_x", "limiter", self.cat)),
+                         (tune.unknown_state_ids, ("ks_x", self.cat)), (tune.warn_unknown_state, ("ks_x", self.cat)),
+                         (tune.effective_row, ("ks_x", "limiter", self.cat)), (tune.root_for, ("ks_x",))):
+            with self.subTest(fn.__name__), contextlib.redirect_stderr(io.StringIO()):
+                fn(self.work, *args, version=None)
+                fn(self.work, *args)
+
+    def test_versions_do_not_make_a_tune_or_a_car_folder_appear(self):
+        tune.add_version(self.work, "ks_x", "Drift", "ax01")
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual([t["id"] for t in tune.list_tunes(self.work, "ks_x")], ["ax_x", "ax01"])
+        self.assertEqual(tune.car_folders(self.work), ["ks_x"])
+        self.assertNotIn("versions", tune.known_tune_ids(self.work))
+
+    # ---------------------------------------------------------------------------- command line
+    def test_versions_prints_the_base_and_every_version(self):
+        self.assertEqual(self.main("versions"), (0, "base\n", ""))
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.add_version(self.work, "ks_x", "Wet grip")
+        tune.add_version(self.work, "ks_x", "Own", "ax01")
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base\nv01: Own\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax_x", "--car", "ks_x"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
+
+    def test_version_add_and_rename_print_the_id_and_the_name(self):
+        self.assertEqual(self.main("version-add", " Drift "), (0, "car: ks_x, new version: v01\n", ""))
+        self.assertEqual(self.main("version-add", "Copy", "--from", "v01", "--tune", "ax01")[::2], (1, "error: ks_x has no version v01 of ax01\n"))
+        self.assertEqual(self.main("version-add", "Copy", "--from", "v01"), (0, "car: ks_x, new version: v02\n", ""))
+        self.assertEqual(self.main("version-rename", "v02", "Wet grip"), (0, "v02: Wet grip\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
+        self.assertEqual(self.main("version-add", "ax", "--tune", "ax01"), (0, "car: ks_x, new version: v01\n", ""))
+
+    def test_version_commands_report_runtime_errors_on_stderr_with_exit_1(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        for argv, text in ((("version-add", "drift"), "error: version name drift is already used by v01\n"),
+                           (("version-add", "x" * 41), "error: a version name must be 1 to 40 characters without control characters\n"),
+                           (("version-rename", "v09", "A"), "error: ks_x has no version v09 of ax_x\n"),
+                           (("version-rename", "v1", "A"), "error: version id must be v01 .. v99, got 'v1'\n"),
+                           (("versions", "--tune", "ax99"), "error: ks_x has no tune ax99\n"),
+                           (("version-add", "A", "--tune", "ax99"), "error: ks_x has no tune ax99\n")):
+            with self.subTest(argv):
+                self.assertEqual(self.main(*argv)[::2], (1, text))
+
+    def test_show_with_a_version_prints_its_values_and_the_base_meta_settings(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 6500, "name_suffix": "Ignored"}, "v01")
+        code, out, err = self.main("show", "--version", "v01")
+        rows = {l.split(" | ")[1].strip(): [c.strip(" |") for c in l.split(" | ")] for l in out.splitlines()[2:]}
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(rows["limiter"][2:4], ["6500", "7000"])
+        self.assertEqual(rows["name_suffix"][2], "Base")
+        self.assertEqual(rows["limiter"][0], "*")
+        self.assertEqual([l.split(" | ")[2].strip() for l in self.main("show")[1].splitlines()[2:] if " limiter " in l], ["8000"])
+        self.assertEqual(self.main("show", "--version", "v02")[::2], (1, "error: ks_x has no version v02 of ax_x\n"))
+
+    def test_set_and_unset_with_a_version_write_the_version_only(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(self.main("set", "limiter", "6500", "--version", "v01"), (0, "limiter = 6500\n", ""))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {"limiter": 6500})
+        self.assertEqual(tune.load_state(self.work, "ks_x"), {"limiter": 8000, "name_suffix": "Base"})
+        self.assertEqual(self.main("unset", "limiter", "--version", "v01"), (0, "limiter removed from the state\n", ""))
+        self.assertEqual(self.main("unset", "limiter", "--version", "v01"), (0, "limiter was not set\n", ""))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", "v01"), {})
+
+    def test_set_and_unset_of_a_meta_setting_with_a_version_are_runtime_errors(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        text = "error: name_suffix is shared by all versions, set it on the base\n"
+        self.assertEqual(self.main("set", "name_suffix", "X", "--version", "v01")[::2], (1, text))
+        self.assertEqual(self.main("unset", "name_suffix", "--version", "v01")[::2], (1, text))
+        self.assertEqual(self.main("set", "name_suffix", "X")[::2], (0, ""))
+
+    def test_defaults_with_a_version_prints_the_defaults_of_the_tune(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        code, out, err = self.main("defaults", "--version", "v01")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, self.main("defaults")[1])
+        self.assertEqual(self.main("defaults", "--version", "v05")[::2], (1, "error: ks_x has no version v05 of ax_x\n"))
+        self.assertEqual(self.main("defaults", "--version", "v01", "--tune", "ax01")[::2], (1, "error: ks_x has no version v01 of ax01\n"))
+
+
 # --------------------------------------------------------------------------------------------- work folder
 class TestWorkFolder(Base):
     def test_work_dir_expands_environment_variables(self):
@@ -2374,6 +2704,105 @@ class TestWorkFolder(Base):
         self.assertFalse(os.path.exists(tune.base_dir(self.work, "ks_x")))
 
 
+# --------------------------------------------------------------------------------------------- rename_files
+class TestRenameFiles(CarCase):
+    """rename_files on the stubbed car: the decoded messages come from the stub store, the bytes of the files are placeholders (put_bytes writes text into one)."""
+
+    def setUp(self):
+        super().setUp()
+        self.fc.add("data/old.car", {"engine_path": self.fc.game_path("data/engine.carengine")})
+        self.fc.add("data/other.car", {"x": 1})
+
+    def put_bytes(self, rel, data):
+        return self.write(os.path.join(self.fc.car_root, *rel.split("/")), data, binary=True)
+
+    def decoded(self, rel):
+        return self.fc.store[self.fc.key(os.path.join(self.fc.car_root, *rel.split("/")))]
+
+    def test_the_file_moves_and_the_references_in_decodable_files_are_rewritten(self):
+        gp = self.fc.game_path
+        self.fc.add("presets/a.carfinalstate", {"car_data": gp("data/old.car"), "keep": gp("data/other.car"), "n": 3})
+        self.fc.add("presets/b.carfinalstate", {"car_data": gp("data/other.car")})
+        res = tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+        self.assertEqual(res, {"renamed": [("data/old.car", "data/CarData.car")], "rewritten": {"presets/a.carfinalstate": 1}})
+        self.assertFalse(os.path.exists(os.path.join(self.fc.car_root, "data", "old.car")))
+        self.assertTrue(os.path.isfile(os.path.join(self.fc.car_root, "data", "CarData.car")))
+        self.assertEqual(self.decoded("presets/a.carfinalstate"), {"car_data": gp("data/CarData.car"), "keep": gp("data/other.car"), "n": 3})
+        self.assertEqual(self.decoded("presets/b.carfinalstate"), {"car_data": gp("data/other.car")})
+        self.assertEqual(self.fc.saved, [self.fc.key(os.path.join(self.fc.car_root, "presets", "a.carfinalstate"))])
+
+    def test_a_renamed_file_that_refers_to_itself_is_reported_under_its_new_name(self):
+        self.fc.add("data/old.car", {"self": self.fc.game_path("data/old.car"), "engine_path": "e"})
+        res = tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+        self.assertEqual(res["rewritten"], {"data/CarData.car": 1})
+
+    def test_case_differences_in_the_mapping_and_in_the_texts_are_matched_and_the_slashes_of_a_text_are_kept(self):
+        self.fc.add("presets/a.carfinalstate", {"a": "CONTENT\\CARS\\KS_X\\DATA\\OLD.CAR",
+                                                "b": ["content/cars/ks_x/data/old.car", "content/cars/ks_x/data/old.carx"]})
+        res = tune.rename_files(self.fc.car_root, {"DATA/Old.CAR": "data/CarData.car"})
+        self.assertEqual(res["renamed"], [("data/old.car", "data/CarData.car")])
+        self.assertEqual(self.decoded("presets/a.carfinalstate"),
+                         {"a": "content\\cars\\ks_x\\data\\CarData.car", "b": ["content/cars/ks_x/data/CarData.car", "content/cars/ks_x/data/old.carx"]})
+
+    def test_a_case_only_rename_is_allowed_and_a_taken_name_is_not(self):
+        res = tune.rename_files(self.fc.car_root, {"data/old.car": "data/OLD.CAR"})
+        self.assertEqual(res["renamed"], [("data/old.car", "data/OLD.CAR")])
+        self.assertIn("OLD.CAR", os.listdir(os.path.join(self.fc.car_root, "data")))
+        with self.assertRaisesRegex(ValueError, "cannot rename data/OLD.CAR to data/Other.car: the name is taken"):
+            tune.rename_files(self.fc.car_root, {"data/OLD.CAR": "data/Other.car"})
+
+    def test_a_file_that_holds_the_old_path_but_cannot_be_decoded_is_an_error_and_nothing_changes(self):
+        self.fc.add("presets/a.carfinalstate", {"car_data": self.fc.game_path("data/old.car")})
+        bad = self.put_bytes("presets/bad.carfinalstate", b"\x0a\x2bcontent\\cars\\ks_x\\data\\OLD.car\x10\x01")
+        self.fc.store[self.fc.key(bad)] = ValueError("bad.carfinalstate: truncated")
+        with self.assertRaisesRegex(ValueError, r"^presets/bad.carfinalstate refers to content.cars.ks_x.data.OLD.car, which is renamed, but cannot be decoded "
+                                                r"\(bad.carfinalstate: truncated\); its bytes are not patched$"):
+            tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+        self.assertTrue(os.path.isfile(os.path.join(self.fc.car_root, "data", "old.car")))
+        self.assertEqual((self.fc.saved, self.decoded("presets/a.carfinalstate")["car_data"]), ([], self.fc.game_path("data/old.car")))
+
+    def test_a_file_of_a_type_without_a_message_that_holds_the_old_path_is_an_error(self):
+        self.put_bytes("data/notes.txt", b"see content/cars/ks_x/data/old.car")
+        with self.assertRaisesRegex(ValueError, "^data/notes.txt refers to content/cars/ks_x/data/old.car, which is renamed, but cannot be decoded"):
+            tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+
+    def test_an_undecodable_file_without_the_old_path_is_left_alone(self):
+        bad = self.put_bytes("presets/bad.carfinalstate", b"\x0a\x05hello")
+        self.fc.store[self.fc.key(bad)] = ValueError("truncated")
+        self.put_bytes("data/notes.txt", b"content/cars/ks_x/data/other.car")
+        res = tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+        self.assertEqual((res["rewritten"], self.fc.saved), ({}, []))
+
+    def test_a_decodable_file_that_holds_the_path_outside_a_text_field_is_an_error(self):
+        self.fc.add("presets/a.carfinalstate", {"n": 5})
+        self.put_bytes("presets/a.carfinalstate", b"\x0a\x1bcontent\\cars\\ks_x\\data\\old.car")
+        with self.assertRaisesRegex(ValueError, "^presets/a.carfinalstate refers to .*old.car, which is renamed, but not in a text field of it; its bytes are not patched$"):
+            tune.rename_files(self.fc.car_root, {"data/old.car": "data/CarData.car"})
+        self.assertEqual(self.fc.saved, [])
+
+    def test_bad_mappings_are_refused_before_anything_changes(self):
+        for mapping, message in (({"data/missing.car": "data/CarData.car"}, "missing.car not found in"),
+                                 ({"data": "data2"}, "data is not a file"),
+                                 ({"data/old.car": "../x.car"}, "is not inside"),
+                                 ({"data/old.car": "data/Other.car"}, "the name is taken"),
+                                 ({"data/old.car": "data/a.car", "DATA/OLD.CAR": "data/b.car"}, "a file is listed twice"),
+                                 ({"data/old.car": "data/a.car", "data/other.car": "DATA/A.CAR"}, "a file is listed twice"),
+                                 ({"data/old.car": "data/other.car", "data/other.car": "data/b.car"}, "the name is taken")):
+            with self.subTest(mapping):
+                with self.assertRaisesRegex(ValueError, message):
+                    tune.rename_files(self.fc.car_root, mapping)
+        self.assertEqual(sorted(os.listdir(os.path.join(self.fc.car_root, "data"))),
+                         ["engine.carengine", "old.car", "other.car", "power.curve", "setup.carsetup", "x.car"])
+
+    def test_several_files_and_a_new_folder(self):
+        gp = self.fc.game_path
+        self.fc.add("presets/a.carfinalstate", {"p": gp("data/old.car"), "q": gp("data/other.car")})
+        res = tune.rename_files(self.fc.car_root, {"data/old.car": "data/new/A.car", "data/other.car": "data/B.car"})
+        self.assertEqual(res, {"renamed": [("data/old.car", "data/new/A.car"), ("data/other.car", "data/B.car")], "rewritten": {"presets/a.carfinalstate": 2}})
+        self.assertEqual(self.decoded("presets/a.carfinalstate"), {"p": gp("data/new/A.car"), "q": gp("data/B.car")})
+        self.assertTrue(os.path.isfile(os.path.join(self.fc.car_root, "data", "new", "A.car")))
+
+
 # --------------------------------------------------------------------------------------------- apply
 class TestApply(CarCase):
     def setUp(self):
@@ -2393,7 +2822,7 @@ class TestApply(CarCase):
     def rename(self, src, dst):
         """os.rename that also moves the stub contents of the files below src, like the files themselves."""
         old, new = self.fc.key(src), self.fc.key(dst)
-        moved = [k for k in self.fc.store if k.startswith(old + os.sep)]
+        moved = [k for k in self.fc.store if k == old or k.startswith(old + os.sep)]
         REAL_RENAME(src, dst)
         self.fc.store.update({new + k[len(old):]: self.fc.store.pop(k) for k in moved})
 
@@ -2431,7 +2860,7 @@ class TestApply(CarCase):
             res = self.apply(self.settings(limiter()))
         self.assertEqual(out.getvalue(), "")
         self.assertEqual((res["new_id"], res["applied"], res["notes"], res["installed"], res["backup"], res["size"]),
-                         ("ax_x", [], ["note: from build"], None, None, 7))
+                         ("ax_x", [], ["note: from build", CAR_NOTE], None, None, 7))
         build = self.calls[0]
         self.assertEqual(build[1:], (self.fc.car_root, "ax_x", os.path.join(self.work, "ks_x", "build", "ax_x.partial"), "Car X MY", 1999, "Brand", "Base",
                                      None, {"property_1": "P1", "property_2": "P2", "property_3": "P3"}, False))
@@ -2459,15 +2888,42 @@ class TestApply(CarCase):
                          [("name_suffix", "MY", "_TUNED", ["ax_x.moddedcarcontent"]),
                           ("variant_name", "Base", "My Variant", ["uiresources/localization/en.cars.loc"])])
 
+    def test_the_car_file_of_the_build_is_data_cardata_car_and_every_reference_follows(self):
+        gp = self.fc.game_path
+        self.fc.add("presets/p1.carfinalstate", {"car_data": gp("data/x.car")})
+        self.fc.add("presets/p2.carfinalstate", {"car_data": gp("data/x.car").upper(), "other": gp("data/engine.carengine")})
+        res = self.apply(self.settings(limiter()), {"limiter": 8000})
+        data = os.path.join(res["build_dir"], "content", "cars", "ax_x", "data")
+        self.assertEqual(sorted(n for n in os.listdir(data) if n.lower().endswith(".car")), ["CarData.car"])
+        self.assertEqual(self.built(res, "data/CarData.car")["engine"]["limiter"], 8000)
+        for name in ("p1", "p2"):
+            self.assertEqual(self.built(res, "presets/%s.carfinalstate" % name)["car_data"], "content\\cars\\ax_x\\data\\CarData.car")
+        self.assertEqual(self.built(res, "presets/p2.carfinalstate")["other"], "content\\cars\\ax_x\\data\\engine.carengine")
+        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE])
+        self.assertEqual([a["files"] for a in res["applied"] if a["id"] == "limiter"], [["data/engine.carengine", "data/CarData.car"]])
+        self.assertEqual(self.fc.store[self.fc.key(os.path.join(self.fc.car_root, "presets", "p1.carfinalstate"))]["car_data"], gp("data/x.car"))
+        self.assertTrue(os.path.isfile(os.path.join(self.fc.car_root, "data", "x.car")))
+
+    def test_a_car_file_that_is_named_cardata_already_is_not_touched(self):
+        os.remove(os.path.join(self.fc.car_root, "data", "x.car"))
+        self.fc.add("data/CARDATA.car", self.car)
+        self.fc.add("presets/p1.carfinalstate", {"car_data": self.fc.game_path("data/CARDATA.car")})
+        self.patch(tune, "rename_files", lambda *a, **k: self.fail("rename_files"))
+        res = self.apply(self.settings(limiter()), {"limiter": 8000})
+        self.assertEqual(res["notes"], ["note: from build"])
+        self.assertEqual(self.built(res, "data/CARDATA.car")["engine"]["limiter"], 8000)
+        self.assertEqual(self.built(res, "presets/p1.carfinalstate")["car_data"], "content\\cars\\ax_x\\data\\CARDATA.car")
+        self.assertEqual([a["files"] for a in res["applied"] if a["id"] == "limiter"], [["data/engine.carengine", "data/CARDATA.car"]])
+
     def test_a_changed_value_is_written_into_every_resolved_copy_of_the_build_only(self):
         before = {k: json.dumps(v, sort_keys=True) for k, v in self.fc.store.items()}
         res = self.apply(self.settings(limiter()), {"limiter": 8000})
         self.assertEqual(self.built(res, "data/engine.carengine")["limiter"], 8000)
-        self.assertEqual(self.built(res, "data/x.car")["engine"]["limiter"], 8000)
+        self.assertEqual(self.built(res, "data/CarData.car")["engine"]["limiter"], 8000)
         self.assertEqual({k: json.dumps(v, sort_keys=True) for k, v in self.fc.store.items() if k in before}, before)
         self.assertTrue(all(p.startswith(self.fc.key(res["build_dir"])) for p in self.fc.saved))
         item = [a for a in res["applied"] if a["id"] == "limiter"][0]
-        self.assertEqual((item["old"], item["new"], item["files"]), (7000, 8000, ["data/engine.carengine", "data/x.car"]))
+        self.assertEqual((item["old"], item["new"], item["files"]), (7000, 8000, ["data/engine.carengine", "data/CarData.car"]))
 
     def test_unchanged_settings_are_not_written(self):
         res = self.apply(self.settings(limiter(), mini_setting("m", targets=[("@engine", "minimum")])), {"m": 900.0})
@@ -2507,7 +2963,7 @@ class TestApply(CarCase):
     def test_create_missing_creates_the_objects_on_the_way(self):
         s = mini_setting("arb", targets=[("@car", "suspensions.arbFront.stiffness")], create_missing=True)
         res = self.apply(self.settings(s), {"arb": 1000.0})
-        self.assertEqual(self.built(res, "data/x.car")["suspensions"], {"arbFront": {"stiffness": 1000.0}})
+        self.assertEqual(self.built(res, "data/CarData.car")["suspensions"], {"arbFront": {"stiffness": 1000.0}})
 
     def test_curve_scale_multiplies_every_point_value(self):
         s = mini_setting("ps", kind="curve_scale", default=1.0, curve_from={"file": "@engine", "path": "powerCurve"}, targets=[])
@@ -2523,11 +2979,11 @@ class TestApply(CarCase):
 
     def test_flag_writes_its_value_into_all_resolved_copies_and_skips_absent_zero_fields(self):
         res = self.apply(self.settings(self.flag()), {"aids": True})
-        modes = self.built(res, "data/x.car")["performance_modes"]
+        modes = self.built(res, "data/CarData.car")["performance_modes"]
         self.assertEqual([m["electronics_settings"] for m in modes], [{"tc1": 0, "esc": 2}, {"tc1": 0, "tc2": 0}])
         self.assertEqual(self.built(res, "data/setup.carsetup")["electronics"]["tc1"], 0)
         item = [a for a in res["applied"] if a["id"] == "aids"][0]
-        self.assertEqual((item["old"], item["new"], sorted(item["files"])), (False, True, ["data/setup.carsetup", "data/x.car"]))
+        self.assertEqual((item["old"], item["new"], sorted(item["files"])), (False, True, ["data/CarData.car", "data/setup.carsetup"]))
 
     def test_the_static_camber_settings_write_both_wheels_of_their_axle(self):
         real = [s for s in REAL_LOAD_CATALOGUE()["settings"] if s["id"] in ("static_camber_front", "static_camber_rear")]
@@ -2557,6 +3013,18 @@ class TestApply(CarCase):
         items = {a["id"]: a for a in res["applied"]}
         self.assertEqual(list(items), ["turbo_wastegate_2"])
         self.assertEqual((items["turbo_wastegate_2"]["old"], items["turbo_wastegate_2"]["new"]), (0.785, 1.25))
+
+    def test_the_force_feedback_multiplier_writes_the_controls_of_the_car_and_nothing_else(self):
+        real = [s for s in REAL_LOAD_CATALOGUE()["settings"] if s["id"] == "ff_mult"]
+        self.assertEqual([s["id"] for s in real], ["ff_mult"])
+        self.car["controls"] = {"ffMult": 1.75, "linearSteerRodRatio": 0.0017}
+        res = self.apply(self.settings(*real), {"ff_mult": 2.25})
+        built = self.built(res, "data/CarData.car")
+        self.assertEqual(built["controls"], {"ffMult": 2.25, "linearSteerRodRatio": 0.0017})
+        self.assertEqual(built["engine"], {"limiter": 7000.0, "minimum": 900})
+        items = {a["id"]: a for a in res["applied"]}
+        self.assertEqual(list(items), ["ff_mult"])
+        self.assertEqual((items["ff_mult"]["old"], items["ff_mult"]["new"], items["ff_mult"]["files"]), (1.75, 2.25, ["data/CarData.car"]))
 
     def test_flag_that_is_off_writes_nothing(self):
         res = self.apply(self.settings(self.flag()), {"aids": False})
@@ -2716,7 +3184,7 @@ class TestApply(CarCase):
                                                              os.path.join(self.work, "ks_x", "build", "ax01", "ax01.kspkg")))
         self.assertEqual((self.calls[0][2], self.calls[0][4]), ("ax01", "Car X _DRIFT"))
         self.assertEqual(self.built(res, "data/engine.carengine")["limiter"], 8000)
-        self.assertEqual(self.built(res, "data/x.car")["engine"]["limiter"], 8000)
+        self.assertEqual(self.built(res, "data/CarData.car")["engine"]["limiter"], 8000)
         self.assertEqual([(a["id"], a["new"]) for a in res["applied"]], [("name_suffix", "_DRIFT"), ("limiter", 8000)])
         self.assertEqual(os.listdir(os.path.join(self.work, "ks_x", "build")), ["ax01"])
 
@@ -2798,7 +3266,7 @@ class TestApply(CarCase):
         res = self.apply(self.settings(s), {"dy": 1.4})
         own = "data/tyres/ax_x_front.tyre"
         self.assertEqual(tune.plain(self.built(res, own)["modelData"]["Dy0"]), 1.4)
-        self.assertEqual(self.built(res, "data/x.car")["frontTyreCompounds"],
+        self.assertEqual(self.built(res, "data/CarData.car")["frontTyreCompounds"],
                          ["content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre", GAME_SHARED + "tyres\\slick\\s.tyre"])
         compounds = self.built(res, "presets/c.compatibletyres")["physic_compounds"]
         self.assertEqual(compounds[0]["front_tyre_data_path"], "content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre")
@@ -2806,8 +3274,8 @@ class TestApply(CarCase):
         self.assertEqual(compounds[1]["front_tyre_data_path"], GAME_SHARED + "tyres\\slick\\s.tyre")
         item = [a for a in res["applied"] if a["id"] == "dy"][0]
         self.assertEqual(item["files"], [own])
-        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-1])
-        self.assertIn("in 1 .car entry(ies) and 1 compatibletyres entry(ies)", res["notes"][-1])
+        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-2])
+        self.assertIn("in 1 .car entry(ies) and 1 compatibletyres entry(ies)", res["notes"][-2])
 
     def test_a_tyre_file_inside_the_car_folder_is_refused_before_building(self):
         self.fc.add("data/tyres/own.tyre", {"modelData": {"Dy0": 1.0}})
@@ -2823,14 +3291,14 @@ class TestApply(CarCase):
         res = self.apply(self.settings(s), {"dy": 1.4})
         self.assertEqual(self.fc.store[self.fc.key(os.path.join(self.fc.shared, "tyres", "road", "a.tyre"))]["modelData"]["Dy0"], 1.2)
         self.assertNotIn(self.fc.key(os.path.join(res["build_dir"], "content", "cars", "ax_x", "data", "tyres", "ax_x_rear.tyre")), self.fc.store)
-        self.assertEqual(self.built(res, "data/x.car")["rearTyreCompounds"], [GAME_SHARED + "tyres\\road\\b.tyre"])
+        self.assertEqual(self.built(res, "data/CarData.car")["rearTyreCompounds"], [GAME_SHARED + "tyres\\road\\b.tyre"])
 
     def test_both_axles_get_their_own_file_when_both_change(self):
         s = [self.tyre_world(), mini_setting("dyr", targets=[("@tyre_rear", "modelData.Dy0")])]
         res = self.apply(self.settings(*s), {"dy": 1.4, "dyr": 1.3})
         self.assertEqual(tune.plain(self.built(res, "data/tyres/ax_x_front.tyre")["modelData"]["Dy0"]), 1.4)
         self.assertEqual(tune.plain(self.built(res, "data/tyres/ax_x_rear.tyre")["modelData"]["Dy0"]), 1.3)
-        self.assertEqual(self.built(res, "data/x.car")["rearTyreCompounds"], ["content\\cars\\ax_x\\data\\tyres\\ax_x_rear.tyre"])
+        self.assertEqual(self.built(res, "data/CarData.car")["rearTyreCompounds"], ["content\\cars\\ax_x\\data\\tyres\\ax_x_rear.tyre"])
 
     def test_a_choice_setting_writes_the_text_of_the_choice(self):
         s = mini_setting("th", type="enum", choices=["road", "slick"], targets=[("@tyre_front", "thermalData.thermalPerformanceCurve")],
@@ -3829,7 +4297,7 @@ class TestUsageText(unittest.TestCase):
 
     def test_every_usage_line_is_a_command_main_dispatches(self):
         commands = [line.split()[2] for line in self.usage_lines()]
-        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
+        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
                                     "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "garage", "garage-set", "garage-reset", "turbo-donors",
                                     "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
         self.assertEqual(list(tune.COMMANDS), commands)
@@ -3876,6 +4344,18 @@ usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("unknown_command", ["fr
                                   ("duplicate_tune_with_draft", ["duplicate", "--tune", "ax01", "--draft"]), ("duplicate_with_all", ["duplicate", "--all"]),
                                   ("defaults_with_variant_and_tune", ["defaults", "--variant", "q_drift", "--tune", "ax01"]),
                                   ("variants_with_a_positional", ["variants", "x"]), ("variants_with_a_tune", ["variants", "--tune", "ax01"]),
+                                  ("defaults_with_variant_and_version", ["defaults", "--variant", "q_drift", "--version", "v01"]),
+                                  ("versions_with_a_positional", ["versions", "x"]), ("versions_with_a_version", ["versions", "--version", "v01"]),
+                                  ("versions_with_draft", ["versions", "--draft"]), ("version_add_without_a_name", ["version-add"]),
+                                  ("version_add_with_two_names", ["version-add", "a", "b"]), ("version_add_with_draft", ["version-add", "a", "--draft"]),
+                                  ("version_add_from_without_value", ["version-add", "a", "--from"]),
+                                  ("version_rename_with_one_operand", ["version-rename", "v01"]),
+                                  ("version_rename_with_three_operands", ["version-rename", "v01", "a", "b"]),
+                                  ("version_rename_with_draft", ["version-rename", "v01", "a", "--draft"]),
+                                  ("show_with_version_and_draft", ["show", "--version", "v01", "--draft"]),
+                                  ("set_with_version_and_draft", ["set", "limiter", "1", "--version", "v01", "--draft"]),
+                                  ("unset_with_version_and_draft", ["unset", "limiter", "--version", "v01", "--draft"]),
+                                  ("show_with_version_without_value", ["show", "--version"]), ("apply_with_a_version", ["apply", "--version", "v01"]),
                                   ("init_with_a_tune", ["init", "--tune", "ax01"]),
                                   ("cars_with_a_tune", ["cars", "--tune", "ax01"]), ("show_with_draft", ["show", "--draft"]),
                                   ("apply_with_new_id_without_value", ["apply", "--tune", "ax01", "--new-id"])), tune, real=("no_arguments",))

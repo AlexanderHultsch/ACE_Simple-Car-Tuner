@@ -257,7 +257,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 36, calls)
+        self.assertEqual(len(calls), 38, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -282,7 +282,7 @@ class TestApiContract(unittest.TestCase):
         self.assertEqual(called_paths(), set(self.ROUTES))
 
     def test_the_state_fields_the_page_reads_are_sent_by_the_server(self):
-        sent = quoted_words(ts.api_state, ts.installed_info, ts.modded_cars, ts.tune_proposals) | set(ts.JOB)
+        sent = quoted_words(ts.api_state, ts.mod_info, ts.installed_info, ts.modded_cars, ts.tune_proposals) | set(ts.JOB)
         read = set(re.findall(r"\bserverState\.(\w+)", CODE)) | set(re.findall(r"\binst\.(\w+)", CODE)) | set(re.findall(r"\bjob\.(\w+)", CODE))
         self.assertTrue({"base_present", "game_running", "job", "installed", "cars", "car", "work", "tune", "modded", "modded_error",
                          "proposed_new_id", "proposed_suffix", "stock_id_length"} <= read, sorted(read))
@@ -1151,7 +1151,7 @@ class TestModdedCars(unittest.TestCase):
 
     def test_the_selection_survives_a_poll_and_is_part_of_the_selector_signature(self):
         body = function_body("renderCars")
-        self.assertIn("JSON.stringify([optionGroups, selection])", body)
+        self.assertIn("JSON.stringify([optionGroups, selection, versions])", body)
         self.assertIn("select.value = choiceValue(selection);", body)
         self.assertIn("selection = { car: serverState.car, tune: serverState.tune };", function_body("refresh"))
 
@@ -1319,6 +1319,112 @@ class TestVariantView(unittest.TestCase):
         self.assertEqual(len(re.findall(r"variant", function_body("api"))), 3)
         for route in ts.POST_ROUTES:
             self.assertNotIn("variant", inspect.getsource(ts.POST_ROUTES[route]))
+
+
+class TestVersions(unittest.TestCase):
+    """The versions of a modded car: the Version select, Add / Rename version, the shared settings, the "Where it lives" line."""
+
+    def test_the_version_select_sits_next_to_the_car_select_and_lists_the_base_first(self):
+        self.assertIn('<select id="version-select" aria-label="Version" disabled></select>', MARKUP)
+        self.assertLess(MARKUP.index('id="car-select"'), MARKUP.index('id="version-select"'))
+        self.assertIn('<label id="version-field" class="selectrow" hidden>Version', MARKUP)
+        body = function_body("renderCars")
+        self.assertIn('[["", "Base"]].concat(versions.map((v) => [v.id, v.name]))', body)
+        self.assertIn("o.value = id;", body)
+        self.assertIn('versionSelect.value = selection.version || "";', body)
+        self.assertIn('$("version-field").hidden = !moddedEntry();', body)
+        self.assertIn("const versions = moddedEntry() ? versionList() : [];", body)
+
+    def test_changing_the_version_selects_it_and_reloads_through_switch_car(self):
+        self.assertIn('$("version-select").addEventListener("change", () => switchCar(versionSelection($("version-select").value)));', CODE)
+        body = function_body("versionSelection")
+        self.assertIn("{ car: selection.car, tune: selection.tune, version: id }", body)
+        self.assertIn("{ car: selection.car, tune: selection.tune }", body)
+        self.assertIn("tableLoaded = false;", function_body("switchCar"))
+        self.assertIn("refresh();", function_body("switchCar"))
+
+    def test_the_selection_remembers_the_version_and_falls_back_to_the_base_when_it_is_gone(self):
+        stored = function_body("storedSelection")
+        self.assertIn('typeof s.version === "string" && s.version && s.tune !== DRAFT', stored)
+        self.assertIn("version: s.version", stored)
+        self.assertIn("a.version === b.version", function_body("sameSelection"))
+        body = function_body("refresh")
+        self.assertIn("if (want.version && want.tune === serverState.tune) selection.version = want.version;", body)
+        self.assertIn("if (selection.version && serverState && serverState.tune === selection.tune && !versionEntry()) {", body)
+        self.assertIn("switchCar({ car: selection.car, tune: selection.tune });", body)
+        self.assertIn("serverState.versions", function_body("versionList"))
+
+    def test_the_requests_of_a_version_carry_it_in_the_query_of_a_get_and_the_body_of_a_post(self):
+        listed = set(re.findall(r'"(/api/\w+)"', re.search(r"const VERSION_PATHS = \[(.*?)\];", CODE, re.S).group(1)))
+        self.assertEqual(listed, set(ts.VERSION_GET_ROUTES) | set(ts.VERSION_POST_ROUTES))
+        body = function_body("api")
+        self.assertIn('!!target.version && VERSION_PATHS.includes(path.split("?")[0])', body)
+        self.assertIn('path += "&version=" + encodeURIComponent(target.version);', body)
+        self.assertIn("versioned ? { version: target.version } : {}", body)
+
+    def test_every_route_with_a_version_on_the_server_reads_it_from_the_request(self):
+        for route in ts.VERSION_POST_ROUTES:
+            self.assertIn('body.get("version")', inspect.getsource(ts.POST_ROUTES[route]), route)
+        for route in ts.VERSION_GET_ROUTES:
+            self.assertIn("version", inspect.signature(ts.GET_ROUTES[route]).parameters, route)
+
+    def test_add_and_rename_version_are_buttons_that_open_a_dialog_and_post_the_name(self):
+        self.assertIn('<button id="btn-version-add" type="button" hidden disabled>Add version&hellip;</button>', MARKUP)
+        self.assertIn('<button id="btn-version-rename" type="button" hidden disabled>Rename version&hellip;</button>', MARKUP)
+        self.assertIn('<input id="version-dialog-name"', MARKUP)
+        self.assertIn('$("btn-version-add").addEventListener("click", () => openVersionDialog("add"));', CODE)
+        self.assertIn('$("btn-version-rename").addEventListener("click", () => openVersionDialog("rename"));', CODE)
+        self.assertNotIn("window.prompt", CODE)
+        body = function_body("submitVersionDialog")
+        self.assertIn('await api("/api/version_add", { name: name, from: target.version }, target);', body)
+        self.assertIn('await api("/api/version_rename", { name: name, version: target.version }, target);', body)
+        self.assertIn("switchCar({ car: target.car, tune: target.tune, version: res.id });", body)
+        self.assertIn("showVersionDialogError(e.message);", body)
+        self.assertIn("The new version starts as a copy of ", function_body("openVersionDialog"))
+        self.assertIn("if (!add && !current) return;", function_body("openVersionDialog"))
+
+    def test_the_rename_button_is_for_a_version_only_and_both_follow_the_modded_car_and_the_job(self):
+        body = function_body("renderButtons")
+        self.assertIn('$("btn-version-add").hidden = !moddedSelected;', body)
+        self.assertIn('$("btn-version-rename").hidden = !moddedSelected;', body)
+        self.assertIn('(selection.version ? "" : "select a version to rename it, the base has no version name")', body)
+        self.assertIn('whyVersion = "a job is running";', body)
+
+    def test_the_meta_rows_of_a_version_are_read_only_with_a_note(self):
+        body = function_body("renderButtons")
+        view = body[body.index("if (selection.version) {"):]
+        self.assertIn('if (r.data.kind === "meta") {', view)
+        self.assertIn("r.field.disabled = true;", view)
+        self.assertIn("r.reset.disabled = true;", view)
+        self.assertIn("Shared by all versions; change it on the base", function_body("buildHeaderRow"))
+        self.assertIn('if (target.version && data.kind === "meta") valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));',
+                      function_body("buildRow"))
+
+    def test_create_and_duplicate_are_off_with_a_version_and_apply_stays_on(self):
+        body = function_body("renderButtons")
+        self.assertIn('if (whyDuplicate === "" && selection.version) whyDuplicate = "select the base version to create or duplicate";', body)
+        self.assertIn('$("btn-apply").disabled = why !== "";', body)
+        self.assertNotIn("selection.version", body[body.index('$("btn-apply").textContent'):body.index('$("btn-duplicate").disabled')])
+
+    def test_where_it_lives_names_the_package_and_the_versions_folder_and_says_the_page_never_deletes(self):
+        self.assertIn('<p id="mod-paths" class="tunenote" hidden></p>', MARKUP)
+        body = function_body("renderModPaths")
+        self.assertIn("serverState.mod_paths", body)
+        self.assertIn("paths.package", body)
+        self.assertIn("paths.versions_folder", body)
+        self.assertIn("To remove a version, delete its folder by hand, then press Apply. The page never deletes.", body)
+        self.assertIn("renderModPaths();", function_body("refresh"))
+        self.assertNotIn("version_delete", CODE)
+
+    def test_the_apply_summary_lists_the_versions_of_the_build(self):
+        body = function_body("summaryApply")
+        self.assertIn("if (res.versions && res.versions.length) {", body)
+        self.assertIn('"versions: " + res.versions.map((v) => v.name + " (" + v.files + (v.files === 1 ? " file" : " files") + " of its own)").join(", ")', body)
+
+    def test_the_server_sends_the_state_fields_of_the_versions_the_page_reads(self):
+        read = set(re.findall(r"\bserverState\.(\w+)", CODE))
+        self.assertTrue({"versions", "mod_paths"} <= read)
+        self.assertTrue({"versions", "mod_paths"} <= quoted_words(ts.mod_info))
 
 
 class TestTabs(unittest.TestCase):
@@ -1818,7 +1924,7 @@ class TestGarage(unittest.TestCase):
         self.assertIn('await api("/api/garage_set", { keys: keys }, target);', send)
         self.assertIn("showGarage(target, res.garage);", send)
         self.assertEqual(set(re.findall(r'\b(\w+):', re.search(r'api\("/api/garage_set", (\{[^}]*\})', CODE).group(1))),
-                         set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_garage_set))) - {"tune"})
+                         set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_garage_set))) - {"tune", "version"})
 
     def test_unticking_the_last_tyre_is_prevented_with_a_message_and_no_call(self):
         body = function_body("garageChanged")
@@ -2071,7 +2177,7 @@ class TestTurboKit(unittest.TestCase):
         self.assertIn('await api("/api/turbo_reset", {}, target);', reset)
         self.assertIn("showTurbo(target, res.turbo);", reset)
         fields = set(re.findall(r"\b(\w+):", re.search(r'api\("/api/turbo_set", (\{[^}]*\})', CODE).group(1)))
-        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_turbo_set))) - {"tune"})
+        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_turbo_set))) - {"tune", "version"})
 
     def test_the_server_answer_wins_over_what_the_page_showed(self):
         show = function_body("showTurbo")
@@ -2312,7 +2418,7 @@ class TestSounds(unittest.TestCase):
         self.assertIn('await api("/api/sound_set", { slot: slot, key: key }, target);', send)
         self.assertIn("showSounds(target, res);", send)
         fields = set(re.findall(r"\b(\w+):", re.search(r'api\("/api/sound_set", (\{[^}]*\})', CODE).group(1)))
-        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_sound_set))) - {"tune"})
+        self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_sound_set))) - {"tune", "version"})
 
     def test_reset_posts_sound_reset_without_a_slot_through_the_queue_and_is_off_unless_something_is_stored(self):
         self.assertIn('$("btn-sound-reset").addEventListener("click", resetSounds);', CODE)

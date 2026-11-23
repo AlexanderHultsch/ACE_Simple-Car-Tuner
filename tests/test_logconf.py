@@ -130,7 +130,7 @@ class TestChannelTable(unittest.TestCase):
 
     def test_every_catalogue_setting_is_in_the_table_in_catalogue_order(self):
         self.assertEqual(list(RAW["settings"]), [s["id"] for s in CAT["settings"]])
-        self.assertEqual(len(RAW["settings"]), 147)
+        self.assertEqual(len(RAW["settings"]), 148)
 
     def test_exactly_these_33_settings_are_direct(self):
         direct = [i for i, e in RAW["settings"].items() if e["status"] == "direct"]
@@ -153,7 +153,7 @@ class TestChannelTable(unittest.TestCase):
     def test_every_other_setting_is_indirect(self):
         indirect = {i for i, e in RAW["settings"].items() if e["status"] == "indirect"}
         self.assertEqual(indirect, set(RAW["settings"]) - set(DIRECT) - NONE)
-        self.assertEqual(len(indirect), 90)
+        self.assertEqual(len(indirect), 91)
 
     def test_every_non_direct_entry_has_no_channels_and_a_note(self):
         for sid, e in RAW["settings"].items():
@@ -1268,7 +1268,7 @@ class TestAiCommand(unittest.TestCase):
             entries = line.split(": ", 1)[1].split("; ")
             self.assertEqual(len(entries), len(ids))
             self.assertEqual(sorted(entries), sorted("%s (%s)" % (labels[i], i) for i in ids))
-        self.assertEqual((len(indirect.split("; ")), len(none.split("; "))), (90, 24))
+        self.assertEqual((len(indirect.split("; ")), len(none.split("; "))), (91, 24))
         self.assertIn("Final drive ratio (final_ratio)", indirect)
         self.assertIn("Handbrake torque (handbrake_torque)", none)
         for sid in ("final_ratio", "handbrake_torque", "gear_1", "toe_front"):

@@ -27,6 +27,7 @@ TURBO_ENTRY = "content\\cars\\ax_x\\data\\kit_turbo_%d.turbo"
 KIT_ENTRY = "content\\cars\\ks_x\\data\\kit_turbo_%d.turbo"
 ENGINE_FIELDS = ["turbos_to_load", "turbos", "max_turbo_boost", "bov_noise"]
 INLINE_FIELDS = ["turbos_to_load", "turbos", "max_turbo_boost"]
+CAR_NOTE = "note: car file: data/%s.car renamed to data/CarData.car (the paint shop of a mod car expects that name)"
 
 
 def plain_tree(v):
@@ -787,7 +788,7 @@ class TestApplyWithAKit(Apply):
         self.assertEqual(engine["turbos_to_load"], [TURBO_ENTRY % 0, TURBO_ENTRY % 1])
         for entry in engine["turbos_to_load"]:
             self.assertTrue(os.path.isfile(os.path.join(res["build_dir"], *entry.split("\\"))), entry)
-        self.assertEqual(self.built(res, "data/ax_x.car")["engine"]["turbos_to_load"], [TURBO_ENTRY % 0, TURBO_ENTRY % 1])
+        self.assertEqual(self.built(res, "data/CarData.car")["engine"]["turbos_to_load"], [TURBO_ENTRY % 0, TURBO_ENTRY % 1])
         for dp, dn, names in os.walk(res["build_dir"]):
             for n in dn + names:
                 self.assertNotIn("ks_x", n)
@@ -798,7 +799,7 @@ class TestApplyWithAKit(Apply):
     def test_the_engine_of_the_build_has_the_turbo_fields_and_the_changed_value_is_in_all_three_copies(self):
         self.with_kit("ks_a")
         res = self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1, "max_turbo_boost": 1.15})
-        engine, car, turbo = (self.built(res, "data/engine.carengine"), self.built(res, "data/ax_x.car"), self.built(res, "data/kit_turbo_0.turbo"))
+        engine, car, turbo = (self.built(res, "data/engine.carengine"), self.built(res, "data/CarData.car"), self.built(res, "data/kit_turbo_0.turbo"))
         self.assertEqual((engine["turbos"][0]["max_boost"], turbo["max_boost"], car["engine"]["turbos"][0]["max_boost"]), (1.1, 1.1, 1.1))
         self.assertEqual((engine["max_turbo_boost"], car["engine"]["max_turbo_boost"]), (1.15, 1.15))
         self.assertEqual((engine["bov_noise"], engine["turbos"][0]["lag"], turbo["lag"]), (0.4, 0.5, 0.3))
@@ -806,7 +807,7 @@ class TestApplyWithAKit(Apply):
         self.assertEqual(sorted(a["id"] for a in res["applied"]), ["max_turbo_boost", "turbo_boost_1"])
         applied = next(a for a in res["applied"] if a["id"] == "turbo_boost_1")
         self.assertEqual((applied["old"], applied["new"], applied["files"]),
-                         (0.8, 1.1, ["data/engine.carengine", "data/kit_turbo_0.turbo", "data/ax_x.car"]))
+                         (0.8, 1.1, ["data/engine.carengine", "data/kit_turbo_0.turbo", "data/CarData.car"]))
 
     def test_the_kit_files_and_base_keep_the_donor_values(self):
         self.with_kit("ks_a")
@@ -824,7 +825,7 @@ class TestApplyWithAKit(Apply):
         self.assertEqual(res["notes"], ["note: from build",
                                         "note: turbo kit: donor ks_a (single turbo): files data/kit_turbo_0.turbo, engine fields turbos_to_load, turbos, "
                                         "max_turbo_boost, bov_noise",
-                                        "note: turbo kit: .car engine fields turbos_to_load, turbos, max_turbo_boost"])
+                                        "note: turbo kit: .car engine fields turbos_to_load, turbos, max_turbo_boost", CAR_NOTE % "ax_x"])
         self.assertEqual(res["applied"], [])
 
     def test_a_donor_without_an_inline_block_gives_only_the_first_note(self):
@@ -832,7 +833,7 @@ class TestApplyWithAKit(Apply):
         res = self.apply()
         self.assertEqual(res["notes"], ["note: from build",
                                         "note: turbo kit: donor ks_s (single turbo): files data/kit_turbo_0.turbo, engine fields turbos_to_load, turbos, "
-                                        "max_turbo_boost, bov_noise"])
+                                        "max_turbo_boost, bov_noise", CAR_NOTE % "ax_x"])
         self.assertEqual(self.built(res, "data/engine.carengine")["turbos_to_load"], ["CONTENT/CARS/AX_X/data/kit_turbo_0.turbo"])
 
     def test_a_twin_donor_gives_two_files_and_both_turbo_settings_write_their_own_copies(self):
@@ -841,7 +842,7 @@ class TestApplyWithAKit(Apply):
         self.assertEqual([p for p in self.packed[-1] if "kit_turbo" in p], ["content/cars/ax_x/data/kit_turbo_%d.turbo" % n for n in (0, 1)])
         self.assertEqual([self.built(res, "data/kit_turbo_%d.turbo" % n)["max_boost"] for n in (0, 1)], [1.0, 1.3])
         self.assertEqual([t["max_boost"] for t in self.built(res, "data/engine.carengine")["turbos"]], [1.0, 1.3])
-        self.assertEqual([t["max_boost"] for t in self.built(res, "data/ax_x.car")["engine"]["turbos"]], [1.0, 1.3])
+        self.assertEqual([t["max_boost"] for t in self.built(res, "data/CarData.car")["engine"]["turbos"]], [1.0, 1.3])
         self.assertIn("note: turbo kit: donor ks_b (twin turbo): files data/kit_turbo_0.turbo, data/kit_turbo_1.turbo, engine fields", res["notes"][1])
 
     def test_the_kit_is_built_before_the_build_folder_is_written(self):
@@ -923,7 +924,7 @@ class TestApplyWithAKit(Apply):
         with mock.patch.object(tune, "garage_plan", return_value={"garage": True, "entries": [{"key": "stock:x|y"}]}) as plan, \
                 mock.patch.object(tune, "write_garage", return_value=["note: garage"]) as write:
             res = self.apply(state)
-        self.assertEqual(res["notes"][-1], "note: garage")
+        self.assertEqual(res["notes"][-2], "note: garage")
         self.assertEqual(res["notes"][1][:25], "note: turbo kit: donor ks")
         self.assertEqual((plan.call_count, write.call_count), (1, 1))
         self.assertEqual(write.call_args[0][0], os.path.join(self.work, "ks_x", "kit", "ks_a"))
@@ -968,7 +969,7 @@ class TestApplyWithoutAKit(Apply):
         self.patch(tune, "kit_root", lambda *a: self.fail("kit_root"))
         self.patch(tune, "kit_notes", lambda *a: self.fail("kit_notes"))
         res = self.apply({"limiter": 8000, "name_suffix": "_Z"})
-        self.assertEqual((res["notes"], [a["id"] for a in res["applied"]]), (["note: from build"], ["name_suffix", "limiter"]))
+        self.assertEqual((res["notes"], [a["id"] for a in res["applied"]]), (["note: from build", CAR_NOTE % "ax_x"], ["name_suffix", "limiter"]))
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "kit")))
         self.assertEqual([t for t in self.tree(res) if "kit_turbo" in t], [])
         self.assertEqual(self.built(res, "data/engine.carengine"), self.read(self.base_file("ks_x", "data/engine.carengine")) | {"limiter": 8000.0})
@@ -999,7 +1000,7 @@ class TestApplyWithoutAKit(Apply):
         self.assertEqual([t for t in self.tree(again) if "kit_turbo" in t], [])
         self.assertNotIn("turbos", self.built(again, "data/engine.carengine"))
         self.assertEqual(self.built(again, "data/engine.carengine").get("turbos_to_load"), None)
-        self.assertEqual(self.built(again, "data/ax_x.car"), self.built(first, "data/ax_x.car"))
+        self.assertEqual(self.built(again, "data/CarData.car"), self.built(first, "data/CarData.car"))
 
     def test_a_turbo_setting_without_a_kit_is_refused_at_apply_as_before(self):
         self.write(tune.state_path(self.work, "ks_x"), {"turbo_boost_1": 1.1})
@@ -1012,7 +1013,7 @@ class TestApplyWithoutAKit(Apply):
         res = tune.apply(self.work, "ks_a", catalogue=self.cat, game=self.game, install=False)
         self.assertEqual(res["new_id"], "ax_a")
         self.assertEqual(self.read(self.car_file(res["build_dir"], "ax_a", "data/engine.carengine"))["turbos"][0]["max_boost"], 0.9)
-        self.assertEqual(res["notes"], ["note: from build"])
+        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE % "ax_a"])
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_a", "kit")))
 
 

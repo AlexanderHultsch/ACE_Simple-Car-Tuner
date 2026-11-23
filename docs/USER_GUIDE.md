@@ -54,6 +54,16 @@ Borrowing sounds from other cars (optional, not heard in the game yet): the pane
 3. Press **Create modded car…** or **Apply (update this car)**. The build log lists the change, for example `sound turbo: turbo_none -> turbo_rx7`. Only the turbo and backfire sound change; the engine sound, the power and the handling stay as they are.
 4. If a chosen sound disappears (its car was removed from the work folder) Apply refuses until you change or reset it.
 
+### Versions of a modded car (several setups in one car)
+
+A modded car can carry several complete setups as **versions**. In the game you pick the car and then its version, like the game's own Toyota Supra MKIV with its Drift version.
+
+1. Select your modded car in the selector. Next to it a **Version** list appears: **Base** is the car's own setup.
+2. Press **Add version…**, type a name (it is shown in the game as the version's name, at most 40 characters) and confirm: the new version starts as a copy of the version you were looking at and is selected.
+3. Change the values of the version as usual. Every setting can differ per version (power, turbo, gears, differential, mass, steering, force feedback, springs, anti-roll bars, dampers, camber, ride height, tyres, sounds); only the name suffix is shared by all versions and can only be changed on **Base**.
+4. Press **Apply**: one package with all versions is built and installed. Start the game and choose the version in the car selection.
+5. **Rename version…** renames the selected version. The page never deletes anything: the line **Where it lives** shows the installed package and the versions folder; to remove a version, delete its folder there by hand, then press Apply.
+
 "unverified" next to a description means the meaning is guessed from the setting's name and not yet confirmed in the game. A "copies differ in stock" badge means the game's own files disagree about that value; applying writes your value to every copy. Every setting is explained in its row of the table. Where a setting has an entry in the official physics documentation of the game (https://docs.assetto.cn/en/evo/car/physics/), its description starts with the official statement and continues with our notes; the rules learned from it are in [docs/TUNER_SPEC.md](TUNER_SPEC.md) section 6c.
 
 ## Log what the game does (optional, not tried with the game yet)

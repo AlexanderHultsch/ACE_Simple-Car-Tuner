@@ -37,7 +37,7 @@ REAL_CATALOGUE = tune.load_catalogue()
 GAME_ARGV = ["tasklist", "/FI", "IMAGENAME eq AssettoCorsaEVO.exe", "/NH", "/FO", "CSV"]
 STATE_KEYS = {"work", "car", "tune", "default_car", "cars", "base_present", "game_running", "installed", "stock_id_length",
               "default_new_id", "settings_applicable", "settings_hidden", "job", "modded", "default_tune_taken",
-              "proposed_new_id", "proposed_suffix"}
+              "proposed_new_id", "proposed_suffix", "versions", "mod_paths"}
 MODDED_KEYS = {"id", "stock", "label", "name_suffix", "default", "installed", "built"}
 CAR_KEYS = {"id", "label", "display_name", "extracted", "tested", "new_id", "installed"}
 JOB_KEYS = {"kind", "state", "log", "result", "error"}
@@ -281,7 +281,8 @@ class TestRoutes(ServerCase):
         self.assertEqual(sorted(ts.POST_ROUTES), ["/api/apply", "/api/duplicate", "/api/garage_reset", "/api/garage_set", "/api/init",
                                                   "/api/log_config_reset", "/api/log_config_set", "/api/log_copy", "/api/logger_start", "/api/logger_stop", "/api/reset_all", "/api/set", "/api/sound_reset", "/api/sound_set", "/api/turbo_reset",
                                                   "/api/turbo_set", "/api/tyre_delete", "/api/tyre_new", "/api/tyre_rename",
-                                                  "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset"])
+                                                  "/api/tyre_reset", "/api/tyre_set", "/api/tyre_source", "/api/tyre_unset", "/api/unset",
+                                                  "/api/version_add", "/api/version_rename"])
         self.assertEqual(ts.ACCEPTED, ("/api/init", "/api/apply"))
         self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre", "/api/log_file"))
         self.assertTrue(set(ts.QUERY_ROUTES) <= set(ts.GET_ROUTES))
@@ -4631,6 +4632,197 @@ class TestKitLinkedSound(SoundCase):
         self.patch(tune, "set_sound", spy)
         self.assertEqual(self.post("/api/turbo_set", {"donor": "ks_a"}).status, 200)
         self.assertEqual(held, [True])
+
+
+# -------------------------------------------------------------------------------------------------- versions of a modded car
+class TestVersionRoutes(SoundCase):
+    """The optional "version" of the car-bound routes, /api/version_add, /api/version_rename and the versions and mod_paths of /api/state:
+    ax01 is a modded car of ks_x with the base state {limiter 8000, suffix _A} and the version v01 Heavy {limiter 9000}."""
+
+    def setUp(self):
+        super().setUp()
+        self.make_tune("ax01", {"name_suffix": "_A", "limiter": 8000})
+        self.vid = tune.add_version(self.work, "ks_x", "Heavy", "ax01")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000}, self.vid, "ax01")
+
+    def version_state(self, version=None, tune_id="ax01"):
+        return tune.read_version_state(self.work, "ks_x", version or self.vid, tune_id)
+
+    def test_state_lists_the_versions_and_where_the_modded_car_lives(self):
+        r = self.get("/api/state?tune=ax01")
+        self.assertEqual(r.json["versions"], [{"id": "v01", "name": "Heavy"}])
+        self.assertEqual(r.json["mod_paths"], {"package": os.path.join(self.mods, "ax01.kspkg"),
+                                               "versions_folder": tune.version_dir(self.work, "ks_x", "ax01"),
+                                               "state": tune.state_path(self.work, "ks_x", "ax01")})
+        self.assertEqual(os.path.basename(r.json["mod_paths"]["versions_folder"]), "versions")
+        self.assertFalse(os.path.exists(r.json["mod_paths"]["package"]))
+
+    def test_state_has_no_versions_for_the_base_car_and_the_draft(self):
+        for query in ("", "?tune=draft"):
+            with self.subTest(query):
+                r = self.get("/api/state" + query)
+                self.assertEqual((r.json["versions"], r.json["mod_paths"]), ([], None))
+
+    def test_a_modded_car_without_versions_has_an_empty_list_and_its_paths(self):
+        self.make_tune("ax02", {"name_suffix": "_B"})
+        r = self.get("/api/state?tune=ax02")
+        self.assertEqual(r.json["versions"], [])
+        self.assertEqual(r.json["mod_paths"]["package"], os.path.join(self.mods, "ax02.kspkg"))
+
+    def test_settings_of_a_version_read_its_state_and_the_base_stays_as_it_is(self):
+        rows = {r["id"]: r for r in self.get("/api/settings?tune=ax01&version=v01").json}
+        self.assertEqual((rows["limiter"]["value"], rows["limiter"]["changed"]), (9000, True))
+        self.assertEqual(rows["name_suffix"]["value"], "_A")
+        base = {r["id"]: r for r in self.get("/api/settings?tune=ax01").json}
+        self.assertEqual(base["limiter"]["value"], 8000)
+        self.assertEqual({r["id"]: r["value"] for r in self.get("/api/settings?tune=ax01&version=").json}, {i: r["value"] for i, r in base.items()})
+
+    def test_set_with_a_version_writes_only_the_state_of_the_version(self):
+        r = self.post("/api/set", {"tune": "ax01", "version": "v01", "id": "limiter", "value": "9500"})
+        self.assertEqual((r.status, r.json["row"]["value"]), (200, 9500))
+        self.assertEqual(self.version_state(), {"limiter": 9500})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000})
+        self.assertFalse(os.path.exists(self.state_file()))
+
+    def test_set_with_the_query_parameter_works_too(self):
+        r = self.post("/api/set?version=v01", {"tune": "ax01", "id": "limiter", "value": "9600"})
+        self.assertEqual((r.status, self.version_state()), (200, {"limiter": 9600}))
+
+    def test_unset_with_a_version_removes_the_value_of_the_version_only(self):
+        r = self.post("/api/unset", {"tune": "ax01", "version": "v01", "id": "limiter"})
+        self.assertEqual((r.status, r.json["row"]["changed"]), (200, False))
+        self.assertEqual(self.version_state(), {})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000})
+
+    def test_a_meta_setting_cannot_be_set_or_unset_on_a_version(self):
+        for route, body in (("/api/set", {"id": "name_suffix", "value": "_Z"}), ("/api/unset", {"id": "name_suffix"})):
+            with self.subTest(route):
+                r = self.post(route, dict(body, tune="ax01", version="v01"))
+                self.assertEqual((r.status, r.json), (400, {"error": "name_suffix is shared by all versions, set it on the base"}))
+        self.assertEqual((self.version_state(), self.tune_state("ax01")), ({"limiter": 9000}, {"name_suffix": "_A", "limiter": 8000}))
+
+    def test_reset_all_with_a_version_clears_only_that_version(self):
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000, "aids_off": True}, "v01", "ax01")
+        other = tune.add_version(self.work, "ks_x", "Light", "ax01", "v01")
+        r = self.post("/api/reset_all", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json), (200, {"ok": True}))
+        self.assertEqual(self.version_state(), {})
+        self.assertEqual(self.version_state(other), {"limiter": 9000, "aids_off": True})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000})
+
+    def test_a_version_without_a_modded_car_or_an_unknown_version_is_400(self):
+        for route, method, body in (("/api/settings", "GET", None), ("/api/garage", "GET", None), ("/api/turbo", "GET", None),
+                                    ("/api/sounds", "GET", None), ("/api/set", "POST", {"id": "limiter", "value": "8000"}),
+                                    ("/api/unset", "POST", {"id": "limiter"}), ("/api/reset_all", "POST", {}),
+                                    ("/api/garage_set", "POST", {"keys": [ST_AB]}), ("/api/garage_reset", "POST", {}),
+                                    ("/api/turbo_set", "POST", {"donor": "ks_a"}), ("/api/turbo_reset", "POST", {}),
+                                    ("/api/sound_set", "POST", {"slot": "turbo", "key": T_RX7}), ("/api/sound_reset", "POST", {})):
+            for tune_id, version, text in (("draft", "v01", "a version needs a modded car"), (None, "v01", "a version needs a modded car"),
+                                           ("ax01", "v02", "unknown version v02 of ax01"), ("ax01", "../x", "unknown version ../x of ax01")):
+                with self.subTest(route=route, tune=tune_id, version=version):
+                    if method == "GET":
+                        query = "?version=%s" % urllib.parse.quote(version) + ("&tune=%s" % tune_id if tune_id else "")
+                        r = self.get(route + query)
+                    else:
+                        r = self.post(route, dict(body, version=version, **({"tune": tune_id} if tune_id else {})))
+                    self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual((self.version_state(), self.tune_state("ax01")), ({"limiter": 9000}, {"name_suffix": "_A", "limiter": 8000}))
+        self.assertFalse(os.path.exists(self.state_file()))
+        self.assertEqual(self.tune_state("draft"), {})
+
+    def test_a_version_that_is_not_text_is_400(self):
+        r = self.post("/api/set", {"tune": "ax01", "version": 1, "id": "limiter", "value": "8000"})
+        self.assertEqual((r.status, r.json), (400, {"error": "version must be text"}))
+
+    def test_turbo_set_and_reset_with_a_version_use_the_state_of_the_version(self):
+        r = self.post("/api/turbo_set", {"tune": "ax01", "version": "v01", "donor": "ks_b"})
+        self.assertEqual((r.status, r.json["turbo"]["donor"]), (200, "ks_b"))
+        self.assertEqual(self.version_state(), {"limiter": 9000, tune.TURBO_KEY: {"donor": "ks_b"}})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000})
+        self.assertEqual(self.turbo("?tune=ax01&version=v01").json["donor"], "ks_b")
+        self.assertIsNone(self.turbo("?tune=ax01").json["donor"])
+        r = self.post("/api/turbo_reset", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, r.json["removed"], self.version_state()), (200, True, {"limiter": 9000}))
+
+    def test_sound_set_and_reset_with_a_version_use_the_state_of_the_version(self):
+        r = self.post("/api/sound_set", {"tune": "ax01", "version": "v01", "slot": "turbo", "key": T_RX7})
+        self.assertEqual((r.status, r.json["slots"]["turbo"]["selected"]), (200, T_RX7))
+        self.assertEqual(self.version_state(), {"limiter": 9000, tune.SOUND_KEY: {"turbo": T_RX7}})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A", "limiter": 8000})
+        self.assertEqual(self.sounds("?tune=ax01&version=v01").json["slots"]["turbo"]["selected"], T_RX7)
+        self.assertIsNone(self.sounds("?tune=ax01").json["slots"]["turbo"]["selected"])
+        r = self.post("/api/sound_reset", {"tune": "ax01", "version": "v01"})
+        self.assertEqual((r.status, self.version_state()), (200, {"limiter": 9000}))
+
+    def test_version_add_copies_the_base_without_the_meta_settings_and_answers_the_id(self):
+        r = self.post("/api/version_add", {"tune": "ax01", "name": "Light"})
+        self.assertEqual((r.status, r.json), (200, {"id": "v02"}))
+        self.assertEqual(self.version_state("v02"), {"limiter": 8000})
+        self.assertEqual([v["name"] for v in self.get("/api/state?tune=ax01").json["versions"]], ["Heavy", "Light"])
+
+    def test_version_add_from_a_version_copies_that_version(self):
+        r = self.post("/api/version_add", {"tune": "ax01", "name": "Heavier", "from": "v01"})
+        self.assertEqual((r.status, r.json, self.version_state("v02")), (200, {"id": "v02"}, {"limiter": 9000}))
+
+    def test_version_add_errors_are_400_and_add_nothing(self):
+        for body, text in (({"tune": "ax01"}, "need name (text)"), ({"tune": "ax01", "name": 5}, "need name (text)"),
+                           ({"tune": "ax01", "name": "  "}, "a version name must be 1 to 40 characters without control characters"),
+                           ({"tune": "ax01", "name": "heavy"}, "version name heavy is already used by v01"),
+                           ({"tune": "ax01", "name": "X", "from": "v09"}, "ks_x has no version v09 of ax01"),
+                           ({"tune": "ax01", "name": "X", "from": 3}, "from must be text"),
+                           ({"tune": "draft", "name": "X"}, "a version needs a modded car"), ({"name": "X"}, "a version needs a modded car")):
+            with self.subTest(body):
+                r = self.post("/api/version_add", body)
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual([v["id"] for v in tune.list_versions(self.work, "ks_x", "ax01")], ["v01"])
+
+    def test_version_rename_renames_and_keeps_the_id_and_the_state(self):
+        r = self.post("/api/version_rename", {"tune": "ax01", "version": "v01", "name": "Very heavy"})
+        self.assertEqual((r.status, r.json), (200, {"id": "v01", "name": "Very heavy"}))
+        self.assertEqual(self.get("/api/state?tune=ax01").json["versions"], [{"id": "v01", "name": "Very heavy"}])
+        self.assertEqual(self.version_state(), {"limiter": 9000})
+        self.assertEqual(self.post("/api/version_rename", {"tune": "ax01", "version": "v01", "name": "heavy"}).status, 200)
+
+    def test_version_rename_errors_are_400(self):
+        self.post("/api/version_add", {"tune": "ax01", "name": "Light"})
+        for body, text in (({"tune": "ax01", "name": "X"}, "need version (text)"), ({"tune": "ax01", "version": "v01"}, "need name (text)"),
+                           ({"tune": "ax01", "version": "v01", "name": "light"}, "version name light is already used by v02"),
+                           ({"tune": "ax01", "version": "v07", "name": "X"}, "ks_x has no version v07 of ax01"),
+                           ({"tune": "draft", "version": "v01", "name": "X"}, "a version needs a modded car")):
+            with self.subTest(body):
+                r = self.post("/api/version_rename", body)
+                self.assertEqual((r.status, r.json), (400, {"error": text}))
+        self.assertEqual([v["name"] for v in tune.list_versions(self.work, "ks_x", "ax01")], ["Heavy", "Light"])
+
+    def test_there_is_no_route_that_deletes_a_version(self):
+        self.assertEqual([r for r in list(ts.GET_ROUTES) + list(ts.POST_ROUTES) if "version" in r], ["/api/version_add", "/api/version_rename"])
+        self.assertEqual(self.post("/api/version_delete", {"tune": "ax01", "version": "v01"}).status, 404)
+
+    def test_version_writes_are_refused_while_a_job_runs(self):
+        self.hold_jobs()
+        self.assertEqual(self.post("/api/apply", {"tune": "ax01"}).status, 202)
+        for route, body in (("/api/version_add", {"name": "X"}), ("/api/version_rename", {"version": "v01", "name": "X"}),
+                            ("/api/set", {"version": "v01", "id": "limiter", "value": "8000"})):
+            with self.subTest(route):
+                r = self.post(route, dict(body, tune="ax01"))
+                self.assertEqual((r.status, r.json), (409, JOB_RUNNING))
+        self.finish_held_job()
+
+
+class TestVersionGarage(TyreCase):
+    def test_garage_set_and_reset_with_a_version_use_the_state_of_the_version(self):
+        self.make_tyre("Soft")
+        self.make_tune("ax01", {"name_suffix": "_A"})
+        vid = tune.add_version(self.work, "ks_x", "Heavy", "ax01")
+        r = self.post("/api/garage_set", {"keys": ["own:soft"], "tune": "ax01", "version": vid})
+        self.assertEqual((r.status, r.json["result"]), (200, {"keys": ["own:soft"], "start": "own:soft"}))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", vid, "ax01"), {tune.TYRE_KEY: ["own:soft"]})
+        self.assertEqual(self.tune_state("ax01"), {"name_suffix": "_A"})
+        self.assertTrue(self.get("/api/garage?tune=ax01&version=" + vid).json["custom"])
+        self.assertFalse(self.get("/api/garage?tune=ax01").json["custom"])
+        r = self.post("/api/garage_reset", {"tune": "ax01", "version": vid})
+        self.assertEqual((r.status, r.json["removed"]), (200, True))
+        self.assertEqual(tune.read_version_state(self.work, "ks_x", vid, "ax01"), {})
 
 
 # -------------------------------------------------------------------------------------------------- job lifecycle

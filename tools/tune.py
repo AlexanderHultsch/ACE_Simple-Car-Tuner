@@ -3,11 +3,14 @@
 usage:
   python tools/tune.py cars     [--tested | --modded] [--game <content.kspkg>] [--mods <dir>] [--work <dir>]
   python tools/tune.py init     [--car ID] [--game <content.kspkg>] [--work <dir>]
-  python tools/tune.py defaults [--car ID] [--tune ID | --variant ID] [--hidden] [--work <dir>]
+  python tools/tune.py defaults [--car ID] [--tune ID | --variant ID] [--version ID] [--hidden] [--work <dir>]
   python tools/tune.py variants [--car ID] [--work <dir>]
-  python tools/tune.py set      <id> <value> [--car ID] [--tune ID] [--work <dir>]
-  python tools/tune.py unset    <id> [--car ID] [--tune ID] [--work <dir>]
-  python tools/tune.py show     [--car ID] [--tune ID] [--work <dir>]
+  python tools/tune.py versions [--car ID] [--tune ID] [--work <dir>]
+  python tools/tune.py version-add    <name> [--from ID] [--car ID] [--tune ID] [--work <dir>]
+  python tools/tune.py version-rename <id> <name> [--car ID] [--tune ID] [--work <dir>]
+  python tools/tune.py set      <id> <value> [--car ID] [--tune ID] [--version ID] [--work <dir>]
+  python tools/tune.py unset    <id> [--car ID] [--tune ID] [--version ID] [--work <dir>]
+  python tools/tune.py show     [--car ID] [--tune ID] [--version ID] [--work <dir>]
   python tools/tune.py apply    [--car ID] [--tune ID | --new-id ID] [--no-install] [--mods <dir>] [--work <dir>]
   python tools/tune.py duplicate [--car ID] [--tune ID | --draft] [--new-id ID] [--suffix TEXT] [--mods <dir>] [--work <dir>]
   python tools/tune.py tyres        [--work <dir>]
@@ -25,8 +28,8 @@ usage:
   python tools/tune.py turbo-remove [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py turbo-kit    [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py sounds       [--tune ID | --draft] [--car ID] [--work <dir>]
-  python tools/tune.py sound-set    <slot> <key> [--tune ID | --draft] [--car ID] [--work <dir>]
-  python tools/tune.py sound-reset  [<slot>] [--tune ID | --draft] [--car ID] [--work <dir>]
+  python tools/tune.py sound-set    <slot> <key> [--tune ID | --draft] [--version ID] [--car ID] [--work <dir>]
+  python tools/tune.py sound-reset  [<slot>] [--tune ID | --draft] [--version ID] [--car ID] [--work <dir>]
   python tools/tune.py ranges       [--work <dir>]
 
 --car ID picks any car of the game (default: the default car of tuner/cars.json); an id that is not a game car is
@@ -82,6 +85,23 @@ defaults --variant ID: shows the defaults of that variant (viewing only; it cann
           with the role files of the variant and its preset as @mech_preset, so @turbo[N] follows the variant's engine while @car and
           @tyre_front / @tyre_rear stay those of the stock car. An unknown variant or one with an error is an error
           (resolve_defaults(..., variant=ID), only together with tune None).
+versions: lists the base and the versions of a modded car (library functions list_versions, add_version, rename_version,
+          load_version_state, save_version_state): a version is a further complete setup of the same modded car, shown in the game as a
+          further version of that car (like a preset). The saved state of the tune is its base version; each version has its own state
+          in <tune folder>/versions/<id>/{tune_state.json, meta.json = {"name": text}} (the tune folder is <work>/<car> for the default
+          tune, <work>/<car>/tunes/<id> for any other; the draft has no versions). The ids are v01 .. v99 (the first free number); the
+          state has the format of tune_state.json (setting ids, _turbo, _sounds, _tyres). Every setting may differ per version except
+          the meta settings (kind "meta": name_suffix, variant_name): a version always uses the value of the base, the meta entries of
+          its state are ignored on load. The name is free text: 1 to 40 characters after trimming, no control characters, unique among
+          the versions of the tune ignoring case. The command prints "base" and then "<id>: <name>" of each version.
+version-add: creates a version named <name> as a copy of the base state (--from ID: of that version's state) and prints its id. The
+          meta settings are not copied. version-rename: gives a version another name (same rules, the id stays).
+          --version ID (set, unset, show, defaults; library functions effective_rows, effective_row, changed_settings,
+          unknown_state_ids, warn_unknown_state, set_value, unset_value, resolve_defaults, root_for take version=) works on the state of
+          that version of the tune given by --tune (default: the default tune): the values come from the version's state (meta settings
+          from the base), the defaults and the build root are those of the tune except that the turbo kit is the version's own "_turbo".
+          set and unset of a meta setting refuse with "<id> is shared by all versions, set it on the base"; --version cannot be combined
+          with --variant or --draft. apply builds every version into the package as a further mechanical preset of the car (see apply).
 set/unset/show: edit and print <work>/<car>/tune_state.json ({setting id: value}). show lists applicable settings
           only, set refuses a setting that is not applicable to the car. Entries of the state whose id is not in the
           catalogue are ignored with a warning (show, apply) and kept in the file (remove them with unset).
@@ -101,7 +121,29 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           that name the stock file (compared case-insensitively). Other compounds and the shared files stay untouched;
           an axle without a changed tyre setting gets no file and no changed reference. A changed tyre setting of a
           car whose tyre file is inside the car folder (not shared) is refused: not supported yet. A saved sound choice (see Sound
-          picker below) is written into the car's .actor file as the last step.
+          picker below) is written into the car's .actor file as the last step. After that the car file of the build (the file @car
+          resolves to) is renamed to data/CarData.car, the name the paint shop of a mod car expects, unless it is named cardata.car
+          already (case-insensitive), with a note; every reference to it (game path content\\cars\\<new_id>\\data\\<name>.car, e.g. the
+          car_data of the presets/*.carfinalstate) is rewritten by rename_files(car_root, {old path: new path}): the files of the car
+          folder are decoded and only those with a changed text are written back; a file that is not decodable or holds the old path
+          outside a text field is an error. The build only; the tuner reads the stock car, a turbo kit root or the base, never a build.
+          Versions (library functions build_state, build_versions, merge_version): the base is built as above; each version of the tune
+          (by id) is then built from its own state into <new_id>_<version>.partial with the same tune id and merged into the build, the
+          temporary folder removed. A version's own files are the files of its build that differ from the base build or are missing there,
+          the car file, the base mechanical preset and its carfinalstate(s), plus every file that names one of them (by game path,
+          repeated); the actor, the moddedcarcontent, uiresources and generated files are never among them. They are copied with
+          _<version> before the extension (data/CarData_v01.car; the carfinalstate becomes <car id>_<preset>_<version>_<visual preset>.carfinalstate)
+          and the copies name each other; the version's preset gets the version name as note and description (a trailing Base replaced) and
+          is_oem false, is appended to car.customization.mechanical_car_presets of the actor and gets the thumbnails of the base preset.
+          The result lists "versions" = [{id, name, files}] and one note per version; the snapshot and "changes" are the base's only.
+          A version whose sound choice gives another actor than the base build gets a sound part of its own (add_version_sound, add_version_parts)
+          instead of an actor of its own: the audio entries of its actor that differ from the base's (by slot, see Sound picker) are the car_audio_events of
+          presets/parts/physics/<new id>_<version>_sound.carpart (CarPartData, part type CarPartType_Mechanics_Engine, brand of the base preset)
+          whose logic part names data/parts/<new id>_<version>_engine.tuningpart (the engine file of the version's car file) and
+          presets/parts/physics/<new id>_<version>_sound.compatiblepart (bone ENGINE) is listed in the forced_compatible_part_paths of the
+          version's preset, in the not_compatible_part_paths of the base preset and in car.customization.aftermarket_parts of the actor
+          (the Supra MKIV's drift parts work this way); the 3 files count among the version's own files and the note
+          "note: version <id> (<name>): own sounds <slot>=<event>, ..." tells the sounds. The actor of the build is the base's.
           --tune ID builds that modded car: its own state, its id as the new id, its name suffix; --tune and --new-id
           cannot be combined. A suffix that another modded car of the same stock car uses is refused before building.
           --new-id ID alone builds the state of the tune with that id (the default tune when it is left out); an id
@@ -191,7 +233,10 @@ optionalParam; a car without an entry of the slot gets a copy of the entry of th
 car's own sound changes nothing, and each changed slot adds the note "note: sound <slot>: <old key> -> <new key>" ("- added <key>" for an appended
 entry) and an item {slot, from, to, added} to the "sounds" list of the apply result. A saved sound that is not offered any more, or a slot that does
 not exist, refuses the apply before anything is built. The options are read from the .actor file of every car with an extracted base; a car whose
-file is missing or cannot be decoded is skipped and reported.
+file is missing or cannot be decoded is skipped and reported. The TurboEvent and Backfire entries in the car_audio_events of the logic parts of the
+presets/parts/**/*.carpart files of a car (e.g. event:/parts/turbos/turbo_supra_tuned of the Supra MKIV's tuned engine) are options too, listed with
+that car and chosen like any other (sound_events; a .carpart that cannot be decoded skips the car); the cache of a car's sounds is keyed by the file
+stamps of its actor and its car parts. sound-set and sound-reset take --version ID: the choice of that version of the tune (see Versions).
 sounds:       lists per slot "<slot> (own: <key or none>, selected: <key or ->)" and one line per option: a mark (* selected, = the car's own
           sound, else blank), the key and the cars that use it (at most 4, then +N more); the none sound comes first, then by event name. A saved
           sound that is not offered any more is a warning.
@@ -251,6 +296,7 @@ import contextlib
 import copy
 import datetime
 import difflib
+import filecmp
 import hashlib
 import io
 import json
@@ -282,6 +328,9 @@ GAME_EXE = "AssettoCorsaEVO.exe"
 OLD_LAYOUT = ("base", "build", "tune_state.json", "stock_info.json", "defaults.json")
 TUNES = "tunes"
 DRAFT = "draft"
+VERSIONS = "versions"
+VERSION_ID = re.compile(r"v(?:0[1-9]|[1-9]\d)")
+VERSION_NAME_MAX = 40
 CARS_TABLE = "system\\cars.table"
 STOCK_LOC = "\\".join(clone_car.LOC_PATH)
 STOCK_PROPERTIES = ("property_1", "property_2", "property_3")
@@ -317,6 +366,7 @@ TYRES_DIR = "tyres"
 TYRE_KEY = "_tyres"
 TURBO_KEY = "_turbo"
 SOUND_KEY = "_sounds"
+SOUND_PART_TYPE = "CarPartType_Mechanics_Engine"
 KIT_DIR = "kit"
 SNAPSHOT_DIR = "snapshots"
 SNAPSHOT_VERSION = 1
@@ -330,6 +380,9 @@ TYRE_FILES = tuple("@" + r for r in TYRE_ROLES)
 OWN_KEY = "own:"
 STOCK_KEY = "stock:"
 RANGES_FILE = "ranges.json"
+CAR_FILE = "data/CarData.car"
+VERSION_SKIP_FOLDERS = ("uiresources/", "generated/")
+VERSION_SKIP_TYPES = (".actor", ".moddedcarcontent")
 
 _index_error = []
 _tyre_lock = threading.Lock()
@@ -640,9 +693,122 @@ def save_state(work, car_id, state, tune=None):
         save_json(meta, {"stock": car_id})
 
 
-def unknown_state_ids(work, car_id, catalogue=None, tune=None):
+def unknown_state_ids(work, car_id, catalogue=None, tune=None, version=None):
     known = {s["id"] for s in (catalogue or load_catalogue())["settings"]}
-    return [sid for sid in load_state(work, car_id, tune) if sid not in known and sid not in (TYRE_KEY, TURBO_KEY, SOUND_KEY)]
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
+    return [sid for sid in state if sid not in known and sid not in (TYRE_KEY, TURBO_KEY, SOUND_KEY)]
+
+
+def version_dir(work, car_id, tune=None, version=None):
+    """Folder of the versions of a tune (<tune folder>/versions), or of one version of it (version v01 .. v99). The draft has none."""
+    if tune == DRAFT:
+        raise ValueError("the draft has no versions")
+    folder = os.path.join(tune_dir(work, car_id, tune), VERSIONS)
+    if version is None:
+        return folder
+    if not isinstance(version, str) or not VERSION_ID.fullmatch(version):
+        raise ValueError("version id must be v01 .. v99, got %r" % (version,))
+    return os.path.join(folder, version)
+
+
+def version_state_path(work, car_id, version, tune=None):
+    if version is None:
+        raise ValueError("version id must be v01 .. v99, got None")
+    return os.path.join(version_dir(work, car_id, tune, version), "tune_state.json")
+
+
+def read_version_state(work, car_id, version, tune=None):
+    """The saved state of a version as the file holds it (meta settings included); an unknown version is an error."""
+    path = version_state_path(work, car_id, version, tune)
+    if not os.path.isfile(kspkg.long_path(path)):
+        raise ValueError("%s has no version %s of %s" % (car_id, version, tune or new_id_for(car_id)))
+    state = read_json(path)
+    if not isinstance(state, dict):
+        raise ValueError("%s: expected an object" % path)
+    return state
+
+
+def meta_ids(catalogue):
+    return {s["id"] for s in catalogue["settings"] if s["kind"] == "meta"}
+
+
+def load_version_state(work, car_id, version, tune=None, catalogue=None):
+    """The state of a version with the meta settings of the base state of the tune instead of its own."""
+    ids = meta_ids(catalogue or load_catalogue())
+    state = {k: v for k, v in read_version_state(work, car_id, version, tune).items() if k not in ids}
+    state.update({k: v for k, v in load_state(work, car_id, tune).items() if k in ids})
+    return state
+
+
+def save_version_state(work, car_id, state, version, tune=None):
+    save_json(version_state_path(work, car_id, version, tune), state)
+
+
+def save_tune_state(work, car_id, state, tune=None, version=None):
+    """Save the state of the tune, or of its version when given."""
+    if version is None:
+        save_state(work, car_id, state, tune)
+    else:
+        save_version_state(work, car_id, state, version, tune)
+
+
+def version_name(path, default):
+    try:
+        meta = read_json(path)
+    except (ValueError, OSError):
+        return default
+    return meta["name"] if isinstance(meta, dict) and isinstance(meta.get("name"), str) else default
+
+
+def list_versions(work, car_id, tune=None):
+    """The versions of a tune (None: the default tune) as [{"id", "name"}] sorted by id; a version is a folder v01 .. v99 below
+    <tune folder>/versions that holds a tune_state.json. Empty when there are none. A version whose meta.json is missing or damaged
+    is named by its id."""
+    folder = version_dir(work, car_id, tune)
+    found = []
+    for name in sorted(os.listdir(kspkg.long_path(folder))) if os.path.isdir(kspkg.long_path(folder)) else []:
+        if VERSION_ID.fullmatch(name) and os.path.isfile(kspkg.long_path(version_state_path(work, car_id, name, tune))):
+            found.append({"id": name, "name": version_name(os.path.join(folder, name, "meta.json"), name)})
+    return found
+
+
+def check_version_name(work, car_id, name, tune=None, exclude=None):
+    """The trimmed name when it is 1 to 40 characters without control characters and no other version of the tune (not exclude) has it ignoring case."""
+    if isinstance(name, str):
+        name = name.strip()
+    if not isinstance(name, str) or not 1 <= len(name) <= VERSION_NAME_MAX or re.search(r"[\x00-\x1f\x7f]", name):
+        raise ValueError("a version name must be 1 to %d characters without control characters" % VERSION_NAME_MAX)
+    for v in list_versions(work, car_id, tune):
+        if v["id"] != exclude and v["name"].lower() == name.lower():
+            raise ValueError("version name %s is already used by %s" % (name, v["id"]))
+    return name
+
+
+def add_version(work, car_id, name, tune=None, source=None):
+    """Add a version to a tune (None: the default tune): a copy of the base state, or of the state of the version source, without
+    its meta settings, under the first free id v01 .. v99; returns the id. The name must pass check_version_name. Nothing is
+    written on an error."""
+    folder = version_dir(work, car_id, tune)
+    if is_extra_tune(car_id, tune) and not os.path.isfile(kspkg.long_path(state_path(work, car_id, tune))):
+        raise ValueError("%s has no tune %s" % (car_id, tune))
+    name = check_version_name(work, car_id, name, tune)
+    ids = meta_ids(load_catalogue())
+    state = load_state(work, car_id, tune) if source is None else read_version_state(work, car_id, source, tune)
+    taken = set(os.listdir(kspkg.long_path(folder))) if os.path.isdir(kspkg.long_path(folder)) else set()
+    free = next((v for v in ("v%02d" % n for n in range(1, 100)) if v not in taken), None)
+    if free is None:
+        raise ValueError("no free version id left for %s (v01 .. v99 are taken)" % (tune or new_id_for(car_id)))
+    save_json(os.path.join(folder, free, "meta.json"), {"name": name})
+    save_version_state(work, car_id, {k: v for k, v in state.items() if k not in ids}, free, tune)
+    return free
+
+
+def rename_version(work, car_id, version, name, tune=None):
+    """Give a version of a tune another name (the rules of check_version_name; its own old name does not count as taken); returns the trimmed name."""
+    read_version_state(work, car_id, version, tune)
+    name = check_version_name(work, car_id, name, tune, exclude=version)
+    save_json(os.path.join(version_dir(work, car_id, tune, version), "meta.json"), {"name": name})
+    return name
 
 
 def to_f32(x):
@@ -739,30 +905,41 @@ def same(s, a, b):
     return a == b
 
 
-def set_value(work, car_id, setting_id, value, catalogue=None, tune=None):
-    """Check one value, save it in the state of the tune and return {id, value, warnings}; the setting must be applicable to the car."""
+def set_value(work, car_id, setting_id, value, catalogue=None, tune=None, version=None):
+    """Check one value, save it in the state of the tune (of its version when given) and return {id, value, warnings}; the setting must be applicable to the car and, for a version, no meta setting."""
     cat = catalogue or load_catalogue()
     s = find_setting(cat, setting_id)
+    if version is not None and s["kind"] == "meta":
+        raise ValueError("%s is shared by all versions, set it on the base" % setting_id)
     coerced = coerce(s, value)
-    row = resolve_defaults(work, car_id, dict(cat, settings=[s]), hidden=True, tune=new_id_for(car_id) if tune is None else tune)[0]
+    row = resolve_defaults(work, car_id, dict(cat, settings=[s]), hidden=True, tune=new_id_for(car_id) if tune is None else tune, version=version)[0]
     if not row["applicable"]:
         raise ValueError("%s is not applicable to %s: %s" % (setting_id, car_id, row["reason"]))
-    state = load_state(work, car_id, tune)
-    state[setting_id] = coerced
-    save_state(work, car_id, state, tune)
+    if version is None:
+        state = load_state(work, car_id, tune)
+        state[setting_id] = coerced
+        save_state(work, car_id, state, tune)
+    else:
+        state = read_version_state(work, car_id, version, tune)
+        state[setting_id] = coerced
+        save_version_state(work, car_id, state, version, tune)
     warning = range_warning(s, coerced)
     return {"id": setting_id, "value": coerced, "warnings": [warning] if warning else []}
 
 
-def unset_value(work, car_id, setting_id, catalogue=None, tune=None):
-    """Remove one setting from the state of the tune; returns {id, removed}."""
-    state = load_state(work, car_id, tune)
+def unset_value(work, car_id, setting_id, catalogue=None, tune=None, version=None):
+    """Remove one setting from the state of the tune (of its version when given, never a meta setting); returns {id, removed}."""
+    if version is not None and setting_id in meta_ids(catalogue or load_catalogue()):
+        raise ValueError("%s is shared by all versions, set it on the base" % setting_id)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     # a name that is not in the state must be a catalogue setting; _tyres, _turbo and _sounds are no settings, so they are refused as unknown here (their own commands remove them)
     if setting_id not in state or setting_id in (TYRE_KEY, TURBO_KEY, SOUND_KEY):
         find_setting(catalogue or load_catalogue(), setting_id)
     removed = state.pop(setting_id, None) is not None
-    if removed:
+    if removed and version is None:
         save_state(work, car_id, state, tune)
+    elif removed:
+        save_version_state(work, car_id, state, version, tune)
     return {"id": setting_id, "removed": removed}
 
 
@@ -1455,18 +1632,23 @@ def variant_seed(work, car_id, variant):
     raise ValueError("%s has no variant %s" % (car_id, variant))
 
 
-def resolve_defaults(work, car_id, catalogue=None, game=DEFAULT_GAME, hidden=False, tune=None, variant=None):
+def resolve_defaults(work, car_id, catalogue=None, game=DEFAULT_GAME, hidden=False, tune=None, variant=None, version=None):
     """Every setting with its default; hidden=False keeps only the settings applicable to the car, hidden=True
     returns all of them, each with applicable and reason (None when applicable). The resolved rows are cached per
     (work, car, root, catalogue) while resolve_stamp is unchanged (not when the tyre files or the stock info could not be
     read); the caller gets its own copy. tune None reads the stock car (base); a tune id or DRAFT reads root_for of
     that tune, the kit root when its state has a turbo kit. variant (an id of list_variants, only with tune None) reads the
     stock car with the role files of that variant (its engine, setup, ... and its preset as @mech_preset); an unknown
-    variant or one with an error is a ValueError."""
+    variant is a ValueError. version (an id of list_versions, with tune None the default tune; not with a variant) reads the
+    tune as before except that the kit root follows the turbo kit of the version's own state."""
     if variant is not None and tune is not None:
         raise ValueError("a variant cannot be combined with a tune")
+    if version is not None and variant is not None:
+        raise ValueError("a version cannot be combined with a variant")
     cat = catalogue or load_catalogue()
-    root = base_dir(work, car_id) if tune is None else root_for(work, car_id, tune)
+    if version is not None and tune is None:
+        tune = new_id_for(car_id)
+    root = base_dir(work, car_id) if tune is None else root_for(work, car_id, tune, version)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
         raise ValueError("no base car in %s, run init first" % root)
     seed = variant_seed(work, car_id, variant) if variant is not None else None
@@ -1541,11 +1723,11 @@ def resolve_rows(work, car_id, cat, game, root=None, seed=None):
     return rows, tyre_error is None and (stock_name is None or complete_stock_info(info))
 
 
-def effective_rows(work, car_id, catalogue=None, hidden=False, tune=None):
-    """The rows of resolve_defaults with the saved value of the state of tune (None: the default tune) as value and whether it differs from the default as changed."""
+def effective_rows(work, car_id, catalogue=None, hidden=False, tune=None, version=None):
+    """The rows of resolve_defaults with the saved value of the state of tune (None: the default tune) as value and whether it differs from the default as changed; with version the state of that version (load_version_state)."""
     cat = catalogue or load_catalogue()
-    state = load_state(work, car_id, tune)
-    rows = resolve_defaults(work, car_id, cat, hidden=hidden, tune=new_id_for(car_id) if tune is None else tune)
+    state = load_state(work, car_id, tune) if version is None else load_version_state(work, car_id, version, tune, cat)
+    rows = resolve_defaults(work, car_id, cat, hidden=hidden, tune=new_id_for(car_id) if tune is None else tune, version=version)
     for row in rows:
         s = find_setting(cat, row["id"])
         row["value"] = saved_value(s, state[s["id"]]) if s["id"] in state else row["default"]
@@ -1553,10 +1735,10 @@ def effective_rows(work, car_id, catalogue=None, hidden=False, tune=None):
     return rows
 
 
-def effective_row(work, car_id, setting_id, catalogue=None, tune=None):
+def effective_row(work, car_id, setting_id, catalogue=None, tune=None, version=None):
     """The row of one setting as effective_rows(hidden=True) gives it, resolving only that setting."""
     cat = catalogue or load_catalogue()
-    return effective_rows(work, car_id, dict(cat, settings=[find_setting(cat, setting_id)]), hidden=True, tune=tune)[0]
+    return effective_rows(work, car_id, dict(cat, settings=[find_setting(cat, setting_id)]), hidden=True, tune=tune, version=version)[0]
 
 
 def scale_curve(curve, factor):
@@ -1617,8 +1799,8 @@ def build_tyre(root, car_id, new_id, car_root, role, edits, cache, counts=None):
         axle, new_text, stock_text, in_car, in_presets)
 
 
-def plan_target(work, car_id, new_id, install, mods_dir):
-    """Checks that need no catalogue: base car, ids and tune. Returns (root_for of the tune, mods folder or None); a turbo
+def plan_target(work, car_id, new_id, install, mods_dir, version=None):
+    """Checks that need no catalogue: base car, ids and tune. Returns (root_for of the tune or of its version, mods folder or None); a turbo
     kit is built or refreshed here, before anything else is written."""
     root = base_dir(work, car_id)
     if not os.path.isdir(kspkg.long_path(car_root_of(root, car_id))):
@@ -1629,12 +1811,12 @@ def plan_target(work, car_id, new_id, install, mods_dir):
     if (not is_default_tune(car_id, new_id) and not os.path.isdir(kspkg.long_path(tune_dir(work, car_id, new_id)))
             and list_tunes(work, car_id)):
         raise ValueError("%s is not a modded car of %s, create it with duplicate first" % (new_id, car_id))
-    return root_for(work, car_id, new_id), mods
+    return root_for(work, car_id, new_id, version), mods
 
 
-def changed_settings(work, car_id, new_id, cat):
+def changed_settings(work, car_id, new_id, cat, version=None):
     """Returns (rows, changed): every row and the (setting, row) pairs that differ from the default; refuses unusable changes."""
-    rows = effective_rows(work, car_id, cat, hidden=True, tune=new_id)
+    rows = effective_rows(work, car_id, cat, hidden=True, tune=new_id, version=version)
     changed = [(s, r) for s, r in zip(cat["settings"], rows) if r["changed"]]
     bad = ["%s (%s)" % (s["id"], r["reason"]) for s, r in changed if not r["applicable"]]
     if bad:
@@ -1646,21 +1828,22 @@ def changed_settings(work, car_id, new_id, cat):
     return rows, changed
 
 
-def apply_plan(work, car_id, new_id, install, mods_dir, cat):
+def apply_plan(work, car_id, new_id, install, mods_dir, cat, version=None):
     """Everything apply needs, checked before anything is built: root (base, or the kit root of a tune with a turbo kit), mods, rows,
-    changed, info, garage (plan or None), kit (the kit.json of the kit root or None) and sounds (sound_plan, [] without a saved choice)."""
-    root, mods = plan_target(work, car_id, new_id, install, mods_dir)
-    rows, changed = changed_settings(work, car_id, new_id, cat)
+    changed, info, garage (plan or None), kit (the kit.json of the kit root or None) and sounds (sound_plan, [] without a saved choice).
+    With version the plan of that version of the tune: its state decides, the meta settings and the name suffix check are the base's."""
+    root, mods = plan_target(work, car_id, new_id, install, mods_dir, version)
+    rows, changed = changed_settings(work, car_id, new_id, cat, version)
     info = load_stock_info(work, car_id)
     if info is None and car_id != load_cars()["default"]:
         raise ValueError("stock info missing, run init with the game installed")
     info = info or {}
     suffix_id = name_suffix_setting(cat)["id"]
     name_suffix = next(r["value"] for r in rows if r["id"] == suffix_id)
-    owner = suffix_owner(work, car_id, name_suffix, exclude=new_id)
+    owner = suffix_owner(work, car_id, name_suffix, exclude=new_id) if version is None else None
     if owner:
         raise ValueError("name suffix %s is already used by %s" % (name_suffix, owner))
-    state = load_state(work, car_id, new_id)
+    state = load_state(work, car_id, new_id) if version is None else load_version_state(work, car_id, version, new_id, cat)
     garage = garage_plan(work, car_id, new_id, state, cat) if TYRE_KEY in state else None
     kit = kit_info(root) if TURBO_KEY in state else None
     sound_steps = sound_plan(work, car_id, state) if SOUND_KEY in state else []
@@ -1771,6 +1954,362 @@ def write_tyres(root, car_id, new_id, car_root, garage, tyre_edits):
             raise ValueError("tyre settings are changed but the stock starting tyre of the car is not ticked in the garage, "
                              "tick it or reset the tyre values")
     return notes
+
+
+def game_path_of(car_id, rel):
+    return "content\\cars\\%s\\%s" % (car_id, rel.replace("/", "\\"))
+
+
+def retarget(obj, targets):
+    """Replace, in every text of the decoded message obj (any depth), a game path that is a key of targets (game_path_key) by its
+    value, with the slashes of the text kept. Returns how many texts changed."""
+    hits = 0
+    for k, v in list(obj.items() if isinstance(obj, dict) else enumerate(obj)):
+        if isinstance(v, str):
+            new = targets.get(game_path_key(v))
+            if new is not None:
+                obj[k] = new.replace("\\", "/") if "/" in v and "\\" not in v else new
+                hits += 1
+        elif isinstance(v, (dict, list)):
+            hits += retarget(v, targets)
+    return hits
+
+
+def rename_files(car_root, mapping):
+    """Give files of a build's car folder new names and point every reference at them. mapping = {old path: new path}, both relative
+    to car_root (with /, the old one matched case-insensitively). Every decodable file of the folder has each text that is the game
+    path (content\\cars\\<id>\\<path>, either slash, case-insensitive) of a renamed file replaced by the new one and is written back
+    only when one changed; a file that holds an old path as text but cannot be rewritten (not decodable, or the path is not a text
+    field of it) is an error, nothing is written then. Returns {"renamed": [(old, new)], "rewritten": {path after the renames:
+    number of texts changed}}, both sorted."""
+    car_id = os.path.basename(os.path.normpath(car_root))
+
+    def ident(path):
+        return os.path.realpath(kspkg.plain_path(path)).lower()
+
+    moves, targets, texts = [], {}, []
+    for old, new in mapping.items():
+        src = find_ci(car_root, old)
+        if not os.path.isfile(kspkg.long_path(src)):
+            raise ValueError("%s is not a file" % old)
+        new_rel = "/".join(filter(None, re.split(r"[\\/]+", new)))
+        dst = car_path(car_root, new_rel)
+        dst = os.path.join(os.path.dirname(dst), new_rel.rsplit("/", 1)[-1])
+        try:
+            taken = find_ci(car_root, new)
+        except ValueError:
+            taken = None
+        if taken and ident(taken) != ident(src):
+            raise ValueError("cannot rename %s to %s: the name is taken" % (old, new))
+        if any(ident(src) == ident(m[0]) or ident(dst) == ident(m[1]) for m in moves):
+            raise ValueError("%s -> %s: a file is listed twice in the renames" % (old, new))
+        old_rel = os.path.relpath(src, car_root).replace(os.sep, "/")
+        moves.append((src, dst, old_rel, new_rel))
+        targets[game_path_key(game_path_of(car_id, old_rel))] = game_path_of(car_id, new_rel)
+        texts.append(re.escape(game_path_of(car_id, old_rel)).replace("\\\\", "[\\\\/]").encode())
+    if any(ident(m[1]) == ident(o[0]) for m in moves for o in moves if m is not o):
+        raise ValueError("a file cannot be renamed to the name another renamed file has now")
+    refers = re.compile(b"|".join(texts), re.IGNORECASE)
+    base = kspkg.long_path(car_root)
+    rewrites = []
+    for dp, _, names in os.walk(base):
+        for n in sorted(names):
+            path = os.path.join(dp, n)
+            rel = os.path.relpath(path, base).replace(os.sep, "/")
+            obj, err = None, None
+            try:
+                obj, name = load_msg(path)
+            except ValueError as e:
+                err = e
+            hits = retarget(obj, targets) if obj is not None else 0
+            if hits:
+                rewrites.append((path, rel, name, obj, hits))
+                continue
+            with open(path, "rb") as f:
+                found = refers.search(f.read())
+            if found:
+                raise ValueError("%s refers to %s, which is renamed, but %s; its bytes are not patched"
+                                 % (rel, found.group().decode("ascii", "replace"),
+                                    "cannot be decoded (%s)" % err if err else "not in a text field of it"))
+    for path, _, name, obj, _ in rewrites:
+        save_msg(path, name, obj)
+    for src, dst, _, _ in moves:
+        os.makedirs(kspkg.long_path(os.path.dirname(dst)), exist_ok=True)
+        os.rename(kspkg.long_path(src), kspkg.long_path(dst))
+    after = {ident(src): new_rel for src, _, _, new_rel in moves}
+    return {"renamed": sorted((old_rel, new_rel) for _, _, old_rel, new_rel in moves),
+            "rewritten": dict(sorted((after.get(ident(path), rel), hits) for path, rel, _, _, hits in rewrites))}
+
+
+def rename_car_file(part, new_id, applied):
+    """The car file of the build gets the name the paint shop of a mod car expects (data/CarData.car) unless it has it already
+    (case-insensitive), and every reference to it is rewritten; the file lists of applied are brought along. Returns the notes."""
+    rel = resolve_file("@car", part, new_id, {})
+    if rel.rsplit("/", 1)[-1].lower() == CAR_FILE.rsplit("/", 1)[-1].lower():
+        return []
+    res = rename_files(car_root_of(part, new_id), {rel: CAR_FILE})
+    for item in applied:
+        item["files"] = [CAR_FILE if f.lower() == rel.lower() else f for f in item["files"]]
+    return ["note: car file: %s renamed to %s (the paint shop of a mod car expects that name)" % (rel, CAR_FILE)]
+
+
+def tree_files(car_root):
+    """The files below a car folder as paths relative to it (with /), sorted."""
+    base = kspkg.long_path(car_root)
+    return sorted(os.path.relpath(os.path.join(dp, n), base).replace(os.sep, "/") for dp, _, names in os.walk(base) for n in names)
+
+
+def tree_path(car_root, rel):
+    return os.path.join(car_root, *rel.split("/"))
+
+
+def same_file(a, b):
+    """Whether two files have the same bytes."""
+    return filecmp.cmp(kspkg.long_path(a), kspkg.long_path(b), shallow=False)
+
+
+def text_values(obj):
+    """Every text of a decoded message, at any depth."""
+    for v in obj.values() if isinstance(obj, dict) else obj:
+        if isinstance(v, str):
+            yield v
+        elif isinstance(v, (dict, list)):
+            yield from text_values(v)
+
+
+def path_pattern(car_id, rels):
+    """A byte pattern for the game paths (either slash, case-insensitive) of the files rels of the car folder."""
+    return re.compile(b"|".join(re.escape(game_path_of(car_id, r)).replace("\\\\", "[\\\\/]").encode() for r in rels), re.IGNORECASE)
+
+
+def version_excluded(rel):
+    """Files of a version build that never become files of the version: the actor, the moddedcarcontent, the user interface and
+    localization files and everything generated (thumbnails ...)."""
+    low = rel.lower()
+    return low.startswith(VERSION_SKIP_FOLDERS) or low.endswith(VERSION_SKIP_TYPES)
+
+
+def version_files(car_root, rels, seed):
+    """The files of a version: seed plus, until nothing new is added, every other file of the car folder that refers to one of them by
+    game path (the matching of rename_files: a text of a decoded file, or the bytes of any file); the files of version_excluded are
+    never added. Returns the set of paths relative to the car folder."""
+    car_id = os.path.basename(os.path.normpath(car_root))
+    members, fresh, texts = set(seed), sorted(seed), {}
+    while fresh:
+        keys = {game_path_key(game_path_of(car_id, r)) for r in fresh}
+        refers = path_pattern(car_id, fresh)
+        fresh = []
+        for rel in rels:
+            if rel in members or version_excluded(rel):
+                continue
+            path = tree_path(car_root, rel)
+            if rel not in texts:
+                try:
+                    texts[rel] = {game_path_key(t) for t in text_values(load_msg(path)[0])}
+                except ValueError:
+                    texts[rel] = set()
+            found = bool(texts[rel] & keys)
+            if not found:
+                with open(kspkg.long_path(path), "rb") as f:
+                    found = bool(refers.search(f.read()))
+            if found:
+                members.add(rel)
+                fresh.append(rel)
+    return members
+
+
+def version_rel(rel, version):
+    """The path of a version's copy of a file: the same folder, the name with _<version> before the extension."""
+    folder, _, name = rel.rpartition("/")
+    stem, ext = os.path.splitext(name)
+    return "%s%s_%s%s" % (folder + "/" if folder else "", stem, version, ext)
+
+
+def version_description(description, name):
+    """The description of a version's preset: the base description with a trailing word Base replaced by the name, else followed by it."""
+    if re.search(r"(?:^|\s)Base$", description):
+        return description[:-4] + name
+    return ("%s %s" % (description, name)).strip()
+
+
+def version_finals(vroot, rels, car_id, preset, version):
+    """The carfinalstate files of the car folder vroot whose body.path is the base mechanical preset (path preset), as
+    {path: (path of the version's copy, name of its visual preset)}: the copy is named <car id>_<preset of the version>_<visual preset>."""
+    stem = os.path.splitext(preset.rsplit("/", 1)[-1])[0]
+    prefix = "%s_%s_" % (car_id, stem)
+    finals = {}
+    for rel in rels:
+        if not rel.lower().endswith(".carfinalstate"):
+            continue
+        if game_path_key((load_msg(tree_path(vroot, rel))[0].get("body") or {}).get("path", "")) != game_path_key(game_path_of(car_id, preset)):
+            continue
+        folder, _, name = rel.rpartition("/")
+        stem_of, ext = os.path.splitext(name)
+        if not stem_of.lower().startswith(prefix.lower()):
+            raise ValueError("%s: a carfinalstate is named <car id>_<preset>_<visual preset>.carfinalstate, cannot name the one of version %s"
+                             % (rel, version))
+        visual = stem_of[len(prefix):]
+        finals[rel] = ("%s%s_%s_%s%s" % (folder + "/" if folder else "", car_id, "%s_%s" % (stem, version), visual, ext), visual)
+    return finals
+
+
+def copy_version_files(vroot, root, car_id, names, edit):
+    """Copy files of the version build vroot into the build root under new names (names = {path: new path}, relative to the car
+    folders) and rewrite in the copies every reference to a renamed file; edit(old path, decoded message) may change a copy further.
+    A file that holds an old path but cannot be rewritten is an error (like rename_files), found before anything is written."""
+    targets = {game_path_key(game_path_of(car_id, old)): game_path_of(car_id, new) for old, new in names.items()}
+    refers = path_pattern(car_id, names)
+    copies = []
+    for old, new in sorted(names.items()):
+        src, dst = tree_path(vroot, old), tree_path(root, new)
+        if os.path.exists(kspkg.long_path(dst)):
+            raise ValueError("cannot copy %s to %s: the name is taken" % (old, new))
+        obj, err, name = None, None, None
+        try:
+            obj, name = load_msg(src)
+        except ValueError as e:
+            err = e
+        if obj is None or not retarget(obj, targets):
+            with open(kspkg.long_path(src), "rb") as f:
+                found = refers.search(f.read())
+            if found:
+                raise ValueError("%s refers to %s, which is copied under a new name, but %s; its bytes are not patched"
+                                 % (old, found.group().decode("ascii", "replace"),
+                                    "cannot be decoded (%s)" % err if err else "not in a text field of it"))
+        if obj is not None:
+            edit(old, obj)
+        copies.append((src, dst, name, obj))
+    for src, dst, name, obj in copies:
+        os.makedirs(kspkg.long_path(os.path.dirname(dst)), exist_ok=True)
+        if obj is None:
+            shutil.copyfile(kspkg.long_path(src), kspkg.long_path(dst))
+        else:
+            save_msg(dst, name, obj)
+
+
+def merge_version(part, vpart, new_id, version, name):
+    """Merge the build vpart of a version of a tune (the same tune id, built from the state of the version) into the build part of the
+    base. The version's own files are the files whose bytes differ from the base build or are missing there, the car file, the base
+    mechanical preset and its carfinalstate(s), and every file that refers to one of them (version_files). They are copied under the
+    name with _<version> before the extension (the carfinalstate: <car id>_<version preset>_<visual preset>.carfinalstate) and point
+    at each other; the preset gets the name of the version as note, its description (version_description) and is_oem false; the
+    thumbnails of the base's carfinalstate(s) are copied under the name of the new one's. The actor, the moddedcarcontent, uiresources
+    and generated files are never copied. Returns (number of own files, game path of the version's preset, whether the actor of the
+    version build differs from the one of the base build, notes); the list of presets in the actor is the caller's."""
+    root, vroot = car_root_of(part, new_id), car_root_of(vpart, new_id)
+    rels = tree_files(vroot)
+    own = {r for r in rels if not version_excluded(r) and (not os.path.isfile(kspkg.long_path(tree_path(root, r)))
+                                                          or not same_file(tree_path(root, r), tree_path(vroot, r)))}
+    preset = resolve_file("@mech_preset", vpart, new_id, {})
+    finals = version_finals(vroot, rels, new_id, preset, version)
+    files = version_files(vroot, rels, own | {resolve_file("@car", vpart, new_id, {}), preset} | set(finals))
+    names = {r: finals[r][0] if r in finals else version_rel(r, version) for r in files}
+
+    def edit(old, obj):
+        if old == preset:
+            put_value(obj, "note", name)
+            put_value(obj, "is_oem", False)
+            put_value(obj, "description", version_description(obj.get("description", ""), name))
+
+    copy_version_files(vroot, root, new_id, names, edit)
+    notes = []
+    stem = os.path.splitext(preset.rsplit("/", 1)[-1])[0]
+    for _, visual in finals.values():
+        for ext in (".texture", ".texturemips"):
+            src, dst = ("generated/thumbnails/%s-%s-%s%s" % (new_id, s, visual, ext) for s in (stem, "%s_%s" % (stem, version)))
+            if os.path.isfile(kspkg.long_path(tree_path(root, src))):
+                shutil.copyfile(kspkg.long_path(tree_path(root, src)), kspkg.long_path(tree_path(root, dst)))
+            else:
+                notes.append("note: version %s: no thumbnail %s to copy" % (version, src))
+    actor = new_id + ".actor"
+    differs = not same_file(find_ci(root, actor), find_ci(vroot, actor))
+    return len(files), game_path_of(new_id, names[preset]), differs, notes
+
+
+def add_version_presets(part, new_id, presets):
+    """Append the game paths of the version presets to the mechanical presets of the actor of the build."""
+    path = find_ci(car_root_of(part, new_id), new_id + ".actor")
+    actor, name = load_msg(path)
+    field = "car.customization.mechanical_car_presets"
+    current, absent = get_value(actor, field, missing_ok=True)
+    if absent or not isinstance(current, list):
+        raise ValueError("%s has no %s to list the versions in" % (os.path.basename(path), field))
+    put_value(actor, field, current + presets)
+    save_msg(path, name, actor)
+
+
+def append_paths(obj, field, paths):
+    """Append game paths to a repeated text field of a decoded message (the field is created when the message has none)."""
+    container, key = locate(obj, field, create=True)
+    set_list(container, key, (container[key] if isinstance(container.get(key), list) else []) + paths)
+
+
+def compatible_part(part_path):
+    """The CompatiblePartData of a car part that sits on the engine bone without any offset (the structure of the Supra MKIV's
+    physics parts)."""
+    wheel = {"offset": {}, "rotation": {}}
+    return {"car_part_path": part_path, "attachment_bone": "ENGINE",
+            "attachment_relative_transform": {"position": {}, "rotation": {}, "scale": {"x": 1.0, "y": 1.0, "z": 1.0}},
+            "showroom_data": {"offset": {}, "rotation": {}, "wheel_lf": dict(wheel), "wheel_rf": dict(wheel), "wheel_lr": dict(wheel),
+                              "wheel_rr": dict(wheel), "animations": {}}}
+
+
+def add_version_sound(part, vpart, new_id, version, name, preset):
+    """Give the version the sounds its build has in the actor, which the game takes from the actor only for the base: a car part of its
+    own, forced by the version's preset like the Supra MKIV's drift parts. The audio entries of the actor of the version build vpart that
+    differ from those of the base build part (same slot and place, or no such entry there) become the car_audio_events of
+    presets/parts/physics/<new id>_<version>_sound.carpart, whose logic part names the tuning part data/parts/<new id>_<version>_engine.tuningpart
+    (the engine file the version's car file names); presets/parts/physics/<new id>_<version>_sound.compatiblepart is appended to the
+    forced_compatible_part_paths of the version's preset (game path preset) and to the not_compatible_part_paths of the base mechanical
+    preset. Returns (game path of the compatiblepart or None when no entry differs, number of files written, notes); listing the
+    compatiblepart in the aftermarket_parts of the actor is the caller's (add_version_parts)."""
+    root, vroot = car_root_of(part, new_id), car_root_of(vpart, new_id)
+    actor = new_id + ".actor"
+    base_actor, version_actor = load_msg(find_ci(root, actor))[0], load_msg(find_ci(vroot, actor))[0]
+    events, changed = [], []
+    for slot in sounds.SLOTS:
+        own = [e for _, e in sounds.slot_entries(base_actor, slot)]
+        found = [e for i, (_, e) in enumerate(sounds.slot_entries(version_actor, slot)) if i >= len(own) or e != own[i]]
+        events += [copy.deepcopy(e) for e in found]
+        changed += ["%s=%s" % (slot, short_event(sounds.option_of(e)["key"])) for e in found[:1]]
+    if not events:
+        return None, 0, []
+    base_preset = resolve_file("@mech_preset", vpart, new_id, {})
+    version_preset = preset.split("\\", 3)[3].replace("\\", "/")
+    brand = load_msg(tree_path(root, base_preset))[0].get("brand")
+    car = load_msg(tree_path(root, version_rel(resolve_file("@car", vpart, new_id, {}), version)))[0]
+    engine = car.get("engine_path")
+    if not isinstance(engine, str) or not engine:
+        raise ValueError("the car file of version %s has no engine_path to name the tuning part after" % version)
+    stem = "%s_%s" % (new_id, version)
+    rels = {"carpart": "presets/parts/physics/%s_sound.carpart" % stem, "compatiblepart": "presets/parts/physics/%s_sound.compatiblepart" % stem,
+            "tuningpart": "data/parts/%s_engine.tuningpart" % stem}
+    for rel in rels.values():
+        if os.path.exists(kspkg.long_path(tree_path(root, rel))):
+            raise ValueError("cannot write %s: the name is taken" % rel)
+        os.makedirs(kspkg.long_path(os.path.dirname(tree_path(root, rel))), exist_ok=True)
+    car_part = {"description": "%s sound" % name, "part_type": SOUND_PART_TYPE, "note": "%s sound" % name}
+    if brand:
+        car_part["brand"] = brand
+    car_part.update({"no_specialization": {}, "logic_parts": [{"tuning_part_path": game_path_of(new_id, rels["tuningpart"]), "car_audio_events": events}]})
+    save_msg(tree_path(root, rels["tuningpart"]), "TuningPart", {"engine": {"path": engine}, "car_part_type": SOUND_PART_TYPE})
+    save_msg(tree_path(root, rels["carpart"]), "CarPartData", car_part)
+    compatible = game_path_of(new_id, rels["compatiblepart"])
+    save_msg(tree_path(root, rels["compatiblepart"]), "CompatiblePartData", compatible_part(game_path_of(new_id, rels["carpart"])))
+    for rel, field in ((version_preset, "forced_compatible_part_paths"), (base_preset, "not_compatible_part_paths")):
+        path = tree_path(root, rel)
+        obj, kind = load_msg(path)
+        append_paths(obj, field, [compatible])
+        save_msg(path, kind, obj)
+    return compatible, len(rels), ["note: version %s (%s): own sounds %s" % (version, name, ", ".join(changed))]
+
+
+def add_version_parts(part, new_id, parts):
+    """Append the game paths of the compatible parts of the versions to the aftermarket parts of the actor of the build."""
+    path = find_ci(car_root_of(part, new_id), new_id + ".actor")
+    actor, name = load_msg(path)
+    append_paths(actor, "car.customization.aftermarket_parts", parts)
+    save_msg(path, name, actor)
 
 
 def pack_build(work, new_id, part, out_dir):
@@ -1918,12 +2457,9 @@ def change_lines(res):
     return lines + res["notes"]
 
 
-def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
-    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
-    cat = catalogue or load_catalogue()
-    new_id = new_id or new_id_for(car_id)
-    plan = apply_plan(work, car_id, new_id, install, mods_dir, cat)
-    out_dir = os.path.join(build_dir(work, car_id), new_id)
+def build_state(work, car_id, new_id, out_dir, plan, cat, game):
+    """The build steps of one state, the base of a tune or one of its versions (the plan decides which): clone, edits, tyres, sounds and the
+    car file name, into <out_dir>.partial. Returns (folder, meta values, notes, applied list, changed sound slots)."""
     part, meta, notes = build_partial(work, car_id, new_id, out_dir, plan, cat, game)
     if plan["kit"]:
         notes += kit_notes(plan["kit"])
@@ -1933,13 +2469,58 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     notes += write_tyres(plan["root"], car_id, new_id, car_root, plan["garage"], tyre_edits)
     changed_sounds = write_sounds(car_root, new_id, plan["sounds"])
     notes += sound_notes(changed_sounds)
+    notes += rename_car_file(part, new_id, applied)
+    return part, meta, notes, applied, changed_sounds
+
+
+def build_versions(work, car_id, new_id, part, versions, plans, cat, game):
+    """Build each version of the tune (plans from apply_plan) into its own temporary folder next to the build, merge it into the base
+    build in part (merge_version) and list the version presets in the actor. A version whose actor has other sounds than the base gets
+    its own sound part (add_version_sound), listed in the aftermarket parts of the actor. Returns ([{id, name, files}], notes)."""
+    merged, notes, presets, parts = [], [], [], []
+    for v, plan in zip(versions, plans):
+        vout = os.path.join(build_dir(work, car_id), "%s_%s" % (new_id, v["id"]))
+        try:
+            vpart = build_state(work, car_id, new_id, vout, plan, cat, game)[0]
+            count, preset, differs, more = merge_version(part, vpart, new_id, v["id"], v["name"])
+            if differs:
+                compatible, written, own_notes = add_version_sound(part, vpart, new_id, v["id"], v["name"], preset)
+                count += written
+                parts += [compatible] if compatible else []
+        finally:
+            if os.path.exists(kspkg.long_path(vout + ".partial")):
+                remove_tree(work, vout + ".partial")
+        merged.append({"id": v["id"], "name": v["name"], "files": count})
+        presets.append(preset)
+        notes.append("note: version %s (%s): %d files of its own" % (v["id"], v["name"], count))
+        notes += more
+        if differs:
+            notes += own_notes
+    if presets:
+        add_version_presets(part, new_id, presets)
+    if parts:
+        add_version_parts(part, new_id, parts)
+    return merged, notes
+
+
+def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
+    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Each version of the tune is built too and merged into the package as a further mechanical preset (see build_versions); the snapshot is the base's. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, versions, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
+    cat = catalogue or load_catalogue()
+    new_id = new_id or new_id_for(car_id)
+    plan = apply_plan(work, car_id, new_id, install, mods_dir, cat)
+    versions = list_versions(work, car_id, new_id)
+    version_plans = [apply_plan(work, car_id, new_id, False, None, cat, v["id"]) for v in versions]
+    out_dir = os.path.join(build_dir(work, car_id), new_id)
+    part, meta, notes, applied, changed_sounds = build_state(work, car_id, new_id, out_dir, plan, cat, game)
+    merged, more = build_versions(work, car_id, new_id, part, versions, version_plans, cat, game)
+    notes += more
     pkg = pack_build(work, new_id, part, out_dir)
     snapshot = make_snapshot(work, plan, applied, plan_name(car_id, plan, meta["name_suffix"]))
     changes = build_changes(load_snapshot(work, car_id, new_id), snapshot, cat, plan["rows"])
     snapshot["changes"] = changes
     save_snapshot(work, car_id, new_id, snapshot)
     result = {"new_id": new_id, "tune": new_id, "name_suffix": meta["name_suffix"], "build_dir": out_dir, "package": pkg, "size": os.path.getsize(pkg),
-              "applied": applied, "notes": notes, "sounds": changed_sounds, "changes": changes, "installed": None, "backup": None}
+              "applied": applied, "notes": notes, "sounds": changed_sounds, "changes": changes, "versions": merged, "installed": None, "backup": None}
     if install:
         result["backup"], result["installed"] = install_package(work, pkg, plan["mods"])
     return result
@@ -2534,11 +3115,11 @@ def saved_garage(state):
     return saved
 
 
-def garage_choices(work, car_id, tune=None):
+def garage_choices(work, car_id, tune=None, version=None):
     """The garage of a car: {choices: [{key, kind (own, stock), label, ticked, start}], custom, missing}. Without a saved
     selection every stock tyre is ticked; start marks the first ticked choice; missing lists the saved keys that are no
     choice any more (deleted or damaged library tyre, stock pair gone)."""
-    saved = saved_garage(load_state(work, car_id, tune))
+    saved = saved_garage(load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune))
     entries = garage_entries(work, car_id)
     ticked = {e["key"] for e in entries if e["kind"] == "stock"} if saved is None else set(saved)
     choices = [dict(e, ticked=e["key"] in ticked, start=False) for e in entries]
@@ -2566,7 +3147,7 @@ def check_garage_keys(work, car_id, keys, stock):
             raise ValueError("unknown stock tyre %s of %s, garage lists the tyres of the car" % (parsed[1], car_id))
 
 
-def set_garage(work, car_id, keys, tune=None):
+def set_garage(work, car_id, keys, tune=None, version=None):
     """Tick exactly the tyres in keys (own:<tyre id> of a library tyre, stock:<front>|<rear> of car_stock_tyres) and store
     them in the state in the fixed order; returns {keys, start}. All stock tyres and no own tyre is the default: the entry
     is removed and the result has default True."""
@@ -2579,22 +3160,22 @@ def set_garage(work, car_id, keys, tune=None):
     check_garage_keys(work, car_id, keys, stock)
     order = {e["key"]: i for i, e in enumerate(entries)}
     keys = sorted(keys, key=lambda k: order[k])
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     if keys == stock:
         if state.pop(TYRE_KEY, None) is not None:
-            save_state(work, car_id, state, tune)
+            save_tune_state(work, car_id, state, tune, version)
         return {"keys": keys, "start": keys[0], "default": True}
     state[TYRE_KEY] = keys
-    save_state(work, car_id, state, tune)
+    save_tune_state(work, car_id, state, tune, version)
     return {"keys": keys, "start": keys[0]}
 
 
-def reset_garage(work, car_id, tune=None):
+def reset_garage(work, car_id, tune=None, version=None):
     """Remove the garage selection of a state: the car is not touched any more. Returns {removed}."""
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     removed = state.pop(TYRE_KEY, None) is not None
     if removed:
-        save_state(work, car_id, state, tune)
+        save_tune_state(work, car_id, state, tune, version)
     return {"removed": removed}
 
 
@@ -2721,11 +3302,11 @@ def saved_turbo(state):
     return saved["donor"]
 
 
-def turbo_choice(work, car_id, tune=None):
+def turbo_choice(work, car_id, tune=None, version=None):
     """The turbo kit of a car: {donor (saved donor id or None), available (False when the car has a turbo itself or no
     donor exists), reason (why not, else ""), donors (list_turbo_donors without the car), picked (the entry of the saved
     donor in donors, None when it has none or is no donor any more), has_turbo (whether the car has a turbo itself)}."""
-    donor = saved_turbo(load_state(work, car_id, tune))
+    donor = saved_turbo(load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune))
     donors = [d for d in list_turbo_donors(work) if d["car"] != car_id]
     own = has_turbo(base_dir(work, car_id), car_id)
     reason = "the car has a turbo already" if own else "" if donors else "no installed car has a turbo"
@@ -2733,7 +3314,7 @@ def turbo_choice(work, car_id, tune=None):
             "picked": next((d for d in donors if d["car"] == donor), None), "has_turbo": own}
 
 
-def set_turbo(work, car_id, donor, tune=None):
+def set_turbo(work, car_id, donor, tune=None, version=None):
     """Choose the donor of a car's turbo kit and store {"donor": donor} in the state (written only when it changes); the car
     must be extracted and have no turbo itself, the donor must be one of list_turbo_donors and not the car. Returns
     {donor, count, kind, boost, boost_ref} of the donor."""
@@ -2749,20 +3330,20 @@ def set_turbo(work, car_id, donor, tune=None):
     picked = turbo_donor(work, donor, {})
     if picked is None:
         raise ValueError("%s is not an installed car with a turbo" % donor)
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     if state.get(TURBO_KEY) != {"donor": donor}:
         state[TURBO_KEY] = {"donor": donor}
-        save_state(work, car_id, state, tune)
+        save_tune_state(work, car_id, state, tune, version)
     return {"donor": donor, "count": picked["count"], "kind": picked["kind"], "boost": picked["boost"],
             "boost_ref": picked["boost_ref"]}
 
 
-def reset_turbo(work, car_id, tune=None):
+def reset_turbo(work, car_id, tune=None, version=None):
     """Remove the turbo kit choice of a state: the car is not touched any more. Returns {removed}."""
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     removed = state.pop(TURBO_KEY, None) is not None
     if removed:
-        save_state(work, car_id, state, tune)
+        save_tune_state(work, car_id, state, tune, version)
     return {"removed": removed}
 
 
@@ -2986,9 +3567,10 @@ def kit_root(work, car_id, donor):
     return root
 
 
-def root_for(work, car_id, tune=None):
-    """The folder the tune of a car is read and built from: the kit root (kit_root) when its state has a turbo kit, else base."""
-    donor = saved_turbo(load_state(work, car_id, tune))
+def root_for(work, car_id, tune=None, version=None):
+    """The folder the tune of a car is read and built from: the kit root (kit_root) when its state has a turbo kit, else base; with
+    version the state of that version of the tune decides."""
+    donor = saved_turbo(load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune))
     return base_dir(work, car_id) if donor is None else kit_root(work, car_id, donor)
 
 
@@ -3239,22 +3821,44 @@ def load_actor(work, car_id):
     return load_msg(actor_path(work, car_id))[0]
 
 
+def carpart_rels(car_root):
+    """The .carpart files below presets/parts of a car folder as paths relative to it (with /), sorted."""
+    base = kspkg.long_path(car_root)
+    return sorted(os.path.relpath(os.path.join(dp, n), base).replace(os.sep, "/")
+                  for dp, _, names in os.walk(os.path.join(base, "presets", "parts")) for n in names if n.lower().endswith(".carpart"))
+
+
+def sound_events(work, car_id):
+    """The audio entries of the sound slots of a car: those of its .actor file, then those of the car_audio_events of the logic_parts of
+    every .carpart below presets/parts (in file order). Raises like load_actor, or ValueError for a .carpart that cannot be decoded."""
+    kinds = set(sounds.SLOTS.values())
+    events = [e for e in sounds.audio_events(load_actor(work, car_id)) if isinstance(e, dict) and e.get("type") in kinds]
+    car_root = car_root_of(base_dir(work, car_id), car_id)
+    for rel in carpart_rels(car_root):
+        for part in (load_msg(tree_path(car_root, rel))[0].get("logic_parts") or []):
+            events += [e for e in (part.get("car_audio_events") or []) if isinstance(e, dict) and e.get("type") in kinds]
+    return events
+
+
 def actor_sounds(work, car_id):
-    """The audio entries of the sound slots of a car's actor file, as the object sounds.collect_options reads. Cached per
-    (work, car) while the path, size and time of the actor file are unchanged (forget_resolved drops it); the caller gets its
-    own copy. Raises like load_actor."""
+    """The audio entries of the sound slots of a car (sound_events: its actor file and its car parts), as the object
+    sounds.collect_options reads. Cached per (work, car) while the path, size and time of the actor file and of every .carpart file are
+    unchanged (forget_resolved drops it); the caller gets its own copy. Raises like sound_events."""
     path, key = actor_path(work, car_id), (work, car_id)
-    st = stat_or_none(path)
-    stamp = (path, st.st_mtime_ns, st.st_size) if st else None
+    car_root = car_root_of(base_dir(work, car_id), car_id)
+
+    def stamp_of():
+        files = [path] + [tree_path(car_root, rel) for rel in carpart_rels(car_root)]
+        stats = [stat_or_none(f) for f in files]
+        return None if None in stats else tuple((f, st.st_mtime_ns, st.st_size) for f, st in zip(files, stats))
+
+    stamp = stamp_of()
     with _resolve_lock:
         hit = _actor_options.get(key)
     if hit and stamp is not None and hit[0] == stamp:
         return copy.deepcopy(hit[1])
-    kinds = set(sounds.SLOTS.values())
-    events = [e for e in sounds.audio_events(load_actor(work, car_id)) if isinstance(e, dict) and e.get("type") in kinds]
-    found = {"car": {"audio_events": events}}
-    after = stat_or_none(path)
-    if stamp is not None and after and (path, after.st_mtime_ns, after.st_size) == stamp:
+    found = {"car": {"audio_events": sound_events(work, car_id)}}
+    if stamp is not None and stamp_of() == stamp:
         with _resolve_lock:
             _actor_options[key] = (stamp, copy.deepcopy(found))
     return found
@@ -3305,17 +3909,17 @@ def sound_view(options, skipped, own, saved):
     return {"slots": slots, "skipped": skipped, "missing": missing}
 
 
-def sound_choices(work, car_id, tune=None):
+def sound_choices(work, car_id, tune=None, version=None):
     """The sound picker of a car: {slots: {slot: {options, own (key of the stock car's sound or None), selected (the saved key
     or None)}}, skipped (cars sound_options could not read), missing (saved choices that are not offered any more)}."""
-    saved = saved_sounds(load_state(work, car_id, tune))
+    saved = saved_sounds(load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune))
     options, skipped = sound_options(work)
     return sound_view(options, skipped, sound_own(work, car_id), saved)
 
 
-def set_sound(work, car_id, slot, key, tune=None):
-    """Choose the sound with the option key for a slot of a car and store it in the "_sounds" entry of the state (written only when
-    it changes). key None or the car's own sound removes the slot's entry, an empty "_sounds" entry is removed from the state. The
+def set_sound(work, car_id, slot, key, tune=None, version=None):
+    """Choose the sound with the option key for a slot of a car and store it in the "_sounds" entry of the state (of its version when
+    given; written only when it changes). key None or the car's own sound removes the slot's entry, an empty "_sounds" entry is removed from the state. The
     slot must exist and the key must be an option of sound_options. Returns sound_choices."""
     sounds.slot_type(slot)
     if key is not None and not isinstance(key, str):
@@ -3324,7 +3928,7 @@ def set_sound(work, car_id, slot, key, tune=None):
     options, skipped = sound_options(work)
     if key is not None and key not in {o["key"] for o in options[slot]}:
         raise ValueError("unknown %s sound %s, sounds lists the sounds of the game cars" % (slot, key))
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     saved = dict(saved_sounds(state))
     if key is None or key == own[slot]:
         saved.pop(slot, None)
@@ -3335,15 +3939,19 @@ def set_sound(work, car_id, slot, key, tune=None):
             state[SOUND_KEY] = saved
         else:
             del state[SOUND_KEY]
-        save_state(work, car_id, state, tune)
+        if version is None:
+            save_state(work, car_id, state, tune)
+        else:
+            save_version_state(work, car_id, state, version, tune)
     return sound_view(options, skipped, own, saved)
 
 
-def reset_sounds(work, car_id, tune=None, slot=None):
-    """Remove the sound choice of one slot, or of every slot (slot None), from a state: the car keeps its own sounds. Returns {removed}."""
+def reset_sounds(work, car_id, tune=None, slot=None, version=None):
+    """Remove the sound choice of one slot, or of every slot (slot None), from a state (of a version when given): the car keeps its own
+    sounds. Returns {removed}."""
     if slot is not None:
         sounds.slot_type(slot)
-    state = load_state(work, car_id, tune)
+    state = load_state(work, car_id, tune) if version is None else read_version_state(work, car_id, version, tune)
     if slot is None:
         removed = state.pop(SOUND_KEY, None) is not None
     else:
@@ -3354,14 +3962,17 @@ def reset_sounds(work, car_id, tune=None, slot=None):
                 state[SOUND_KEY] = saved
             else:
                 del state[SOUND_KEY]
-    if removed:
+    if removed and version is None:
         save_state(work, car_id, state, tune)
+    elif removed:
+        save_version_state(work, car_id, state, version, tune)
     return {"removed": removed}
 
 
 def sound_template(work, slot, option):
-    """The audio entry of the option in the .actor of the first installed car that offers it (option["cars"][0], see sound_options)."""
-    for _, entry in sounds.slot_entries(load_actor(work, option["cars"][0]), slot):
+    """The audio entry of the option in the .actor or the car parts of the first installed car that offers it (option["cars"][0], see
+    sound_options)."""
+    for _, entry in sounds.slot_entries({"car": {"audio_events": sound_events(work, option["cars"][0])}}, slot):
         if sounds.option_of(entry)["key"] == option["key"]:
             return entry
     raise ValueError("the %s sound %s is not in the actor of %s any more" % (slot, option["key"], option["cars"][0]))
@@ -3520,8 +4131,8 @@ def print_copy_differences(rows):
             print("    %s = %s" % (c["target"], fmt(c["value"])))
 
 
-def warn_unknown_state(work, car_id, catalogue=None, tune=None):
-    for sid in unknown_state_ids(work, car_id, catalogue, tune):
+def warn_unknown_state(work, car_id, catalogue=None, tune=None, version=None):
+    for sid in unknown_state_ids(work, car_id, catalogue, tune, version):
         print("warning: ignoring unknown setting '%s' in the saved state" % sid, file=sys.stderr)
 
 
@@ -3616,12 +4227,13 @@ def cmd_init():
 
 
 def cmd_defaults():
-    pos, opts = cli_args(("car", "tune", "variant", "work"), ("hidden",))
-    if pos or ("tune" in opts and "variant" in opts):
+    pos, opts = cli_args(("car", "tune", "variant", "version", "work"), ("hidden",))
+    if pos or ("tune" in opts and "variant" in opts) or ("version" in opts and "variant" in opts):
         usage()
     work, car_id = start(opts)
-    tune_arg(work, car_id, opts)
-    every = resolve_defaults(work, car_id, hidden=True, variant=opts.get("variant"))
+    tune_id = tune_arg(work, car_id, opts)
+    every = resolve_defaults(work, car_id, hidden=True, variant=opts.get("variant"), tune=tune_id if "version" in opts else None,
+                             version=opts.get("version"))
     rows = [r for r in every if r["applicable"]]
     print_defaults(rows)
     print("%d hidden for this car (not applicable)" % (len(every) - len(rows)))
@@ -3651,35 +4263,61 @@ def cmd_variants():
             print("  error: %s" % v["error"])
 
 
-def cmd_set():
+def cmd_versions():
+    pos, opts = cli_args(("car", "tune", "work"))
+    if pos:
+        usage()
+    work, car_id = start(opts)
+    print("base")
+    for v in list_versions(work, car_id, tune_arg(work, car_id, opts)):
+        print("%s: %s" % (v["id"], v["name"]))
+
+
+def cmd_version_add():
+    pos, opts = cli_args(("from", "car", "tune", "work"))
+    if len(pos) != 1:
+        usage()
+    work, car_id = start(opts)
+    print("car: %s, new version: %s" % (car_id, add_version(work, car_id, pos[0], tune_arg(work, car_id, opts), opts.get("from"))))
+
+
+def cmd_version_rename():
     pos, opts = cli_args(("car", "tune", "work"))
     if len(pos) != 2:
         usage()
     work, car_id = start(opts)
-    res = set_value(work, car_id, pos[0], pos[1], tune=tune_arg(work, car_id, opts))
+    print("%s: %s" % (pos[0], rename_version(work, car_id, pos[0], pos[1], tune_arg(work, car_id, opts))))
+
+
+def cmd_set():
+    pos, opts = cli_args(("car", "tune", "version", "work"))
+    if len(pos) != 2:
+        usage()
+    work, car_id = start(opts)
+    res = set_value(work, car_id, pos[0], pos[1], tune=tune_arg(work, car_id, opts), version=opts.get("version"))
     for w in res["warnings"]:
         print("warning: " + w, file=sys.stderr)
     print("%s = %s" % (res["id"], fmt(res["value"])))
 
 
 def cmd_unset():
-    pos, opts = cli_args(("car", "tune", "work"))
+    pos, opts = cli_args(("car", "tune", "version", "work"))
     if len(pos) != 1:
         usage()
     work, car_id = start(opts)
-    res = unset_value(work, car_id, pos[0], tune=tune_arg(work, car_id, opts))
+    res = unset_value(work, car_id, pos[0], tune=tune_arg(work, car_id, opts), version=opts.get("version"))
     print("%s %s" % (res["id"], "removed from the state" if res["removed"] else "was not set"))
 
 
 def cmd_show():
-    pos, opts = cli_args(("car", "tune", "work"))
+    pos, opts = cli_args(("car", "tune", "version", "work"))
     if pos:
         usage()
     work, car_id = start(opts)
     tune_id = tune_arg(work, car_id, opts)
     cat = load_catalogue()
-    warn_unknown_state(work, car_id, cat, tune_id)
-    rows = effective_rows(work, car_id, cat, tune=tune_id)
+    warn_unknown_state(work, car_id, cat, tune_id, opts.get("version"))
+    rows = effective_rows(work, car_id, cat, tune=tune_id, version=opts.get("version"))
     print(table(["", "id", "value", "default", "unit"],
                 [["*" if r["changed"] else "", r["id"], fmt(r["value"]), fmt(r["default"]), r["unit"]]
                  for r in rows]))
@@ -3905,20 +4543,20 @@ def cmd_sounds():
 
 
 def cmd_sound_set():
-    pos, opts = cli_args(("car", "tune", "work"), ("draft",))
+    pos, opts = cli_args(("car", "tune", "version", "work"), ("draft",))
     if len(pos) != 2:
         usage()
     work, car_id = start(opts)
-    res = set_sound(work, car_id, pos[0], pos[1], tune_arg(work, car_id, opts))
+    res = set_sound(work, car_id, pos[0], pos[1], tune_arg(work, car_id, opts), opts.get("version"))
     print("%s sound: %s%s" % (pos[0], pos[1], "" if res["slots"][pos[0]]["selected"] else " (the own sound of the car, nothing is stored)"))
 
 
 def cmd_sound_reset():
-    pos, opts = cli_args(("car", "tune", "work"), ("draft",))
+    pos, opts = cli_args(("car", "tune", "version", "work"), ("draft",))
     if len(pos) > 1:
         usage()
     work, car_id = start(opts)
-    res = reset_sounds(work, car_id, tune_arg(work, car_id, opts), pos[0] if pos else None)
+    res = reset_sounds(work, car_id, tune_arg(work, car_id, opts), pos[0] if pos else None, opts.get("version"))
     print("%ssound selection %s" % (pos[0] + " " if pos else "", "removed from the state" if res["removed"] else "was not set"))
 
 
@@ -3941,6 +4579,9 @@ COMMANDS = {
     "init": cmd_init,
     "defaults": cmd_defaults,
     "variants": cmd_variants,
+    "versions": cmd_versions,
+    "version-add": cmd_version_add,
+    "version-rename": cmd_version_rename,
     "set": cmd_set,
     "unset": cmd_unset,
     "show": cmd_show,

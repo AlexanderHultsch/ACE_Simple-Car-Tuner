@@ -436,6 +436,14 @@
       ]
     },
     {
+      "id": "ff_mult", "group": "Steering", "label": "Force feedback multiplier", "kind": "value", "type": "float", "unit": "x",
+      "description": "FF Mult adjusts the baseline force feedback output of the car. This is the force feedback multiplier of the car (SteerControlsData.ffMult, stored in the .car only): the game multiplies the car's steering force by it before it reaches the wheel. Measured on 2026-11-22: the game's live force feedback signal (ffb_strength in the shared memory) was weaker on the BMW M3 E46 CSL Drift (ffMult 1.75) than on the Toyota Supra MKIV Drift preset (ffMult 1.5), so the axle and tyres matter as much; raise it in small steps, a signal above 1.0 probably clips at the wheel.",
+      "verified": false, "min": 0, "max": 5,
+      "targets": [
+        {"file": "@car", "path": "controls.ffMult"}
+      ]
+    },
+    {
       "id": "caster_front", "group": "Alignment & tyres", "label": "Front caster", "kind": "value", "type": "float", "unit": "deg",
       "description": "Default setup: caster angle of the front wheels (both wheels). The stock values are small negative numbers and the unit is assumed to be degrees, not confirmed; the effect on the steering in the game is not confirmed.",
       "verified": false, "min": -2, "max": 2,

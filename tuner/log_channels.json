@@ -49,6 +49,7 @@
     "steer_ratio_min": {"status": "indirect", "note": "only its effect is visible: steer, steer_deg, angular_vel", "once": [], "live": []},
     "steer_ratio_max": {"status": "indirect", "note": "only its effect is visible: steer, steer_deg, angular_vel", "once": [], "live": []},
     "steer_rod_ratio": {"status": "indirect", "note": "only its effect is visible: steer, steer_deg, angular_vel", "once": [], "live": []},
+    "ff_mult": {"status": "indirect", "note": "only its effect is visible: steer, steer_deg, angular_vel", "once": [], "live": []},
     "caster_front": {"status": "none", "note": "not published by the game", "once": [], "live": []},
     "brake_bias": {"status": "direct", "note": "", "once": ["brake_bias"], "live": ["brake_bias"]},
     "brake_bias_min": {"status": "direct", "note": "", "once": ["electronics_min", "electronics_max"], "live": ["brake_bias"]},

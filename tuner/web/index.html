@@ -266,10 +266,15 @@ button.small { padding: 2px 8px; font-size: 12px; }
         <label class="selectrow">Car
           <select id="car-select" aria-label="Car" disabled></select>
         </label>
+        <label id="version-field" class="selectrow" hidden>Version
+          <select id="version-select" aria-label="Version" disabled></select>
+        </label>
       </div>
       <div class="actions">
         <button id="btn-apply" class="primary" type="button" disabled>Create modded car&hellip;</button>
         <button id="btn-duplicate" type="button" disabled>Duplicate&hellip;</button>
+        <button id="btn-version-add" type="button" hidden disabled>Add version&hellip;</button>
+        <button id="btn-version-rename" type="button" hidden disabled>Rename version&hellip;</button>
       </div>
     </div>
 
@@ -292,11 +297,27 @@ button.small { padding: 2px 8px; font-size: 12px; }
       </div>
     </section>
 
+    <section id="version-dialog" class="panel dialog" role="group" aria-labelledby="version-dialog-title" hidden>
+      <h2 id="version-dialog-title"></h2>
+      <div class="field">
+        <label for="version-dialog-name">Version name</label>
+        <input id="version-dialog-name" type="text" autocomplete="off" spellcheck="false">
+      </div>
+      <p id="version-dialog-hint" class="hint"></p>
+      <p id="version-dialog-error" class="msg err" role="alert" hidden></p>
+      <div class="actions">
+        <button id="version-dialog-ok" class="primary" type="button">OK</button>
+        <button id="version-dialog-cancel" type="button">Cancel</button>
+      </div>
+    </section>
+
     <div id="name-host" hidden></div>
 
     <p id="untested" class="untested" hidden></p>
 
     <div id="status" class="strip" role="status" aria-live="polite"></div>
+
+    <p id="mod-paths" class="tunenote" hidden></p>
 
     <section id="progress" class="panel" hidden aria-live="polite"></section>
 
@@ -518,6 +539,9 @@ const POLL_IDLE_MS = 5000;
 const POLL_HIDDEN_MS = 30000;
 const LOG_POLL_MS = 2000;
 const SELECTION_KEY = "tuner.selection";
+// the routes that work on the version of the selected modded car when the request carries its id
+const VERSION_PATHS = ["/api/settings", "/api/set", "/api/unset", "/api/reset_all", "/api/garage", "/api/garage_set", "/api/garage_reset",
+  "/api/turbo", "/api/turbo_set", "/api/turbo_reset", "/api/sounds", "/api/sound_set", "/api/sound_reset"];
 const DRAFT = "draft";
 
 const $ = (id) => document.getElementById(id);
@@ -551,11 +575,13 @@ let statusSig = "";
 let carsSig = "";
 // the selected car: car is the stock id (null until the server named its default car), tune is "draft" for a base car
 // and the id of the modded car otherwise; variant (only on a base car, else absent) is the id of one of its presets, shown
-// read-only
+// read-only; version (only on a modded car, absent for its base) is the id of one of its versions
 let selection = storedSelection();
 let carConfirmed = false;
 // the open Create / Duplicate panel: {kind, opener, busy}, else null
 let dialog = null;
+// the open Add / Rename version panel: {kind, opener, busy}, else null
+let versionDialog = null;
 // set after Create started its job: {car, known: ids of the modded cars before}; the new car is selected when the job ends
 let awaitCreated = null;
 // the tabs and their panels in the same order; the shown tab is the index activeTab. Panels are hidden, never removed,
@@ -636,7 +662,8 @@ function storedSelection() {
   try {
     const s = JSON.parse(window.localStorage.getItem(SELECTION_KEY));
     if (!s || typeof s.car !== "string" || typeof s.tune !== "string") return none;
-    return typeof s.variant === "string" && s.tune === DRAFT ? { car: s.car, tune: s.tune, variant: s.variant } : { car: s.car, tune: s.tune };
+    if (typeof s.variant === "string" && s.tune === DRAFT) return { car: s.car, tune: s.tune, variant: s.variant };
+    return typeof s.version === "string" && s.version && s.tune !== DRAFT ? { car: s.car, tune: s.tune, version: s.version } : { car: s.car, tune: s.tune };
   } catch (e) {
     return none;
   }
@@ -651,7 +678,7 @@ function storeSelection(s) {
 }
 
 function sameSelection(a, b) {
-  return a.car === b.car && a.tune === b.tune && a.variant === b.variant;
+  return a.car === b.car && a.tune === b.tune && a.variant === b.variant && a.version === b.version;
 }
 
 // whether the selection is a preset of a stock car: its values can be read, nothing can be changed
@@ -713,6 +740,19 @@ function variantEntry() {
   return c && selection.variant ? (c.variants || []).find((v) => v.id === selection.variant) || null : null;
 }
 
+// the versions of the selected modded car as the last state listed them ([{id, name}]; empty while that state is of another car)
+function versionList() {
+  return serverState && serverState.tune === selection.tune && serverState.versions ? serverState.versions : [];
+}
+
+function versionEntry() {
+  return selection.version ? versionList().find((v) => v.id === selection.version) || null : null;
+}
+
+function versionSelection(id) {
+  return id ? { car: selection.car, tune: selection.tune, version: id } : { car: selection.car, tune: selection.tune };
+}
+
 function shownName() {
   const m = moddedEntry();
   const v = variantEntry();
@@ -720,14 +760,16 @@ function shownName() {
 }
 
 async function api(path, body, target) {
+  const versioned = !!target && !!target.version && VERSION_PATHS.includes(path.split("?")[0]);
   if (target && body === undefined) {
     path += (path.includes("?") ? "&" : "?") + (target.car ? "car=" + encodeURIComponent(target.car) + "&" : "") + "tune=" + encodeURIComponent(target.tune);
     if (target.variant && path.startsWith("/api/settings?")) path += "&variant=" + encodeURIComponent(target.variant);
+    if (versioned) path += "&version=" + encodeURIComponent(target.version);
   }
   const opts = body === undefined ? {} : {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Tuner": "1" },
-    body: JSON.stringify(target ? Object.assign({}, body, { car: target.car, tune: target.tune }) : body)
+    body: JSON.stringify(target ? Object.assign({}, body, { car: target.car, tune: target.tune }, versioned ? { version: target.version } : {}) : body)
   };
   let res;
   try {
@@ -796,6 +838,12 @@ function renderStatus() {
   }
 }
 
+function renderModPaths() {
+  const paths = serverState && serverState.tune !== DRAFT ? serverState.mod_paths : null;
+  showText("mod-paths", paths ? "Where it lives: package " + paths.package + "; versions folder " + paths.versions_folder +
+    ". To remove a version, delete its folder by hand, then press Apply. The page never deletes." : "");
+}
+
 function optionText(c) {
   return c.display_name || c.label;
 }
@@ -810,7 +858,8 @@ function renderCars() {
       (c.variants || []).map((v) => ["var:" + c.id + ":" + v.id, optionText(c) + " - " + v.label + " (preset, view only)" + (v.error ? " (cannot be read)" : ""), !!v.error])))],
     ["Other Cars", list.filter((c) => !c.extracted).sort(byName).map((c) => ["base:" + c.id, optionText(c)])]
   ];
-  const sig = JSON.stringify([optionGroups, selection]);
+  const versions = moddedEntry() ? versionList() : [];
+  const sig = JSON.stringify([optionGroups, selection, versions]);
   if (sig === carsSig) return;
   carsSig = sig;
   select.replaceChildren();
@@ -828,6 +877,15 @@ function renderCars() {
   }
   select.value = choiceValue(selection);
   select.disabled = list.length === 0;
+  const versionSelect = $("version-select");
+  versionSelect.replaceChildren();
+  for (const [id, name] of [["", "Base"]].concat(versions.map((v) => [v.id, v.name]))) {
+    const o = el("option", "", name);
+    o.value = id;
+    versionSelect.appendChild(o);
+  }
+  versionSelect.value = selection.version || "";
+  $("version-field").hidden = !moddedEntry();
   const entry = carEntry();
   $("untested").hidden = !entry || entry.tested;
   $("untested").textContent = entry && !entry.tested ?
@@ -851,14 +909,31 @@ function renderButtons() {
   let whyDuplicate = why;
   if (why === "close the game first") whyDuplicate = serverState.base_present ? "" : "extract the stock car first";
   if (whyDuplicate === "" && draft) whyDuplicate = "select a modded car to duplicate it";
+  if (whyDuplicate === "" && selection.version) whyDuplicate = "select the base version to create or duplicate";
   $("btn-apply").textContent = draft ? "Create modded car\u2026" : "Apply (update this car)";
   $("btn-apply").disabled = why !== "";
   $("btn-apply").title = why;
   $("btn-duplicate").disabled = whyDuplicate !== "";
   $("btn-duplicate").title = whyDuplicate;
+  const moddedSelected = !!moddedEntry();
+  let whyVersion = "";
+  if (!serverState) whyVersion = why;
+  else if (running) whyVersion = "a job is running";
+  else if (!serverState.base_present) whyVersion = "extract the stock car first";
+  const whyRename = whyVersion || (selection.version ? "" : "select a version to rename it, the base has no version name");
+  $("btn-version-add").hidden = !moddedSelected;
+  $("btn-version-add").disabled = whyVersion !== "";
+  $("btn-version-add").title = whyVersion;
+  $("btn-version-rename").hidden = !moddedSelected;
+  $("btn-version-rename").disabled = whyRename !== "";
+  $("btn-version-rename").title = whyRename;
+  $("version-select").disabled = running || (versionList().length === 0 && !selection.version);
   const locked = running || (dialog !== null && dialog.busy);
   for (const id of ["dialog-id", "dialog-suffix", "dialog-ok"]) $(id).disabled = locked;
   $("dialog-cancel").disabled = dialog !== null && dialog.busy;
+  const versionLocked = running || (versionDialog !== null && versionDialog.busy);
+  for (const id of ["version-dialog-name", "version-dialog-ok"]) $(id).disabled = versionLocked;
+  $("version-dialog-cancel").disabled = versionDialog !== null && versionDialog.busy;
   $("btn-init").disabled = !serverState || running;
   $("btn-reset-all").disabled = running;
   for (const r of headerRow ? rows.concat(headerRow) : rows) {
@@ -870,6 +945,14 @@ function renderButtons() {
     for (const r of rows) {
       r.field.disabled = true;
       r.reset.disabled = true;
+    }
+  }
+  if (selection.version) {
+    for (const r of headerRow ? rows.concat(headerRow) : rows) {
+      if (r.data.kind === "meta") {
+        r.field.disabled = true;
+        r.reset.disabled = true;
+      }
     }
   }
   const baseOk = !!serverState && serverState.base_present;
@@ -912,6 +995,9 @@ function summaryApply(box, res) {
       details.appendChild(ul);
       box.appendChild(details);
     }
+  }
+  if (res.versions && res.versions.length) {
+    addLine(box, "versions: " + res.versions.map((v) => v.name + " (" + v.files + (v.files === 1 ? " file" : " files") + " of its own)").join(", "));
   }
   addLine(box, "Package: " + res.package + " (" + fmtBytes(res.size) + ")");
   addLine(box, "Installed to: " + (res.installed || "-"));
@@ -987,7 +1073,13 @@ async function refresh() {
   if (serverState && !carConfirmed) {
     selection = { car: serverState.car, tune: serverState.tune };
     if (want.variant && want.tune === serverState.tune) selection.variant = want.variant;
+    if (want.version && want.tune === serverState.tune) selection.version = want.version;
     carConfirmed = true;
+  }
+  // the stored version may be gone: show the base of the modded car
+  if (selection.version && serverState && serverState.tune === selection.tune && !versionEntry()) {
+    switchCar({ car: selection.car, tune: selection.tune });
+    return;
   }
   // the stored preset may be gone: show the stock car
   if (selection.variant && serverState && serverState.cars && !variantEntry()) {
@@ -999,6 +1091,7 @@ async function refresh() {
   if (serverState && serverState.base_present && !tableLoaded && !extracting) await loadSettings();
   renderCars();
   renderStatus();
+  renderModPaths();
   renderButtons();
   renderProgress();
   const busy = jobRunning();
@@ -1156,7 +1249,8 @@ function buildHeaderRow(data, target) {
   r.reset = buildReset(r);
   r.tr.appendChild(r.reset);
   r.tr.appendChild(el("span", "tunenote", target.tune === DRAFT ?
-    "Base car: Apply creates a new modded car" : "Modded car " + target.tune + " of " + carName()));
+    "Base car: Apply creates a new modded car" : target.version ? "Shared by all versions; change it on the base" :
+      "Modded car " + target.tune + " of " + carName()));
   r.tr.appendChild(r.msg);
   $("name-host").replaceChildren(r.tr);
   showRow(r, data, false);
@@ -1202,6 +1296,7 @@ function buildRow(data, target, withRange) {
   valueCell.appendChild(wrap);
   valueCell.appendChild(r.msg);
   if (data.applicable === false) valueCell.appendChild(el("div", "msg warn", "Not applicable: " + data.reason));
+  if (target.version && data.kind === "meta") valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));
 
   const descCell = el("td");
   descCell.appendChild(document.createTextNode(data.description));
@@ -1521,6 +1616,82 @@ async function resetAll() {
   });
 }
 
+function showVersionDialogError(text) {
+  showText("version-dialog-error", text);
+}
+
+function openVersionDialog(kind) {
+  if (!serverState || !moddedEntry()) return;
+  const add = kind === "add";
+  const current = versionEntry();
+  if (!add && !current) return;
+  const opener = versionDialog ? versionDialog.opener : document.activeElement;
+  versionDialog = { kind: kind, opener: opener, busy: false };
+  $("version-dialog-title").textContent = add ? "Add a version of " + shownName() : "Rename version " + current.name;
+  $("version-dialog-name").value = add ? "" : current.name;
+  $("version-dialog-hint").textContent = add ?
+    "The new version starts as a copy of " + (current ? "version " + current.name : "the base") +
+    ". The game shows the name as the version's name." : "The game shows the name as the version's name.";
+  showVersionDialogError("");
+  $("version-dialog").hidden = false;
+  renderButtons();
+  $("version-dialog-name").focus();
+  $("version-dialog-name").select();
+}
+
+function closeVersionDialog(restoreFocus) {
+  if (!versionDialog) return;
+  const opener = versionDialog.opener;
+  versionDialog = null;
+  $("version-dialog").hidden = true;
+  renderButtons();
+  if (restoreFocus) {
+    const back = [opener, $("version-select"), $("car-select")].find((n) => n && document.contains(n) && !n.disabled);
+    if (back) back.focus();
+  }
+}
+
+async function submitVersionDialog() {
+  if (!versionDialog || versionDialog.busy || !serverState || jobRunning()) return;
+  const mine = versionDialog;
+  const target = selection;
+  const name = $("version-dialog-name").value.trim();
+  mine.busy = true;
+  showVersionDialogError("");
+  renderButtons();
+  try {
+    if (mine.kind === "add") {
+      const res = await api("/api/version_add", { name: name, from: target.version }, target);
+      if (versionDialog !== mine) return;
+      closeVersionDialog(true);
+      switchCar({ car: target.car, tune: target.tune, version: res.id });
+    } else {
+      await api("/api/version_rename", { name: name, version: target.version }, target);
+      if (versionDialog !== mine) return;
+      closeVersionDialog(true);
+      await refresh();
+    }
+  } catch (e) {
+    mine.busy = false;
+    if (versionDialog === mine) {
+      showVersionDialogError(e.message);
+      $("version-dialog-name").focus();
+    }
+    renderButtons();
+  }
+}
+
+function versionDialogKey(ev) {
+  if (!versionDialog) return;
+  if (ev.key === "Escape") {
+    ev.preventDefault();
+    if (!versionDialog.busy) closeVersionDialog(true);
+  } else if (ev.key === "Enter" && ev.target.tagName === "INPUT") {
+    ev.preventDefault();
+    submitVersionDialog();
+  }
+}
+
 function switchCar(next) {
   if (!next || sameSelection(next, selection)) return;
   selection = next;
@@ -1541,6 +1712,7 @@ function switchCar(next) {
   renderSounds();
   awaitCreated = null;
   closeDialog(false);
+  closeVersionDialog(false);
   tableLoaded = false;
   clearTable();
   localError = "";
@@ -2881,6 +3053,12 @@ $("btn-apply").addEventListener("click", () => {
   else startJob("/api/apply", {});
 });
 $("btn-duplicate").addEventListener("click", () => openDialog("duplicate"));
+$("version-select").addEventListener("change", () => switchCar(versionSelection($("version-select").value)));
+$("btn-version-add").addEventListener("click", () => openVersionDialog("add"));
+$("btn-version-rename").addEventListener("click", () => openVersionDialog("rename"));
+$("version-dialog-ok").addEventListener("click", submitVersionDialog);
+$("version-dialog-cancel").addEventListener("click", () => closeVersionDialog(true));
+$("version-dialog").addEventListener("keydown", versionDialogKey);
 $("btn-init").addEventListener("click", () => startJob("/api/init", {}));
 $("btn-reset-all").addEventListener("click", resetAll);
 $("btn-expand-all").addEventListener("click", () => setAllGroups(true));

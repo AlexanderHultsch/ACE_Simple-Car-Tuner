@@ -18,6 +18,7 @@ import tune
 USAGE = tune.__doc__.split("\n\n")[1]
 REAL_PACK = kspkg.cmd_pack
 REAL_RENAME = os.rename
+CAR_NOTE = "note: car file: data/x.car renamed to data/CarData.car (the paint shop of a mod car expects that name)"
 GS = "content\\cars\\common_phsx\\"
 A, B = GS + "tyres\\road\\a.tyre", GS + "tyres\\road\\b.tyre"
 S, W, M = GS + "tyres\\slick\\s.tyre", GS + "tyres\\wet\\w.tyre", GS + "tyres\\misc\\m.tyre"
@@ -448,7 +449,7 @@ class Apply(World):
 
     def rename(self, src, dst):
         old, new = self.x.key(src), self.x.key(dst)
-        moved = [k for k in self.x.store if k.startswith(old + os.sep)]
+        moved = [k for k in self.x.store if k == old or k.startswith(old + os.sep)]
         REAL_RENAME(src, dst)
         self.x.store.update({new + k[len(old):]: self.x.store.pop(k) for k in moved})
 
@@ -485,7 +486,7 @@ class Apply(World):
         return self.built(res, "presets/%s.compatibletyres" % name)["physic_compounds"]
 
     def lists(self, res):
-        car = self.built(res, "data/x.car")
+        car = self.built(res, "data/CarData.car")
         return car["frontTyreCompounds"], car["rearTyreCompounds"]
 
     def snapshot(self, res):
@@ -508,7 +509,7 @@ class TestApplyWithoutASelection(Apply):
         with contextlib.redirect_stdout(out):
             res = self.apply({"name_suffix": "_Z"})
         self.assertEqual(out.getvalue(), "")
-        self.assertEqual(res["notes"], ["note: from build"])
+        self.assertEqual(res["notes"], ["note: from build", CAR_NOTE])
         self.assertEqual([a["id"] for a in res["applied"]], ["name_suffix"])
         self.assertEqual(self.lists(res), ([A_UP, S, W, M], [B, S, W]))
         self.assertEqual(self.compounds(res, "p")[0], self.p["physic_compounds"][0])
@@ -528,8 +529,8 @@ class TestApplyWithoutASelection(Apply):
 
     def test_a_tyre_setting_alone_works_as_before(self):
         res = self.apply({"tyre_dy_front": 1.4})
-        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-1])
-        self.assertEqual(len(res["notes"]), 2)
+        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-2])
+        self.assertEqual(len(res["notes"]), 3)
 
 
 class TestApplyOwnTyre(Apply):
@@ -594,7 +595,7 @@ class TestApplyOwnTyre(Apply):
         self.assertEqual(self.p["physic_compounds"][1]["rear_tyre_data_paths"], [S, B])
         self.assertEqual(self.compounds(res, "q")[0]["rear_tyre_data_paths"], [OWN_R % "slicky"])
         self.assertEqual(self.built(res, "presets/p.compatibletyres")["_order"], ["physic_compounds"] * 2)
-        car = self.built(res, "data/x.car")
+        car = self.built(res, "data/CarData.car")
         self.assertEqual((car["_order"].count("frontTyreCompounds"), car["_order"].count("rearTyreCompounds")), (2, 1))
 
     def test_an_own_tyre_whose_source_only_another_car_offers_is_copied_from_that_base(self):
@@ -672,7 +673,7 @@ class TestApplyMixedSelections(Apply):
         self.assertEqual([c["name"] for c in self.compounds(res, "p")], ["slick", "odd"])
         self.assertEqual(self.compounds(res, "p")[0], self.p["physic_compounds"][1])
         self.assertEqual([c["name"] for c in self.compounds(res, "q")], ["q_slick"])
-        self.assertEqual(self.tree(res).count("data/x.car"), 1)
+        self.assertEqual(self.tree(res).count("data/CarData.car"), 1)
 
     def test_an_entry_of_the_tyre_lists_that_no_preset_pair_names_stays_at_the_end(self):
         self.car["frontTyreCompounds"] += [self.x.game_path("data/tyres/odd.tyre"), M.upper()]
@@ -684,7 +685,7 @@ class TestApplyMixedSelections(Apply):
     def test_the_wire_order_of_the_car_follows_the_new_lengths(self):
         self.select(ST_SS, ST_AB)
         res = self.apply()
-        car = self.built(res, "data/x.car")
+        car = self.built(res, "data/CarData.car")
         self.assertEqual((car["_order"].count("frontTyreCompounds"), car["_order"].count("rearTyreCompounds")),
                          (len(car["frontTyreCompounds"]), len(car["rearTyreCompounds"])))
         self.assertEqual(self.built(res, "presets/p.compatibletyres")["_order"], ["physic_compounds"] * len(self.compounds(res, "p")))
@@ -799,7 +800,7 @@ class TestApplyWithTyreValues(Apply):
         self.assertEqual([c["front_tyre_data_path"] for c in self.compounds(res, "p")][:2], [own, S])
         self.assertEqual([c["front_tyre_data_path"] for c in self.compounds(res, "q")], [own, S])
         self.assertEqual(res["notes"][1:], ["note: garage: 2 tyre(s), starting on tyres\\road\\a + tyres\\road\\b",
-                                            "note: tyre front: own file %s replaces %s in 1 .car entry(ies) and 2 compatibletyres entry(ies)" % (own, A_UP)])
+                                            "note: tyre front: own file %s replaces %s in 1 .car entry(ies) and 2 compatibletyres entry(ies)" % (own, A_UP), CAR_NOTE])
         self.assertEqual([a["id"] for a in res["applied"]], ["tyre_dy_front"])
 
     def test_they_also_work_when_an_own_tyre_is_first_and_the_stock_starting_tyre_is_ticked_later(self):
@@ -834,7 +835,7 @@ class TestApplyWithTyreValues(Apply):
 
     def test_without_a_selection_the_zero_case_is_not_an_error(self):
         tune.set_value(self.work, "ks_x", "tyre_dy_front", "1.4", self.cat)
-        self.assertEqual(len(self.apply()["notes"]), 2)
+        self.assertEqual(len(self.apply()["notes"]), 3)
 
     def test_build_tyre_reports_the_number_of_references_only_when_asked(self):
         item = {"id": "tyre_dy_front", "files": []}
@@ -856,11 +857,11 @@ class TestApplyResult(Apply):
             "note: from build",
             "note: garage: own tyre slicky -> data/tyres/own_slicky_front.tyre, data/tyres/own_slicky_rear.tyre",
             "note: garage: own tyre soft -> data/tyres/own_soft_front.tyre, data/tyres/own_soft_rear.tyre",
-            "note: garage: 3 tyre(s), starting on Slicky"])
+            "note: garage: 3 tyre(s), starting on Slicky", CAR_NOTE])
 
     def test_a_stock_start_is_named_by_its_label(self):
         self.select(ST_WW, ST_SS)
-        self.assertEqual(self.apply()["notes"][-1], "note: garage: 2 tyre(s), starting on tyres\\slick\\s")
+        self.assertEqual(self.apply()["notes"][-2], "note: garage: 2 tyre(s), starting on tyres\\slick\\s")
 
     def test_the_garage_is_no_applied_setting_and_the_other_settings_still_are(self):
         self.tyres()
@@ -938,7 +939,7 @@ class TestApplyResult(Apply):
             entries = [e["path"] for e in kspkg.read_table(f)[1]]
         self.assertIn("content\\cars\\ax_x\\data\\tyres\\own_soft_front.tyre", entries)
         self.assertIn("content\\cars\\ax_x\\data\\tyres\\own_soft_rear.tyre", entries)
-        self.assertIn("content\\cars\\ax_x\\data\\x.car", entries)
+        self.assertIn("content\\cars\\ax_x\\data\\cardata.car", entries)
 
     def test_a_second_apply_starts_from_the_base_and_leaves_no_own_file_of_a_tyre_that_was_unticked(self):
         self.tyres()

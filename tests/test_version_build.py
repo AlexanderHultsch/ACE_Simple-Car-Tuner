@@ -1035,5 +1035,198 @@ class TestAVersionTheGameWouldNotShow(VisualWorld):
             self.apply({})
 
 
+class RimWorld(VisualWorld):
+    """VisualWorld whose base preset and carfinalstate name the rim (compatible_rim, rims.path), as the game's cars do; the rim refers to the
+    tyres, so each version gets its own copy of it (rim_<version>) like in the real game's crash ("map key not found")."""
+    R1, R2 = CAR + "presets\\rim_v01.compatiblerim", CAR + "presets\\rim_v02.compatiblerim"
+
+    def setUp(self):
+        super().setUp()
+        gp = self.x.game_path
+        self.x.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                                                     "visual_preset_paths": [gp("presets/vis.visualcarpreset")],
+                                                     "compatible_rim": gp("presets/rim.compatiblerim")})
+        self.x.add("presets/ks_x_p_vis.carfinalstate", {"car_data": gp("data/x.car"), "actor_data": gp("ks_x.actor"),
+                                                        "body": {"path": gp("presets/p.mechanicalcarpreset"), "design": gp("presets/vis.visualcarpreset")},
+                                                        "rims": {"path": gp("presets/rim.compatiblerim")}})
+
+    def preset(self, res, version=None):
+        return self.built(res, "presets/p%s.mechanicalcarpreset" % ("_" + version if version else ""))
+
+    def files(self, res, *rels):
+        found = tree_bytes(self.root(res))
+        return {rel: found[rel] for rel in rels}
+
+
+class TestTheRimsOfTheVersions(RimWorld):
+    def setUp(self):
+        super().setUp()
+        self.version("Grip", {"limiter": 8000})
+        self.version("Heavy", {"mass": 1800})
+        self.res = self.apply({})
+
+    def test_the_actor_lists_the_rim_of_each_version_after_nothing_else_and_compatible_rims_stays(self):
+        custom = self.custom(self.res)
+        self.assertEqual(custom.get("aftermarket_rims"), [self.R1, self.R2])
+        self.assertEqual(custom["compatible_rims"], [self.RIM])
+
+    def test_every_mechanical_preset_of_the_actor_has_a_rim_the_actor_lists(self):
+        custom = self.custom(self.res)
+        listed = {r.lower() for r in custom["compatible_rims"] + custom.get("aftermarket_rims", [])}
+        for preset in custom["mechanical_car_presets"]:
+            rim = self.built(self.res, "presets/" + preset.rsplit("\\", 1)[-1])["compatible_rim"]
+            self.assertIn(rim.lower(), listed)
+        self.assertEqual(self.built(self.res, "presets/ax_x_p_v01_vis_v01.carfinalstate")["rims"], {"path": self.R1})
+        self.assertEqual(self.preset(self.res, "v01")["compatible_rim"], self.R1)
+
+    def test_the_base_and_each_version_forbid_exactly_the_other_rims(self):
+        self.assertEqual(self.preset(self.res)["not_compatible_rim_paths"], [self.R1, self.R2])
+        self.assertEqual(self.preset(self.res, "v01")["not_compatible_rim_paths"], [self.RIM, self.R2])
+        self.assertEqual(self.preset(self.res, "v02")["not_compatible_rim_paths"], [self.RIM, self.R1])
+
+    def test_the_kept_build_of_a_version_holds_its_preset_in_the_final_state(self):
+        for version, forbidden in (("v01", [self.RIM, self.R2]), ("v02", [self.RIM, self.R1])):
+            folder = tune.version_dir(self.work, "ks_x", "ax_x", version)
+            with open(os.path.join(folder, "build", "files", "presets", "p_%s.mechanicalcarpreset" % version), "rb") as f:
+                self.assertEqual(json.loads(f.read())["not_compatible_rim_paths"], forbidden)
+            self.assertEqual(self.files(self.res, "presets/p_%s.mechanicalcarpreset" % version),
+                             {"presets/p_%s.mechanicalcarpreset" % version: tree_bytes(os.path.join(folder, "build", "files"))["presets/p_%s.mechanicalcarpreset" % version]})
+
+
+class TestRimListsThatExist(RimWorld):
+    def setUp(self):
+        super().setUp()
+        self.other, self.zed = CAR + "presets\\other.compatiblerim", CAR + "presets\\zed.compatiblerim"
+        actor = self.actor()
+        actor["car"]["customization"].update({"compatible_rims": [self.x.game_path("presets/rim.compatiblerim")], "aftermarket_rims": [self.other]})
+        self.x.add("ks_x.actor", actor)
+        self.x.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                                                     "visual_preset_paths": [self.x.game_path("presets/vis.visualcarpreset")],
+                                                     "compatible_rim": self.x.game_path("presets/rim.compatiblerim"),
+                                                     "not_compatible_rim_paths": [self.zed, CAR + "presets\\RIM_V02.compatiblerim"]})
+        self.version("Grip", {"limiter": 8000})
+        self.version("Heavy", {"mass": 1800})
+        self.res = self.apply({})
+
+    def test_aftermarket_rims_is_extended_in_order(self):
+        self.assertEqual(self.custom(self.res)["aftermarket_rims"], [self.other, self.R1, self.R2])
+
+    def test_not_compatible_rim_paths_is_extended_without_doubling_an_entry_written_otherwise(self):
+        self.assertEqual(self.preset(self.res)["not_compatible_rim_paths"], [self.zed, CAR + "presets\\RIM_V02.compatiblerim", self.R1])
+        self.assertEqual(self.preset(self.res, "v01")["not_compatible_rim_paths"], [self.zed, CAR + "presets\\RIM_V02.compatiblerim", self.RIM])
+
+
+class TestAVersionThatSharesTheRimOfTheBase(RimWorld):
+    def setUp(self):
+        super().setUp()
+        self.x.add("presets/rim.compatiblerim", {"x": 1})
+        self.version("Grip", {"limiter": 8000})
+
+    def test_nothing_is_listed_and_the_actor_and_the_base_preset_are_not_rewritten(self):
+        rels = ("ax_x.actor", "presets/p.mechanicalcarpreset")
+        res = self.apply({})
+        self.assertEqual(self.preset(res, "v01")["compatible_rim"], self.RIM)
+        self.assertNotIn("aftermarket_rims", self.custom(res))
+        self.assertNotIn("not_compatible_rim_paths", self.preset(res))
+        self.assertNotIn("not_compatible_rim_paths", self.preset(res, "v01"))
+        with_feature = self.files(res, *rels)
+        self.patch(tune, "add_version_rims", lambda *a: None)
+        self.assertEqual(self.files(self.apply({}), *rels), with_feature)
+
+
+class TestALockedVersionAndAnUnlockedOne(RimWorld):
+    def setUp(self):
+        super().setUp()
+        self.version("Grip", {"limiter": 8000})
+        first = self.apply({})
+        self.first = {v: self.preset(first, v)["not_compatible_rim_paths"] for v in (None, "v01")}
+        tune.lock_version(self.work, "ks_x", "v01")
+        self.kept = tune.kept_build(self.work, "ks_x", "v01")
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", "v01")
+        self.before = {k: v for k, v in tree_bytes(self.folder).items() if k.startswith("build/") or k == "snapshot.json"}
+        self.version("Heavy", {"mass": 1800})
+        self.res = self.apply({})
+
+    def test_the_first_build_forbade_the_version_rim_in_the_base_and_the_base_rim_in_the_version(self):
+        self.assertEqual(self.first, {None: [self.R1], "v01": [self.RIM]})
+
+    def test_the_locked_preset_is_byte_equal_to_its_kept_build_and_so_is_every_kept_file(self):
+        self.assertEqual({k: v for k, v in tree_bytes(self.folder).items() if k.startswith("build/") or k == "snapshot.json"}, self.before)
+        for rel in self.kept["files"]:
+            with open(os.path.join(self.root(self.res), *rel.split("/")), "rb") as f:
+                self.assertEqual(f.read(), self.before["build/files/" + rel], rel)
+        self.assertEqual(self.preset(self.res, "v01")["not_compatible_rim_paths"], [self.RIM])
+
+    def test_the_actor_lists_both_rims_and_the_base_and_the_unlocked_preset_exclude_the_locked_rim(self):
+        self.assertEqual(self.custom(self.res)["aftermarket_rims"], [self.R1, self.R2])
+        self.assertEqual(self.preset(self.res)["not_compatible_rim_paths"], [self.R1, self.R2])
+        self.assertEqual(self.preset(self.res, "v02")["not_compatible_rim_paths"], [self.RIM, self.R1])
+
+    def test_the_kept_build_of_the_unlocked_version_holds_its_final_preset(self):
+        folder = tune.version_dir(self.work, "ks_x", "ax_x", "v02")
+        kept = tree_bytes(os.path.join(folder, "build", "files"))["presets/p_v02.mechanicalcarpreset"]
+        self.assertEqual(json.loads(kept)["not_compatible_rim_paths"], [self.RIM, self.R1])
+        self.assertEqual(self.files(self.res, "presets/p_v02.mechanicalcarpreset"), {"presets/p_v02.mechanicalcarpreset": kept})
+
+
+class TestAVersionThatWouldCrashTheGame(RimWorld):
+    PRESET_V01 = CAR + "presets\\p_v01.mechanicalcarpreset"
+    VIS_V01 = CAR + "presets\\vis_v01.visualcarpreset"
+    LISTED = "is not in car.customization.compatible_rims or aftermarket_rims of the actor"
+
+    def setUp(self):
+        super().setUp()
+        self.v = self.version("Grip", {"limiter": 8000})
+        self.apply({})
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", self.v)
+        self.package = tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x"))
+        self.kept = tree_bytes(os.path.join(self.folder, "build"))
+        self.record = tree_bytes(self.folder)["snapshot.json"]
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000}, self.v)
+        self.calls.clear()
+
+    def before_names(self, mutate):
+        names = tune.add_version_names
+
+        def wrapped(part, new_id, versions):
+            mutate(tune.car_root_of(part, new_id))
+            return names(part, new_id, versions)
+        self.patch(tune, "add_version_names", wrapped)
+
+    def entry(self, root, rel):
+        return self.x.store[self.x.key(os.path.join(root, *rel.split("/")))]
+
+    def refuse(self, text, verb="crash the game"):
+        with self.assertRaises(ValueError) as caught:
+            self.apply({})
+        self.assertEqual(str(caught.exception), "version v01 (Grip) would %s: %s" % (verb, text))
+        self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
+        self.assertEqual(tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x")), self.package)
+        self.assertEqual(tree_bytes(os.path.join(self.folder, "build")), self.kept)
+        self.assertEqual(tree_bytes(self.folder)["snapshot.json"], self.record)
+
+    def test_a_compatible_rim_that_the_actor_does_not_list(self):
+        self.patch(tune, "add_version_rims", lambda *a: None)
+        self.refuse("compatible_rim %s %s" % (self.R1, self.LISTED))
+
+    def test_a_compatible_rim_that_is_not_in_the_build(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "presets", "rim_v01.compatiblerim")))
+        self.refuse("compatible_rim %s is not in the build" % self.R1)
+
+    def test_a_carfinalstate_rim_that_the_actor_does_not_list(self):
+        other = CAR + "presets\\other.compatiblerim"
+        self.before_names(lambda root: self.entry(root, self.FINAL_V01).update({"rims": {"path": other}}))
+        self.refuse("%s: rims.path %s %s" % (self.FINAL_V01, other, self.LISTED))
+
+    def test_a_carfinalstate_design_that_is_not_a_visual_preset_of_the_preset(self):
+        self.before_names(lambda root: self.entry(root, self.FINAL_V01)["body"].update({"design": self.VIS}))
+        self.refuse("%s: body.design %s is not one of the visual_preset_paths of %s" % (self.FINAL_V01, self.VIS, self.PRESET_V01), "not show in the game")
+
+    def test_a_car_design_that_the_actor_does_not_list(self):
+        other = CAR + "presets\\design_zzz.cardesign"
+        self.before_names(lambda root: self.entry(root, "presets/vis_v01.visualcarpreset").update({"car_design_path": other}))
+        self.refuse("%s: car_design_path %s is not in car.customization.car_designs of the actor" % (self.VIS_V01, other), "not show in the game")
+
+
 if __name__ == "__main__":
     unittest.main()

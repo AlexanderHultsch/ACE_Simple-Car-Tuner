@@ -33,16 +33,10 @@
     "turbo": "event:/parts/turbos/turbo_quattro"
   },
   "name": "BMW M3 E46 CSL Tuned",
-  "time": "2026-11-23T16:15:38Z",
+  "time": "2026-11-23T17:00:46Z",
   "changes": {
     "since": "last build",
-    "settings": [
-      {
-        "id": "variant_name",
-        "from": "M3 E46 CSL",
-        "to": "Base"
-      }
-    ],
+    "settings": [],
     "extras": [],
     "total": 17
   }

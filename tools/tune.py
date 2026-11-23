@@ -149,9 +149,15 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           visual presets its preset names (visual_preset_paths) and their car designs (car_design_path) that the actor does not list yet are
           appended to car.customization.visual_car_presets and car_designs (compatible_rims stays), and uiresources/localization/en.cars.loc
           of the build (created when the car has none) gets the line <tune id>_<slug of the preset's description>=<version name> (the game's
-          menu text); a version the game would not show (a visual preset not listed or missing, no carfinalstate presets/<car id>_<preset>_<visual
-          preset>.carfinalstate naming the preset, no localization line) stops the apply before the pack with "version <id> (<name>) would not show
-          in the game: ...".
+          menu text). The rims of the version presets (compatible_rim) that car.customization.compatible_rims and aftermarket_rims of the actor
+          do not list are appended to car.customization.aftermarket_rims (the game crashes in the paint shop on a rim the actor does not list;
+          the Supra MKIV's drift rim is listed there too), and when one was appended the base preset and the preset of every unlocked version
+          list every other rim of the car (the base's compatible_rim and those appended) in not_compatible_rim_paths; the preset of a locked
+          version is not changed. A version the game would not show or that would crash it (a visual preset not listed or missing, no
+          carfinalstate presets/<car id>_<preset>_<visual preset>.carfinalstate naming the preset, no localization line; a rim of the preset or of
+          its carfinalstate (rims.path) that the actor does not list, a compatible_rim missing in the build, a carfinalstate body.design that is
+          not one of the preset's visual_preset_paths, a car design of a visual preset that car_designs does not list) stops the apply before
+          the pack with "version <id> (<name>) would not show in the game: ..." or, for a rim, "version <id> (<name>) would crash the game: ...".
           The result lists "versions" = [{id, name, files, locked, changes}] and one note per version. After the pack each built version keeps
           its build in <version folder>/build (files/ and build.json, see store_version_build) and its own record snapshot.json with its "changes".
           A locked version (version-lock) is not built: apply copies the files of its kept build into the build (a name that is taken is
@@ -2364,7 +2370,7 @@ def add_version_visuals(part, new_id, presets):
     """Make the visual presets of the version presets (game paths presets, read from the build part) known to the game: every path of
     their visual_preset_paths that the actor of the build does not list yet (game_path_key) is appended to
     car.customization.visual_car_presets, then the car_design_path of each of those visual presets that car.customization.car_designs does
-    not list yet. The base's entries stay first; compatible_rims is not touched (the game lists a copy without it)."""
+    not list yet. The base's entries stay first; compatible_rims is not touched (the rims of the versions are add_version_rims')."""
     root = car_root_of(part, new_id)
     path = find_ci(root, new_id + ".actor")
     actor, name = load_msg(path)
@@ -2391,6 +2397,48 @@ def add_version_visuals(part, new_id, presets):
         save_msg(path, name, actor)
 
 
+def add_version_rims(part, new_id, base_preset, presets, locked):
+    """Make the rims of the version presets (game paths presets, in the order of the versions; locked = whether each is a locked
+    version) known to the game, which crashes in the paint shop ("map key not found") on a rim the actor does not list: every
+    compatible_rim of those presets that neither car.customization.compatible_rims nor car.customization.aftermarket_rims of the
+    actor lists (game_path_key) is appended to car.customization.aftermarket_rims (the Supra MKIV lists its drift rim there), compatible_rims
+    is not touched. When one was appended, the base mechanical preset (base_preset: its path relative to the car folder, resolved before
+    the merges) and the preset of every unlocked version get every rim of its compatible_rim followed by those appended, except its own,
+    that its not_compatible_rim_paths does not list yet; the preset of a locked version is never changed (its files stay as kept).
+    Nothing is rewritten when no rim was appended."""
+    root = car_root_of(part, new_id)
+    path = find_ci(root, new_id + ".actor")
+    actor, name = load_msg(path)
+    customization = (actor.get("car") or {}).get("customization") or {}
+    listed = {game_path_key(r) for field in ("compatible_rims", "aftermarket_rims") for r in customization.get(field) or []}
+    new = []
+    for preset in presets:
+        rim = preset_of_game_path(root, preset).get("compatible_rim")
+        if rim and game_path_key(rim) not in listed:
+            listed.add(game_path_key(rim))
+            new.append(rim)
+    if not new:
+        return
+    append_paths(actor, "car.customization.aftermarket_rims", new)
+    save_msg(path, name, actor)
+    base_rim = load_msg(tree_path(root, base_preset))[0].get("compatible_rim")
+    every = ([base_rim] if base_rim else []) + new
+    targets = [base_preset] + [preset.split("\\", 3)[3].replace("\\", "/") for preset, is_locked in zip(presets, locked) if not is_locked]
+    for target in targets:
+        file = tree_path(root, target)
+        obj, kind = load_msg(file)
+        own = game_path_key(obj.get("compatible_rim") or "")
+        known = {game_path_key(r) for r in obj.get("not_compatible_rim_paths") or []} | {own}
+        forbidden = []
+        for rim in every:
+            if game_path_key(rim) not in known:
+                known.add(game_path_key(rim))
+                forbidden.append(rim)
+        if forbidden:
+            append_paths(obj, "not_compatible_rim_paths", forbidden)
+            save_msg(file, kind, obj)
+
+
 def add_version_names(part, new_id, versions):
     """Give each version its menu text: the line "<tune id>_<description_slug of the description of its preset in the build part>=<version
     name>" appended to uiresources/localization/en.cars.loc of the build (UTF-8 without BOM, CRLF lines like clone_car.write_localization;
@@ -2414,12 +2462,20 @@ def check_versions(part, new_id, versions, presets):
     """Refuse a build in which the game would not show a version (the build part is packed only after this). For the mechanical preset of
     each version (game paths presets, in the order of versions = [{id, name}]) every path of its visual_preset_paths must be listed in
     car.customization.visual_car_presets of the actor and exist in the build, presets/<new id>_<preset>_<visual preset>.carfinalstate must
-    exist and name the preset as its body.path, and the localization line of the version must exist. Raises ValueError "version <id> (<name>)
-    would not show in the game: <what is missing>" for the first fault found. Thumbnails are not checked."""
+    exist and name the preset as its body.path, and the localization line of the version must exist. Then (version_faults) its compatible_rim
+    (when it has one) and the rims.path of each of its carfinalstates (when present) must be listed in car.customization.compatible_rims or
+    aftermarket_rims of the actor, the compatible_rim must exist in the build (the game crashes in the paint shop on a rim the actor does not
+    list), the body.design of each carfinalstate (when present) must be one of the visual_preset_paths of the preset and the car_design_path
+    of each visual preset must be in car.customization.car_designs. Raises ValueError "version <id> (<name>) would not show in the game:
+    <what is missing>" for the first fault found, "version <id> (<name>) would crash the game: <what>" for a rim fault. Thumbnails are not
+    checked."""
     if not versions:
         return
     root = car_root_of(part, new_id)
-    listed = {game_path_key(v) for v in get_value(load_msg(find_ci(root, new_id + ".actor"))[0], "car.customization.visual_car_presets", missing_ok=True)[0] or []}
+    actor = load_msg(find_ci(root, new_id + ".actor"))[0]
+    listed = {game_path_key(v) for v in get_value(actor, "car.customization.visual_car_presets", missing_ok=True)[0] or []}
+    rims = {game_path_key(r) for field in ("compatible_rims", "aftermarket_rims") for r in get_value(actor, "car.customization." + field, missing_ok=True)[0] or []}
+    designs = {game_path_key(d) for d in get_value(actor, "car.customization.car_designs", missing_ok=True)[0] or []}
     loc_path = tree_path(root, "/".join(clone_car.LOC_PATH))
     keys = set()
     if os.path.isfile(kspkg.long_path(loc_path)):
@@ -2447,8 +2503,39 @@ def check_versions(part, new_id, versions, presets):
         key = "%s_%s" % (new_id, description_slug(preset_of_game_path(root, preset).get("description", "")))
         if not missing and key not in keys:
             missing = "the localization line %s is missing in %s" % (key, "/".join(clone_car.LOC_PATH))
+        crash = None
+        if not missing:
+            crash, missing = version_faults(root, new_id, preset, stem, rims, designs)
         if missing:
-            raise ValueError("version %s (%s) would not show in the game: %s" % (v["id"], v["name"], missing))
+            raise ValueError("version %s (%s) would %s: %s" % (v["id"], v["name"], "crash the game" if crash else "not show in the game", missing))
+
+
+def version_faults(root, new_id, preset, stem, rims, designs):
+    """The first fault of a version preset (game path preset, its stem stem) beyond those of check_versions' visual presets and
+    localization: (True, text) for a rim that would crash the game, (False, text) for a design that would not show, (None, None) for
+    none. rims and designs are the game_path_keys that the actor lists in compatible_rims and aftermarket_rims, and in car_designs."""
+    obj = preset_of_game_path(root, preset)
+    rim = obj.get("compatible_rim")
+    if rim and game_path_key(rim) not in rims:
+        return True, "compatible_rim %s is not in car.customization.compatible_rims or aftermarket_rims of the actor" % rim
+    if rim and not os.path.isfile(kspkg.long_path(tree_path(root, rim.split("\\", 3)[3].replace("\\", "/")))):
+        return True, "compatible_rim %s is not in the build" % rim
+    visuals = obj.get("visual_preset_paths") or []
+    finals = ["presets/%s_%s_%s.carfinalstate" % (new_id, stem, os.path.splitext(visual.rsplit("\\", 1)[-1])[0]) for visual in visuals]
+    states = [(final, load_msg(find_ci(root, final))[0]) for final in finals]
+    for final, state in states:
+        path = (state.get("rims") or {}).get("path")
+        if path and game_path_key(path) not in rims:
+            return True, "%s: rims.path %s is not in car.customization.compatible_rims or aftermarket_rims of the actor" % (final, path)
+    for final, state in states:
+        design = (state.get("body") or {}).get("design")
+        if design and game_path_key(design) not in {game_path_key(visual) for visual in visuals}:
+            return False, "%s: body.design %s is not one of the visual_preset_paths of %s" % (final, design, preset)
+    for visual in visuals:
+        design = load_msg(tree_path(root, visual.split("\\", 3)[3].replace("\\", "/")))[0].get("car_design_path")
+        if design and game_path_key(design) not in designs:
+            return False, "%s: car_design_path %s is not in car.customization.car_designs of the actor" % (visual, design)
+    return None, None
 
 
 def append_paths(obj, field, paths):
@@ -2763,13 +2850,16 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
     unlocked version) of each locked version (put_locked_version), and list the version presets in the actor in the order of the
     versions. A version whose actor has other sounds than the base gets its own sound part (add_version_sound), listed in the
     aftermarket parts of the actor (so does the sound part of a locked version). The visual presets and car designs of the version presets are
-    added to the actor's lists (add_version_visuals) and each version gets its line in en.cars.loc (add_version_names); the description of an
+    added to the actor's lists (add_version_visuals), the rims of the version presets that the actor does not list are added to its
+    car.customization.aftermarket_rims and forbidden in the other mechanical presets (add_version_rims: the base preset, resolved before the
+    merges, and the unlocked versions' presets; a locked version's preset stays as kept) and each version gets its line in en.cars.loc
+    (add_version_names); the description of an
     unlocked version's preset is made unique by its slug (merge_version) against the base's and the other versions' (the slugs of the locked
     ones are read from their kept presets). Returns ([{id, name, files, locked, built}], notes
     (by version), [{files (the paths written into the car folder for the version, sorted), preset (game path), sound_part (game path
     or None), applied (None for a locked version)}] in the order of the versions)."""
     root = car_root_of(part, new_id)
-    base_preset = resolve_file("@mech_preset", part, new_id, {}) if any(k and k["sound_part"] for k in kept) else None
+    base_preset = resolve_file("@mech_preset", part, new_id, {}) if versions else None
     merged, notes, built = [None] * len(versions), [None] * len(versions), [None] * len(versions)
     taken = {description_slug(preset_of_game_path(root, game_path_of(new_id, resolve_file("@mech_preset", part, new_id, {}))).get("description", ""))
              } if versions else set()
@@ -2806,6 +2896,7 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
     if built:
         add_version_presets(part, new_id, [b["preset"] for b in built])
         add_version_visuals(part, new_id, [b["preset"] for b in built])
+        add_version_rims(part, new_id, base_preset, [b["preset"] for b in built], [k is not None for k in kept])
         add_version_names(part, new_id, [(v["name"], b["preset"]) for v, b in zip(versions, built)])
     parts = [b["sound_part"] for b in built if b["sound_part"]]
     if parts:

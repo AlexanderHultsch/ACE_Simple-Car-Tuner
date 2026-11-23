@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "settings": {
+    "name_suffix": "Tuned",
+    "display_power_ps": 579.0,
+    "display_torque_nm": 400.0,
+    "limiter": 8800,
+    "idle_rpm": 800,
+    "power_scale": 0.5714,
+    "nominal_rpm": 8600.0,
+    "engine_damage_rpm": 9000.0,
+    "turbo_boost_1": 0.3,
+    "turbo_boost_2": 2.0,
+    "turbo_wastegate_1": 0.3,
+    "turbo_wastegate_2": 1.5,
+    "max_turbo_boost": 1.8,
+    "autoshift_up_rpm": 8700,
+    "brake_torque": 4700.0,
+    "car_mass": 1450.0
+  },
+  "kit": {
+    "donor": "ks_bmw_m4_csl",
+    "label": "BMW M4 CSL",
+    "kind": "twin turbo",
+    "boost": [
+      1.0,
+      1.0
+    ]
+  },
+  "garage": null,
+  "sounds": {
+    "turbo": "event:/parts/turbos/turbo_quattro"
+  },
+  "name": "BMW M3 E46 CSL Tuned",
+  "time": "2026-11-23T15:38:46Z",
+  "changes": {
+    "since": "last build",
+    "settings": [
+      {
+        "id": "power_scale",
+        "from": 0.05714,
+        "to": 0.5714
+      }
+    ],
+    "extras": [],
+    "total": 16
+  }
+}

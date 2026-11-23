@@ -1,0 +1,25 @@
+{
+  "name_suffix": "Tuned",
+  "variant_name": "M3 E46 CSL",
+  "display_power_ps": 579.0,
+  "display_torque_nm": 400.0,
+  "limiter": 8800,
+  "idle_rpm": 800,
+  "power_scale": 0.5714,
+  "nominal_rpm": 8600.0,
+  "engine_damage_rpm": 9000.0,
+  "_turbo": {
+    "donor": "ks_bmw_m4_csl"
+  },
+  "_sounds": {
+    "turbo": "event:/parts/turbos/turbo_quattro"
+  },
+  "turbo_boost_1": 0.3,
+  "turbo_boost_2": 2.0,
+  "turbo_wastegate_1": 0.3,
+  "turbo_wastegate_2": 1.5,
+  "max_turbo_boost": 1.8,
+  "autoshift_up_rpm": 8700,
+  "brake_torque": 4700.0,
+  "car_mass": 1450.0
+}

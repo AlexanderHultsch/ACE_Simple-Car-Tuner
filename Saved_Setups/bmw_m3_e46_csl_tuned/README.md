@@ -1,21 +1,21 @@
-# Setup: BMW M3 E46 CSL "Custom" with the version "Drift"
+# Setup: BMW M3 E46 CSL "Tuned" with the version "Drift"
 
-Alex's BMW M3 E46 CSL as one modded car with versions, an example of what the tuner builds. Numbers only, no game data and no package. Set up this way on 2026-11-23; before that the drift setup was the car itself, saved in this folder under the name `Saved_Setups/bmw_m3_e46_csl_drift/`.
+Alex's BMW M3 E46 CSL as one modded car with versions, an example of what the tuner builds. Numbers only, no game data and no package. Set up this way on 2026-11-23 (folder names before: `bmw_m3_e46_csl_drift`, when the drift setup was the car itself, then `bmw_m3_e46_csl_custom`, when the Base was a stock clone).
 
-In the game the car is called **BMW M3 E46 CSL Custom** (setting `name_suffix` = `Custom`, tuned-car id `ax_bmw_m3_e46_csl`). Pick the car, then its version:
+In the game the car is called **BMW M3 E46 CSL Tuned** (setting `name_suffix` = `Tuned`, tuned-car id `ax_bmw_m3_e46_csl`). Pick the car, then its version:
 
 | Version | What it is |
 |---|---|
-| Base | a clone of the stock car: every value is the stock one, only the name suffix is set |
-| v01 "Drift" | Alex's drift baseline of 2026-11-22, tuned step by step against the Toyota Supra MKIV's Drift preset with session logs. Alex: "This car feels amazing." |
+| Base | the stock car with the Drift version's engine, weight and revs (Alex, 2026-11-23; meant to stay as it is): the same engine and turbo values as Drift (`power_scale` 0.5714, turbo kit from the BMW M4 CSL with boost 0.3 / 2.0 bar, wastegates 0.3 / 1.5, `max_turbo_boost` 1.8, limiter 8800, nominal 8600, damage 9000, idle 800, shift 8700, display 579 PS / 400 Nm, so 571 HP in the game), mass 1450 kg, brake torque 4700, turbo sound `turbo_quattro`. Everything else (drivetrain, steering, chassis, tyres, backfire sound) is stock. In the built package its power curve, coast curve and turbo files are byte-equal to the Drift version's |
+| v01 "Drift" | Alex's drift baseline of 2026-11-22, tuned step by step against the Toyota Supra MKIV's Drift preset with session logs. Alex: "This car feels amazing." Alex may keep optimising it; Lock version freezes it once it is right |
 
 | File | What it is |
 |---|---|
 | `setup.json` | the saved state of the Base: `tune_state.json` of the default modded car, `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\tune_state.json` |
 | `versions/v01/meta.json` | the version's name (`Drift`) |
 | `versions/v01/setup.json` | the saved state of the version: `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\versions\v01\tune_state.json`. Setting ids as in `tuner/catalogue.json` plus the keys `_turbo`, `_sounds` and `_tyres` |
-| `last_build_record.json` | the record the tuner stored at the build of 2026-11-23 (`snapshots\ax_bmw_m3_e46_csl.json`); it covers the Base only and lists the change from the old drift car back to stock |
-| `versions/v01/last_build_record.json` | the record of the last build of the drift setup as the car itself (2026-11-22, 71 settings), kept for reference; versions have no record of their own yet |
+| `last_build_record.json` | the record the tuner stored at the build of 2026-11-23 16:38 (`snapshots\ax_bmw_m3_e46_csl.json`); it covers the Base only (16 settings against the stock car) |
+| `versions/v01/last_build_record.json` | the record of the last build of the drift setup as the car itself (2026-11-22, 71 settings), kept for reference; the tuner now also keeps a record per version in `versions\v01\snapshot.json` of the work folder, not copied here |
 
 ## What the Drift version does (71 changes against the stock car)
 
@@ -46,6 +46,6 @@ Not reachable by settings: the E46's MacPherson front axle (the Supra Drift has 
    - `setup.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\tune_state.json`;
    - `versions\v01\meta.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\versions\v01\meta.json`;
    - `versions\v01\setup.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\versions\v01\tune_state.json`.
-3. Start the tuner and select the BMW M3 E46 CSL (it appears under Modded Cars as "BMW M3 E46 CSL Custom"). Check Base and the version "Drift" in the Version list, then Apply with the game closed. One Apply builds both into one package. Never commit the package: it contains Kunos data.
+3. Start the tuner and select the BMW M3 E46 CSL (it appears under Modded Cars as "BMW M3 E46 CSL Tuned"). Check Base and the version "Drift" in the Version list, then Apply with the game closed. One Apply builds both into one package. Never commit the package: it contains Kunos data.
 
 Only the drift car, without versions: copy `versions\v01\setup.json` to `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\tune_state.json` and set the name suffix in the page.

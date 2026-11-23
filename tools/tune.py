@@ -140,9 +140,18 @@ apply:    refuses to install while AssettoCorsaEVO.exe runs (--no-install builds
           the car file, the base mechanical preset and its carfinalstate(s), every file below data/ and every presets/*.compatibletyres
           (the files the tuner writes, so a version shares none of them with the base), plus every file that names one of them (by game path,
           repeated); the actor, the moddedcarcontent, uiresources and generated files are never among them. They are copied with
-          _<version> before the extension (data/CarData_v01.car; the carfinalstate becomes <car id>_<preset>_<version>_<visual preset>.carfinalstate)
-          and the copies name each other; the version's preset gets the version name as note and description (a trailing Base replaced) and
-          is_oem false, is appended to car.customization.mechanical_car_presets of the actor and gets the thumbnails of the base preset.
+          _<version> before the extension (data/CarData_v01.car; the carfinalstate becomes <car id>_<preset>_<version>_<visual preset the version
+          uses>.carfinalstate, with <visual preset>_<version> there when the version has its own copy of the visual preset, else the base's)
+          and the copies name each other; the version's preset gets the version name as note and description (a trailing Base replaced; " <version>"
+          added when its slug, the description lower-cased with every run of non-word characters replaced by "_", equals another preset's) and
+          is_oem false, is appended to car.customization.mechanical_car_presets of the actor and gets the thumbnails of the base preset
+          (<car id>-<preset>-<visual preset>.texture/.texturemips, copied under the version preset and the visual preset the version uses). The
+          visual presets its preset names (visual_preset_paths) and their car designs (car_design_path) that the actor does not list yet are
+          appended to car.customization.visual_car_presets and car_designs (compatible_rims stays), and uiresources/localization/en.cars.loc
+          of the build (created when the car has none) gets the line <tune id>_<slug of the preset's description>=<version name> (the game's
+          menu text); a version the game would not show (a visual preset not listed or missing, no carfinalstate presets/<car id>_<preset>_<visual
+          preset>.carfinalstate naming the preset, no localization line) stops the apply before the pack with "version <id> (<name>) would not show
+          in the game: ...".
           The result lists "versions" = [{id, name, files, locked, changes}] and one note per version. After the pack each built version keeps
           its build in <version folder>/build (files/ and build.json, see store_version_build) and its own record snapshot.json with its "changes".
           A locked version (version-lock) is not built: apply copies the files of its kept build into the build (a name that is taken is
@@ -2218,11 +2227,19 @@ def version_description(description, name):
     return ("%s %s" % (description, name)).strip()
 
 
-def version_finals(vroot, rels, car_id, preset, version):
+def description_slug(description):
+    """The key part the game derives from the description of a mechanical preset (JavaScript description.toLowerCase().replace(/[\\W_]+/g, "_"))."""
+    return re.sub(r"[\W_]+", "_", description.lower(), flags=re.ASCII)
+
+
+def version_finals(vroot, rels, car_id, preset, version, copied=()):
     """The carfinalstate files of the car folder vroot whose body.path is the base mechanical preset (path preset), as
-    {path: (path of the version's copy, name of its visual preset)}: the copy is named <car id>_<preset of the version>_<visual preset>."""
+    {path: (path of the version's copy, name of the base's visual preset, name of the visual preset the version uses)}: the copy is named
+    <car id>_<preset of the version>_<visual preset the version uses>; that is <visual preset>_<version> when presets/<visual preset>.visualcarpreset
+    is among the paths copied (the version has its own copy of it), else the base's <visual preset>."""
     stem = os.path.splitext(preset.rsplit("/", 1)[-1])[0]
     prefix = "%s_%s_" % (car_id, stem)
+    copied = {c.lower() for c in copied}
     finals = {}
     for rel in rels:
         if not rel.lower().endswith(".carfinalstate"):
@@ -2235,7 +2252,8 @@ def version_finals(vroot, rels, car_id, preset, version):
             raise ValueError("%s: a carfinalstate is named <car id>_<preset>_<visual preset>.carfinalstate, cannot name the one of version %s"
                              % (rel, version))
         visual = stem_of[len(prefix):]
-        finals[rel] = ("%s%s_%s_%s%s" % (folder + "/" if folder else "", car_id, "%s_%s" % (stem, version), visual, ext), visual)
+        used = "%s_%s" % (visual, version) if "presets/%s.visualcarpreset" % visual.lower() in copied else visual
+        finals[rel] = ("%s%s_%s_%s%s" % (folder + "/" if folder else "", car_id, "%s_%s" % (stem, version), used, ext), visual, used)
     return finals
 
 
@@ -2273,15 +2291,18 @@ def copy_version_files(vroot, root, car_id, names, edit):
             save_msg(dst, name, obj)
 
 
-def merge_version(part, vpart, new_id, version, name):
+def merge_version(part, vpart, new_id, version, name, taken=()):
     """Merge the build vpart of a version of a tune (the same tune id, built from the state of the version) into the build part of the
     base. The version's own files are the files whose bytes differ from the base build or are missing there, the car file, the base
     mechanical preset and its carfinalstate(s), every file of the version build below data/ (any depth) and every presets/*.compatibletyres
     directly in presets/ (the files the tuner writes, so the version shares none of them with the base), and every file that refers to
     one of them (version_files). They are copied under the
-    name with _<version> before the extension (the carfinalstate: <car id>_<version preset>_<visual preset>.carfinalstate) and point
-    at each other; the preset gets the name of the version as note, its description (version_description) and is_oem false; the
-    thumbnails of the base's carfinalstate(s) are copied under the name of the new one's. The actor, the moddedcarcontent, uiresources
+    name with _<version> before the extension (the carfinalstate: <car id>_<version preset>_<visual preset the version uses>.carfinalstate,
+    where that is <visual preset>_<version> when the version has its own copy of presets/<visual preset>.visualcarpreset, else the base's
+    visual preset) and point at each other; the preset gets the name of the version as note, its description (version_description, followed by
+    " <version>" when the description_slug of it is one of taken: the slugs of the base preset and of the other versions of the build) and
+    is_oem false; the thumbnails <car id>-<base preset>-<visual preset> of the base's carfinalstate(s) are copied as
+    <car id>-<version preset>-<visual preset the version uses>. The actor, the moddedcarcontent, uiresources
     and generated files are never copied. Returns (number of own files, game path of the version's preset, whether the actor of the
     version build differs from the one of the base build, notes, the paths written into the car folder of the build part (the copies
     and the thumbnail copies, relative to it)); the list of presets in the actor is the caller's."""
@@ -2294,20 +2315,24 @@ def merge_version(part, vpart, new_id, version, name):
     tuner_files = {r for r in rels if not version_excluded(r) and (r.lower().startswith("data/") or (
         r.lower().startswith("presets/") and "/" not in r[len("presets/"):] and r.lower().endswith(".compatibletyres")))}
     files = version_files(vroot, rels, own | tuner_files | {resolve_file("@car", vpart, new_id, {}), preset} | set(finals))
+    finals = version_finals(vroot, rels, new_id, preset, version, files)
     names = {r: finals[r][0] if r in finals else version_rel(r, version) for r in files}
 
     def edit(old, obj):
         if old == preset:
             put_value(obj, "note", name)
             put_value(obj, "is_oem", False)
-            put_value(obj, "description", version_description(obj.get("description", ""), name))
+            description = version_description(obj.get("description", ""), name)
+            if description_slug(description) in taken:
+                description = "%s %s" % (description, version)
+            put_value(obj, "description", description)
 
     copy_version_files(vroot, root, new_id, names, edit)
     notes, written = [], set(names.values())
     stem = os.path.splitext(preset.rsplit("/", 1)[-1])[0]
-    for _, visual in finals.values():
+    for _, visual, used in finals.values():
         for ext in (".texture", ".texturemips"):
-            src, dst = ("generated/thumbnails/%s-%s-%s%s" % (new_id, s, visual, ext) for s in (stem, "%s_%s" % (stem, version)))
+            src, dst = ("generated/thumbnails/%s-%s-%s%s" % (new_id, s, v, ext) for s, v in ((stem, visual), ("%s_%s" % (stem, version), used)))
             if os.path.isfile(kspkg.long_path(tree_path(root, src))):
                 shutil.copyfile(kspkg.long_path(tree_path(root, src)), kspkg.long_path(tree_path(root, dst)))
                 written.add(dst)
@@ -2328,6 +2353,102 @@ def add_version_presets(part, new_id, presets):
         raise ValueError("%s has no %s to list the versions in" % (os.path.basename(path), field))
     put_value(actor, field, current + presets)
     save_msg(path, name, actor)
+
+
+def preset_of_game_path(root, game_path):
+    """The decoded mechanical preset with the game path game_path ("content\\cars\\<id>\\<path>") in the car folder root."""
+    return load_msg(tree_path(root, game_path.split("\\", 3)[3].replace("\\", "/")))[0]
+
+
+def add_version_visuals(part, new_id, presets):
+    """Make the visual presets of the version presets (game paths presets, read from the build part) known to the game: every path of
+    their visual_preset_paths that the actor of the build does not list yet (game_path_key) is appended to
+    car.customization.visual_car_presets, then the car_design_path of each of those visual presets that car.customization.car_designs does
+    not list yet. The base's entries stay first; compatible_rims is not touched (the game lists a copy without it)."""
+    root = car_root_of(part, new_id)
+    path = find_ci(root, new_id + ".actor")
+    actor, name = load_msg(path)
+    lists = {}
+    for field in ("car.customization.visual_car_presets", "car.customization.car_designs"):
+        current, absent = get_value(actor, field, missing_ok=True)
+        lists[field] = [] if absent else list(current)
+    visuals, designs = lists["car.customization.visual_car_presets"], lists["car.customization.car_designs"]
+    new_visuals, new_designs = [], []
+    for preset in presets:
+        for visual in preset_of_game_path(root, preset).get("visual_preset_paths") or []:
+            if game_path_key(visual) not in {game_path_key(v) for v in visuals + new_visuals}:
+                new_visuals.append(visual)
+    for visual in new_visuals:
+        file = tree_path(root, visual.split("\\", 3)[3].replace("\\", "/"))
+        design = load_msg(file)[0].get("car_design_path") if os.path.isfile(kspkg.long_path(file)) else None
+        if design and game_path_key(design) not in {game_path_key(d) for d in designs + new_designs}:
+            new_designs.append(design)
+    if new_visuals:
+        append_paths(actor, "car.customization.visual_car_presets", new_visuals)
+    if new_designs:
+        append_paths(actor, "car.customization.car_designs", new_designs)
+    if new_visuals or new_designs:
+        save_msg(path, name, actor)
+
+
+def add_version_names(part, new_id, versions):
+    """Give each version its menu text: the line "<tune id>_<description_slug of the description of its preset in the build part>=<version
+    name>" appended to uiresources/localization/en.cars.loc of the build (UTF-8 without BOM, CRLF lines like clone_car.write_localization;
+    the file is created when the build has none; an existing line is never changed). versions = [(version name, game path of its preset)]
+    in the order of the versions."""
+    root = car_root_of(part, new_id)
+    path = tree_path(root, "/".join(clone_car.LOC_PATH))
+    data = b""
+    if os.path.isfile(kspkg.long_path(path)):
+        with open(kspkg.long_path(path), "rb") as f:
+            data = f.read()
+    if data and not data.endswith(b"\n"):
+        data += b"\r\n"
+    lines = ["%s_%s=%s" % (new_id, description_slug(preset_of_game_path(root, preset).get("description", "")), name) for name, preset in versions]
+    os.makedirs(kspkg.long_path(os.path.dirname(path)), exist_ok=True)
+    with open(kspkg.long_path(path), "wb") as f:
+        f.write(data + "".join(line + "\r\n" for line in lines).encode("utf-8"))
+
+
+def check_versions(part, new_id, versions, presets):
+    """Refuse a build in which the game would not show a version (the build part is packed only after this). For the mechanical preset of
+    each version (game paths presets, in the order of versions = [{id, name}]) every path of its visual_preset_paths must be listed in
+    car.customization.visual_car_presets of the actor and exist in the build, presets/<new id>_<preset>_<visual preset>.carfinalstate must
+    exist and name the preset as its body.path, and the localization line of the version must exist. Raises ValueError "version <id> (<name>)
+    would not show in the game: <what is missing>" for the first fault found. Thumbnails are not checked."""
+    if not versions:
+        return
+    root = car_root_of(part, new_id)
+    listed = {game_path_key(v) for v in get_value(load_msg(find_ci(root, new_id + ".actor"))[0], "car.customization.visual_car_presets", missing_ok=True)[0] or []}
+    loc_path = tree_path(root, "/".join(clone_car.LOC_PATH))
+    keys = set()
+    if os.path.isfile(kspkg.long_path(loc_path)):
+        with open(kspkg.long_path(loc_path), "rb") as f:
+            keys = {line.split("=", 1)[0] for line in f.read().decode("utf-8").splitlines()}
+    for v, preset in zip(versions, presets):
+        stem = os.path.splitext(preset.rsplit("\\", 1)[-1])[0]
+        missing = None
+        for visual in preset_of_game_path(root, preset).get("visual_preset_paths") or []:
+            final = "presets/%s_%s_%s.carfinalstate" % (new_id, stem, os.path.splitext(visual.rsplit("\\", 1)[-1])[0])
+            if game_path_key(visual) not in listed:
+                missing = "%s is not in car.customization.visual_car_presets of the actor" % visual
+            elif not os.path.isfile(kspkg.long_path(tree_path(root, visual.split("\\", 3)[3].replace("\\", "/")))):
+                missing = "%s is not in the build" % visual
+            else:
+                try:
+                    found = find_ci(root, final)
+                except ValueError:
+                    missing = "%s is missing" % final
+                else:
+                    if game_path_key((load_msg(found)[0].get("body") or {}).get("path", "")) != game_path_key(preset):
+                        missing = "%s does not name %s as body.path" % (final, preset)
+            if missing:
+                break
+        key = "%s_%s" % (new_id, description_slug(preset_of_game_path(root, preset).get("description", "")))
+        if not missing and key not in keys:
+            missing = "the localization line %s is missing in %s" % (key, "/".join(clone_car.LOC_PATH))
+        if missing:
+            raise ValueError("version %s (%s) would not show in the game: %s" % (v["id"], v["name"], missing))
 
 
 def append_paths(obj, field, paths):
@@ -2641,19 +2762,29 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
     the build, merge it into the base build in part (merge_version), then put in the kept build (kept, from kept_build, None for an
     unlocked version) of each locked version (put_locked_version), and list the version presets in the actor in the order of the
     versions. A version whose actor has other sounds than the base gets its own sound part (add_version_sound), listed in the
-    aftermarket parts of the actor (so does the sound part of a locked version). Returns ([{id, name, files, locked, built}], notes
+    aftermarket parts of the actor (so does the sound part of a locked version). The visual presets and car designs of the version presets are
+    added to the actor's lists (add_version_visuals) and each version gets its line in en.cars.loc (add_version_names); the description of an
+    unlocked version's preset is made unique by its slug (merge_version) against the base's and the other versions' (the slugs of the locked
+    ones are read from their kept presets). Returns ([{id, name, files, locked, built}], notes
     (by version), [{files (the paths written into the car folder for the version, sorted), preset (game path), sound_part (game path
     or None), applied (None for a locked version)}] in the order of the versions)."""
     root = car_root_of(part, new_id)
     base_preset = resolve_file("@mech_preset", part, new_id, {}) if any(k and k["sound_part"] for k in kept) else None
     merged, notes, built = [None] * len(versions), [None] * len(versions), [None] * len(versions)
+    taken = {description_slug(preset_of_game_path(root, game_path_of(new_id, resolve_file("@mech_preset", part, new_id, {}))).get("description", ""))
+             } if versions else set()
+    for v, k in zip(versions, kept):
+        if k is not None:
+            kept_preset = os.path.join(version_dir(work, car_id, new_id, v["id"]), "build", "files", *k["preset"].split("\\", 3)[3].split("\\"))
+            taken.add(description_slug(load_msg(kept_preset)[0].get("description", "")))
     for i, (v, plan) in enumerate(zip(versions, plans)):
         if plan is None:
             continue
         vout = os.path.join(build_dir(work, car_id), "%s_%s" % (new_id, v["id"]))
         try:
             vpart, applied = build_state(work, car_id, new_id, vout, plan, cat, game)[::3]
-            count, preset, differs, more, files = merge_version(part, vpart, new_id, v["id"], v["name"])
+            count, preset, differs, more, files = merge_version(part, vpart, new_id, v["id"], v["name"], taken)
+            taken.add(description_slug(preset_of_game_path(root, preset).get("description", "")))
             compatible = None
             if differs:
                 compatible, written, own_notes, sound_files = add_version_sound(part, vpart, new_id, v["id"], v["name"], preset)
@@ -2674,6 +2805,8 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
         notes[i] = ["note: version %s (%s): locked, %d files kept from its build of %s" % (v["id"], v["name"], count, k["time"])]
     if built:
         add_version_presets(part, new_id, [b["preset"] for b in built])
+        add_version_visuals(part, new_id, [b["preset"] for b in built])
+        add_version_names(part, new_id, [(v["name"], b["preset"]) for v, b in zip(versions, built)])
     parts = [b["sound_part"] for b in built if b["sound_part"]]
     if parts:
         add_version_parts(part, new_id, parts)
@@ -2681,7 +2814,7 @@ def build_versions(work, car_id, new_id, part, versions, plans, kept, cat, game)
 
 
 def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None, game=DEFAULT_GAME):
-    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Each unlocked version of the tune is built too and merged into the package as a further mechanical preset (see build_versions); a locked version (lock_version) is not built: the files of its kept build (kept_build) are copied into the package byte for byte, its preset and sound part listed as for a built one, and its build/ and snapshot.json stay as they are; a locked version whose kept build is missing or damaged is an error before anything is written. The snapshot is the base's. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, versions, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
+    """Build the modded car new_id (default: the default tune) of a stock car from its saved state and, with install, install the package. Each unlocked version of the tune is built too and merged into the package as a further mechanical preset (see build_versions); a locked version (lock_version) is not built: the files of its kept build (kept_build) are copied into the package byte for byte, its preset and sound part listed as for a built one, and its build/ and snapshot.json stay as they are; a locked version whose kept build is missing or damaged is an error before anything is written. The snapshot is the base's. A version that the game would not show (check_versions) stops the apply before the pack. Returns {new_id, tune, name_suffix, build_dir, package, size, applied, notes, sounds, changes, versions, installed, backup}. Raises ValueError before anything is written when the state cannot be applied (see apply_plan); a failed build keeps the previous one."""
     cat = catalogue or load_catalogue()
     new_id = new_id or new_id_for(car_id)
     plan = apply_plan(work, car_id, new_id, install, mods_dir, cat)
@@ -2696,6 +2829,7 @@ def apply(work, car_id, new_id=None, install=True, mods_dir=None, catalogue=None
     part, meta, notes, applied, changed_sounds = build_state(work, car_id, new_id, out_dir, plan, cat, game)
     merged, more, built = build_versions(work, car_id, new_id, part, versions, version_plans, kept, cat, game)
     notes += more
+    check_versions(part, new_id, versions, [b["preset"] for b in built])
     pkg = pack_build(work, new_id, part, out_dir)
     records = []
     for v, vplan, vstate, b, entry in zip(versions, version_plans, version_states, built, merged):

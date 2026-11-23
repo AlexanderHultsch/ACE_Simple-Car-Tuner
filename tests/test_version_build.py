@@ -9,6 +9,7 @@ import unittest
 
 from support import FakeCar, Sandbox, backfire, engine, mini_catalogue, mini_setting, turbo
 
+import car_json
 import clone_car
 import kspkg
 import tune
@@ -19,6 +20,7 @@ CAR = "content\\cars\\ax_x\\"
 PRESET = CAR + "presets\\p.mechanicalcarpreset"
 THUMBS = ["generated/thumbnails/ax_x-p-vis.texture", "generated/thumbnails/ax_x-p-vis.texturemips"]
 V_THUMBS = ["generated/thumbnails/ax_x-p_v01-vis.texture", "generated/thumbnails/ax_x-p_v01-vis.texturemips"]
+LOC = "uiresources/localization/en.cars.loc"
 
 
 def cat():
@@ -41,6 +43,18 @@ class World(Sandbox):
         self.cat = cat()
         self.patch(tune, "load_catalogue", lambda path=None: self.cat)
         self.x = x = FakeCar(self.work, "ks_x").install(self)
+        stub_load = tune.load_msg
+
+        def load_or_read(path):
+            try:
+                return stub_load(path)
+            except ValueError:
+                with open(kspkg.long_path(path), "rb") as f:
+                    data = f.read()
+                if not data:
+                    raise
+                return json.loads(data), car_json.message_for(path)
+        self.patch(tune, "load_msg", load_or_read)
         gp = x.game_path
         x.add("data/x.car", {"engine_path": gp("data/engine.carengine"), "stock_setup": gp("data/setup.carsetup"),
                              "engine": {"limiter": 7000}, "general": {"totalMass": 1400.0}})
@@ -167,7 +181,7 @@ class TestAVersionWithValues(World):
                "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"]
         base = sorted(set(self.tree(self.res)) - set(own) - set(V_THUMBS))
         self.assertEqual(base, ["ax_x.actor", "data/CarData.car", "data/engine.carengine", "data/power.curve", "data/setup.carsetup", *THUMBS,
-                                "presets/ax_x_p_vis.carfinalstate", "presets/p.mechanicalcarpreset", "presets/vis.visualcarpreset"])
+                                "presets/ax_x_p_vis.carfinalstate", "presets/p.mechanicalcarpreset", "presets/vis.visualcarpreset", LOC])
         self.assertTrue(set(own + V_THUMBS) <= set(self.tree(self.res)))
 
     def test_the_result_lists_the_version_and_one_note_tells_its_files(self):
@@ -196,7 +210,7 @@ class TestAVersionThatChangesNothing(World):
                                             "changes": {"since": None, "settings": [], "extras": [], "total": 0}}])
         self.assertEqual(sorted(set(self.tree(res)) - plain),
                          sorted(["data/CarData_v01.car", "data/engine_v01.carengine", "data/power_v01.curve", "data/setup_v01.carsetup",
-                                 "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + V_THUMBS))
+                                 "presets/ax_x_p_v01_vis.carfinalstate", "presets/p_v01.mechanicalcarpreset"] + V_THUMBS + [LOC]))
         car = self.built(res, "data/CarData_v01.car")
         self.assertEqual((car["engine_path"], car["general"]["totalMass"]), (CAR + "data\\engine_v01.carengine", 1400.0))
         self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["note"], "Same")
@@ -748,6 +762,277 @@ class TestListVersionsWithADamagedMeta(World):
         self.assertEqual(res["versions"], [{"id": "v01", "name": "v01", "files": 6, "locked": False,
                                             "changes": {"since": None, "settings": [], "extras": [], "total": 0}}])
         self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["note"], "v01")
+
+
+class TestDescriptionSlug(unittest.TestCase):
+    def test_the_slug_is_the_javascript_one(self):
+        self.assertEqual(tune.description_slug("Name Preset Base"), "name_preset_base")
+        self.assertEqual(tune.description_slug("Drift!"), "drift_")
+        self.assertEqual(tune.description_slug("a__b -- c"), "a_b_c")
+        self.assertEqual(tune.description_slug("Größe = 5 Grä"), "gr_e_5_gr_")
+        self.assertEqual(tune.description_slug("X1_y2"), "x1_y2")
+        self.assertEqual(tune.description_slug(""), "")
+
+
+def tree_bytes(folder):
+    found = {}
+    for dp, _, names in os.walk(folder):
+        for n in names:
+            with open(os.path.join(dp, n), "rb") as f:
+                found[os.path.relpath(os.path.join(dp, n), folder).replace(os.sep, "/")] = f.read()
+    return found
+
+
+class VisualWorld(World):
+    """World plus the chain the game's own cars have: compatibletyres <- compatiblerim <- cardesign <- visualcarpreset, which the
+    mechanical preset names in visual_preset_paths; the actor lists the visual preset, its design and the rim; the base has its thumbnail pair
+    and an en.cars.loc with the line of the base preset (the reference closure of a version pulls the visual preset in, so the version gets its own)."""
+    BASE_LOC = b"ax_x_name=Car X MY\r\nax_x_name_preset_base=Standard\r\n"
+    RIM, DESIGN, VIS = (CAR + "presets\\rim.compatiblerim", CAR + "presets\\design.cardesign", CAR + "presets\\vis.visualcarpreset")
+    FINAL_V01 = "presets/ax_x_p_v01_vis_v01.carfinalstate"
+
+    def setUp(self):
+        super().setUp()
+        gp = self.x.game_path
+        self.x.add("presets/tyres.compatibletyres", {"front_tyre_data_path": gp("data/setup.carsetup")})
+        self.x.add("presets/rim.compatiblerim", {"compatible_tyres": gp("presets/tyres.compatibletyres")})
+        self.x.add("presets/design.cardesign", {"compatible_rim": gp("presets/rim.compatiblerim")})
+        self.x.add("presets/vis.visualcarpreset", {"brand": "Brand", "car_design_path": gp("presets/design.cardesign")})
+        self.x.add("presets/p.mechanicalcarpreset", {"brand": "Brand", "description": "Name Preset Base", "note": "Standard", "is_oem": True,
+                                                     "visual_preset_paths": [gp("presets/vis.visualcarpreset")]})
+        actor = self.actor()
+        actor["car"]["customization"].update({"visual_car_presets": [gp("presets/vis.visualcarpreset")], "car_designs": [gp("presets/design.cardesign")],
+                                              "compatible_rims": [gp("presets/rim.compatiblerim")]})
+        self.x.add("ks_x.actor", actor)
+        self.hook = lambda root: self.write(os.path.join(root, *LOC.split("/")), self.BASE_LOC, binary=True)
+
+    def custom(self, res):
+        return self.built(res, "ax_x.actor")["car"]["customization"]
+
+    def loc(self, res):
+        with open(os.path.join(self.root(res), *LOC.split("/")), "rb") as f:
+            return f.read()
+
+
+class TestAVersionWithItsOwnVisualPreset(VisualWorld):
+    def setUp(self):
+        super().setUp()
+        self.version("Grip", {"limiter": 8000})
+        self.res = self.apply({})
+
+    def test_the_closure_gives_the_version_its_own_rim_design_and_visual_preset_pointing_at_each_other(self):
+        res = self.res
+        self.assertEqual(self.built(res, "presets/rim_v01.compatiblerim"), {"compatible_tyres": CAR + "presets\\tyres_v01.compatibletyres"})
+        self.assertEqual(self.built(res, "presets/design_v01.cardesign"), {"compatible_rim": CAR + "presets\\rim_v01.compatiblerim"})
+        self.assertEqual(self.built(res, "presets/vis_v01.visualcarpreset"), {"brand": "Brand", "car_design_path": CAR + "presets\\design_v01.cardesign"})
+        self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["visual_preset_paths"], [CAR + "presets\\vis_v01.visualcarpreset"])
+        self.assertEqual(self.built(res, "presets/p.mechanicalcarpreset")["visual_preset_paths"], [self.VIS])
+
+    def test_the_actor_lists_the_copies_after_the_base_entries_and_leaves_the_rims_alone(self):
+        custom = self.custom(self.res)
+        self.assertEqual(custom["visual_car_presets"], [self.VIS, CAR + "presets\\vis_v01.visualcarpreset"])
+        self.assertEqual(custom["car_designs"], [self.DESIGN, CAR + "presets\\design_v01.cardesign"])
+        self.assertEqual(custom["compatible_rims"], [self.RIM])
+        self.assertEqual(custom["mechanical_car_presets"], [PRESET, CAR + "presets\\p_v01.mechanicalcarpreset"])
+
+    def test_the_finalstate_and_the_thumbnails_are_named_after_the_visual_preset_the_version_uses(self):
+        res, tree = self.res, self.tree(self.res)
+        final = self.built(res, self.FINAL_V01)
+        self.assertEqual((final["car_data"], final["body"]),
+                         (CAR + "data\\CarData_v01.car", {"path": CAR + "presets\\p_v01.mechanicalcarpreset", "design": CAR + "presets\\vis_v01.visualcarpreset"}))
+        self.assertNotIn("presets/ax_x_p_v01_vis.carfinalstate", tree)
+        for ext in (".texture", ".texturemips"):
+            self.assertIn("generated/thumbnails/ax_x-p_v01-vis_v01" + ext, tree)
+            self.assertNotIn("generated/thumbnails/ax_x-p_v01-vis" + ext, tree)
+            self.assertIn("generated/thumbnails/ax_x-p-vis" + ext, tree)
+        self.assertIn("presets/ax_x_p_vis.carfinalstate", tree)
+
+    def test_the_game_lists_the_version_the_way_its_own_cars_are_laid_out(self):
+        custom = self.custom(self.res)
+        preset = self.built(self.res, "presets/p_v01.mechanicalcarpreset")
+        tree = self.tree(self.res)
+        self.assertIn(CAR + "presets\\p_v01.mechanicalcarpreset", custom["mechanical_car_presets"])
+        for visual in preset["visual_preset_paths"]:
+            stem = visual.rsplit("\\", 1)[-1].rsplit(".", 1)[0]
+            self.assertIn(visual, custom["visual_car_presets"])
+            self.assertIn("presets/" + visual.rsplit("\\", 1)[-1], tree)
+            self.assertIn(self.built(self.res, "presets/" + visual.rsplit("\\", 1)[-1])["car_design_path"], custom["car_designs"])
+            self.assertEqual(self.built(self.res, "presets/ax_x_p_v01_%s.carfinalstate" % stem)["body"]["path"], CAR + "presets\\p_v01.mechanicalcarpreset")
+            self.assertIn("generated/thumbnails/ax_x-p_v01-%s.texture" % stem, tree)
+        key = "ax_x_" + tune.description_slug(preset["description"]) + "="
+        self.assertIn(key.encode(), self.loc(self.res))
+
+    def test_the_kept_build_holds_the_copies_under_their_names(self):
+        kept = tune.kept_build(self.work, "ks_x", "v01")
+        for rel in ("presets/vis_v01.visualcarpreset", "presets/design_v01.cardesign", "presets/rim_v01.compatiblerim", self.FINAL_V01,
+                    "generated/thumbnails/ax_x-p_v01-vis_v01.texture", "generated/thumbnails/ax_x-p_v01-vis_v01.texturemips"):
+            self.assertIn(rel, kept["files"])
+        self.assertEqual(sorted(kept), sorted(["files", "preset", "sound_part", "state", "time", "tune"]))
+
+
+class TestAVisualPresetThatIsNotCopied(VisualWorld):
+    def setUp(self):
+        super().setUp()
+        self.x.add("presets/design.cardesign", {"x": 1})
+        self.version("Grip", {"limiter": 8000})
+        self.res = self.apply({})
+
+    def test_the_names_stay_those_of_the_base_visual_preset_and_the_actor_lists_gain_nothing(self):
+        tree, custom = self.tree(self.res), self.custom(self.res)
+        self.assertIn("presets/ax_x_p_v01_vis.carfinalstate", tree)
+        self.assertEqual([t for t in tree if "vis_v01" in t], [])
+        for name in V_THUMBS:
+            self.assertIn(name, tree)
+        self.assertEqual(self.built(self.res, "presets/p_v01.mechanicalcarpreset")["visual_preset_paths"], [self.VIS])
+        self.assertEqual(custom["visual_car_presets"], [self.VIS])
+        self.assertEqual(custom["car_designs"], [self.DESIGN])
+        self.assertEqual(custom["compatible_rims"], [self.RIM])
+
+    def test_the_version_is_still_named_in_the_localization(self):
+        self.assertEqual(self.loc(self.res), self.BASE_LOC + b"ax_x_name_preset_grip=Grip\r\n")
+
+
+class TestWithoutVisualPresetsInTheActor(World):
+    def test_a_version_of_a_car_whose_actor_has_no_such_lists_gets_none(self):
+        self.version("Grip", {})
+        custom = self.built(self.apply({}), "ax_x.actor")["car"]["customization"]
+        self.assertEqual(sorted(custom), ["mechanical_car_presets"])
+
+
+class TestTheLocalizationLinesOfVersions(VisualWorld):
+    def test_each_version_gets_a_line_after_the_untouched_base_lines_in_version_order(self):
+        self.version("Grip", {})
+        self.version("Heavy", {"mass": 1800})
+        self.assertEqual(self.loc(self.apply({})),
+                         self.BASE_LOC + b"ax_x_name_preset_grip=Grip\r\nax_x_name_preset_heavy=Heavy\r\n")
+
+    def test_a_name_with_non_ascii_an_equals_sign_and_spaces_is_written_as_utf8_and_keys_by_the_ascii_slug(self):
+        self.version("Drüft = 5  Grä", {})
+        data = self.loc(self.apply({}))
+        self.assertEqual(data, self.BASE_LOC + "ax_x_name_preset_dr_ft_5_gr_=Drüft = 5  Grä\r\n".encode("utf-8"))
+        self.assertFalse(data.startswith(b"\xef\xbb\xbf"))
+
+    def test_the_file_is_created_with_just_the_version_lines_when_the_build_has_none(self):
+        self.hook = None
+        self.version("Grip", {})
+        self.version("Heavy", {})
+        self.assertEqual(self.loc(self.apply({})), b"ax_x_name_preset_grip=Grip\r\nax_x_name_preset_heavy=Heavy\r\n")
+
+    def test_a_base_file_without_a_final_line_break_gets_one_before_the_new_lines(self):
+        self.hook = lambda root: self.write(os.path.join(root, *LOC.split("/")), b"ax_x_name=Car X MY", binary=True)
+        self.version("Grip", {})
+        self.assertEqual(self.loc(self.apply({})), b"ax_x_name=Car X MY\r\nax_x_name_preset_grip=Grip\r\n")
+
+    def test_names_with_the_same_slug_or_the_name_base_get_distinct_keys(self):
+        self.version("Drift!", {})
+        self.version("Drift?", {})
+        self.version("Base", {})
+        res = self.apply({})
+        self.assertEqual(self.loc(res), self.BASE_LOC + b"ax_x_name_preset_drift_=Drift!\r\nax_x_name_preset_drift_v02=Drift?\r\nax_x_name_preset_base_v03=Base\r\n")
+        self.assertEqual([self.built(res, "presets/p_%s.mechanicalcarpreset" % v)["description"] for v in ("v01", "v02", "v03")],
+                         ["Name Preset Drift!", "Name Preset Drift? v02", "Name Preset Base v03"])
+        self.assertEqual([self.built(res, "presets/p_%s.mechanicalcarpreset" % v)["note"] for v in ("v01", "v02", "v03")], ["Drift!", "Drift?", "Base"])
+
+    def test_the_text_of_the_base_preset_is_not_taken_by_a_version_either(self):
+        self.version("Base", {})
+        res = self.apply({})
+        self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["description"], "Name Preset Base v01")
+        self.assertEqual(self.loc(res).count(b"ax_x_name_preset_base="), 1)
+
+
+class TestALockedVersionOfTheVisualCar(VisualWorld):
+    def setUp(self):
+        super().setUp()
+        self.version("Grip!", {"limiter": 8000})
+        self.first = self.apply({})
+        tune.lock_version(self.work, "ks_x", "v01")
+        self.kept = tune.kept_build(self.work, "ks_x", "v01")
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", "v01")
+        self.before = {k: v for k, v in tree_bytes(self.folder).items() if k.startswith("build/") or k == "snapshot.json"}
+        self.version("Grip?", {"mass": 1800})
+        self.res = self.apply({})
+
+    def test_it_is_listed_and_named_like_a_built_version_and_its_slug_is_taken(self):
+        custom = self.custom(self.res)
+        self.assertEqual(custom["visual_car_presets"], [self.VIS, CAR + "presets\\vis_v01.visualcarpreset", CAR + "presets\\vis_v02.visualcarpreset"])
+        self.assertEqual(custom["car_designs"], [self.DESIGN, CAR + "presets\\design_v01.cardesign", CAR + "presets\\design_v02.cardesign"])
+        self.assertEqual(custom["compatible_rims"], [self.RIM])
+        self.assertEqual(self.loc(self.res), self.BASE_LOC + b"ax_x_name_preset_grip_=Grip!\r\nax_x_name_preset_grip_v02=Grip?\r\n")
+        self.assertEqual(self.built(self.res, "presets/p_v02.mechanicalcarpreset")["description"], "Name Preset Grip? v02")
+        self.assertIn(self.FINAL_V01, self.tree(self.res))
+        self.assertIn("presets/ax_x_p_v02_vis_v02.carfinalstate", self.tree(self.res))
+
+    def test_its_kept_files_are_unchanged_and_the_package_has_their_bytes(self):
+        self.assertEqual({k: v for k, v in tree_bytes(self.folder).items() if k.startswith("build/") or k == "snapshot.json"}, self.before)
+        for rel in self.kept["files"]:
+            with open(os.path.join(self.root(self.res), *rel.split("/")), "rb") as f:
+                self.assertEqual(f.read(), self.before["build/files/" + rel], rel)
+
+    def test_the_result_still_says_it_is_locked(self):
+        self.assertEqual(self.res["versions"][0], {"id": "v01", "name": "Grip!", "files": len(self.kept["files"]), "locked": True, "built": self.kept["time"]})
+
+
+class TestAVersionTheGameWouldNotShow(VisualWorld):
+    PRESET_V01 = CAR + "presets\\p_v01.mechanicalcarpreset"
+    VIS_V01 = CAR + "presets\\vis_v01.visualcarpreset"
+
+    def setUp(self):
+        super().setUp()
+        self.v = self.version("Grip", {"limiter": 8000})
+        self.apply({})
+        self.folder = tune.version_dir(self.work, "ks_x", "ax_x", self.v)
+        self.package = tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x"))
+        self.kept = tree_bytes(os.path.join(self.folder, "build"))
+        self.record = tree_bytes(self.folder)["snapshot.json"]
+        tune.save_version_state(self.work, "ks_x", {"limiter": 9000}, self.v)
+        self.calls.clear()
+
+    def before_names(self, mutate):
+        names = tune.add_version_names
+
+        def wrapped(part, new_id, versions):
+            mutate(tune.car_root_of(part, new_id))
+            return names(part, new_id, versions)
+        self.patch(tune, "add_version_names", wrapped)
+
+    def refuse(self, missing):
+        with self.assertRaises(ValueError) as caught:
+            self.apply({})
+        self.assertEqual(str(caught.exception), "version v01 (Grip) would not show in the game: " + missing)
+        self.assertEqual([c for c in self.calls if c[0] == "pack"], [])
+        self.assertEqual(tree_bytes(os.path.join(self.work, "ks_x", "build", "ax_x")), self.package)
+        self.assertEqual(tree_bytes(os.path.join(self.folder, "build")), self.kept)
+        self.assertEqual(tree_bytes(self.folder)["snapshot.json"], self.record)
+
+    def test_a_visual_preset_that_the_actor_does_not_list(self):
+        self.patch(tune, "add_version_visuals", lambda *a: None)
+        self.refuse("%s is not in car.customization.visual_car_presets of the actor" % self.VIS_V01)
+
+    def test_a_visual_preset_that_is_not_in_the_build(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "presets", "vis_v01.visualcarpreset")))
+        self.refuse("%s is not in the build" % self.VIS_V01)
+
+    def test_a_missing_carfinalstate(self):
+        self.before_names(lambda root: os.remove(os.path.join(root, "presets", "ax_x_p_v01_vis_v01.carfinalstate")))
+        self.refuse("%s is missing" % self.FINAL_V01)
+
+    def test_a_carfinalstate_that_names_another_preset(self):
+        def mutate(root):
+            self.x.store[self.x.key(os.path.join(root, "presets", "ax_x_p_v01_vis_v01.carfinalstate"))]["body"]["path"] = PRESET
+        self.before_names(mutate)
+        self.refuse("%s does not name %s as body.path" % (self.FINAL_V01, self.PRESET_V01))
+
+    def test_a_missing_localization_line(self):
+        self.patch(tune, "add_version_names", lambda *a: None)
+        self.refuse("the localization line ax_x_name_preset_grip is missing in uiresources/localization/en.cars.loc")
+
+    def test_a_locked_version_that_the_game_would_not_show_is_caught_like_any_other(self):
+        tune.save_version_state(self.work, "ks_x", {"limiter": 8000}, self.v)
+        self.apply({})
+        tune.lock_version(self.work, "ks_x", self.v)
+        self.patch(tune, "add_version_visuals", lambda *a: None)
+        with self.assertRaisesRegex(ValueError, r"^version v01 \(Grip\) would not show in the game: .*vis_v01.visualcarpreset is not in car.customization.visual_car_presets"):
+            self.apply({})
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 {
   "name_suffix": "Tuned",
-  "variant_name": "M3 E46 CSL",
+  "variant_name": "Base",
   "display_power_ps": 579.0,
   "display_torque_nm": 400.0,
   "limiter": 8800,

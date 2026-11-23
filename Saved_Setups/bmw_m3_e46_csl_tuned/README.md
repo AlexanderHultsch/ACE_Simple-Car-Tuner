@@ -14,7 +14,7 @@ In the game the car is called **BMW M3 E46 CSL Tuned** (setting `name_suffix` = 
 | `setup.json` | the saved state of the Base: `tune_state.json` of the default modded car, `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\tune_state.json` |
 | `versions/v01/meta.json` | the version's name (`Drift`) |
 | `versions/v01/setup.json` | the saved state of the version: `%USERPROFILE%\ace_modded_cars_work\ks_bmw_m3_e46_csl\versions\v01\tune_state.json`. Setting ids as in `tuner/catalogue.json` plus the keys `_turbo`, `_sounds` and `_tyres` |
-| `last_build_record.json` | the record the tuner stored at the build of 2026-11-23 16:38 (`snapshots\ax_bmw_m3_e46_csl.json`); it covers the Base only (16 settings against the stock car) |
+| `last_build_record.json` | the record the tuner stored at the build of 2026-11-23 17:15 (`snapshots\ax_bmw_m3_e46_csl.json`); it covers the Base only (17 settings against the stock car) |
 | `versions/v01/last_build_record.json` | the record of the last build of the drift setup as the car itself (2026-11-22, 71 settings), kept for reference; the tuner now also keeps a record per version in `versions\v01\snapshot.json` of the work folder, not copied here |
 
 ## What the Drift version does (71 changes against the stock car)

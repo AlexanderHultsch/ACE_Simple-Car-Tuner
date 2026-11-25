@@ -27,13 +27,15 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         no row for them (the name of the base is set with /api/version_rename, version "base"; tyres are chosen and created in the Tyre Creator); "calculated": true (only
                         then) on display_power_ps and display_torque_nm without a saved value whose value is calculated from the engine
                         settings (tune.calculated_display; changed is true then);
-                        "base_range": {"low", "high"}, the lowest and highest default of the setting over the installed
-                        cars from <work>/ranges.json (written by tune.py ranges), only on the settings that have an entry
-                        there: a soft border for the page, values outside it stay allowed; "min" and "max" are the
-                        catalogue's allowed limits and a different thing)
+                        "min" and "max" are the catalogue's allowed limits)
                         ?variant=<variant id> (optional, only for the stock car: no tune or "draft") answers the rows of the stock car
                         resolved with that variant's files, value = default and changed false, nothing saved is read; 400 for an
                         unknown or unreadable variant and for a variant together with a modded car; no POST route takes a variant
+  GET  /api/car_ranges  what every car of the game package stores, by car category (tune.car_ranges, cached in <work>/car_ranges.json; the first
+                        call after a new package takes several seconds and holds no lock): "categories" ([{id, label, total, cars}]
+                        in display order, only those with cars) and "by_category" ({setting id: {category id: entry}}, entry {low, high,
+                        count} for a number, {values, count} for an on/off or choice setting); both empty without a readable package; static
+                        like /api/groups: the same for every car, tune and version, needs no base car
   GET  /api/groups      the setting groups of the catalogue in display order ("groups": name, description); static data,
                         the same for every car and tune, needs no base car
   versions              GET /api/state of a modded car also answers "versions" ([{id, name}], empty for a stock car and the draft) and
@@ -163,7 +165,7 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         Set-Clipboard: pasting attaches the file); answers {"copied": true, "file": name, "how": "file"}; 403 for
                         a client that is not loopback (127.0.0.1 or ::1), 400 for a bad name or when the PC is not Windows, 404 for a
                         missing file, 500 with the PowerShell error text when the copy fails
-The tyre library is shared by all cars: its routes (and /api/tyre_index) ignore the car and the tune and need no base car; so do /api/groups and the ten
+The tyre library is shared by all cars: its routes (and /api/tyre_index) ignore the car and the tune and need no base car; so do /api/groups, /api/car_ranges and the ten
 log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes and the three
 file routes do not wait for and are not refused by a running job.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
@@ -422,7 +424,7 @@ def apply_task(car_id, new_id, created):
     return task
 
 
-def row_json(row, setting, base_range=None):
+def row_json(row, setting):
     out = {k: row[k] for k in ("id", "group", "label", "kind", "type", "unit", "description", "verified",
                                "default", "value", "changed", "absent", "copies_differ")}
     out.update({k: setting[k] for k in ("min", "max", "choices", "ui", "advanced", "shared") if k in setting})
@@ -430,22 +432,18 @@ def row_json(row, setting, base_range=None):
         out["copy_values"] = row["copy_values"]
     if row.get("calculated"):
         out["calculated"] = True
-    if base_range:
-        out["base_range"] = {"low": base_range["low"], "high": base_range["high"]}
     return out
 
 
 def rows_json(work, car_id, cat, tune_id=None, version=None):
     require_base(work, car_id)
-    ranges = tune.load_ranges(work)
-    return [row_json(r, tune.find_setting(cat, r["id"]), ranges.get(r["id"]))
+    return [row_json(r, tune.find_setting(cat, r["id"]))
             for r in tune.effective_rows(work, car_id, cat, tune=tune_id, version=version)]
 
 
 def row_of(work, car_id, cat, setting_id, tune_id=None, version=None):
     require_base(work, car_id)
-    return row_json(tune.effective_row(work, car_id, setting_id, cat, tune=tune_id, version=version), tune.find_setting(cat, setting_id),
-                    tune.load_ranges(work).get(setting_id))
+    return row_json(tune.effective_row(work, car_id, setting_id, cat, tune=tune_id, version=version), tune.find_setting(cat, setting_id))
 
 
 def settings_counts(work, car_id):
@@ -556,8 +554,7 @@ def api_state(car_id, tune_id):
 
 def variant_rows_json(work, car_id, cat, variant):
     require_base(work, car_id)
-    ranges = tune.load_ranges(work)
-    return [row_json(dict(r, value=r["default"], changed=False), tune.find_setting(cat, r["id"]), ranges.get(r["id"]))
+    return [row_json(dict(r, value=r["default"], changed=False), tune.find_setting(cat, r["id"]))
             for r in tune.resolve_defaults(work, car_id, cat, variant=variant)]
 
 
@@ -573,6 +570,11 @@ def api_settings(car_id, tune_id, query, version=None):
 
 def api_groups(car_id, tune_id):
     return {"groups": tune.group_list()}
+
+
+def api_car_ranges(car_id, tune_id):
+    data = tune.car_range_data(CONFIG["work"], tune.load_catalogue(), CONFIG["game"])
+    return {"categories": data["categories"], "by_category": data["by_category"]}
 
 
 def api_set(car_id, body):
@@ -1147,7 +1149,7 @@ def request_version(value, query, car_id, tune_id):
     return value
 
 
-GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyre_index": api_tyre_index,
+GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/car_ranges": api_car_ranges, "/api/tyre_index": api_tyre_index,
               "/api/tyres": api_tyres, "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
               "/api/sounds": api_sounds, "/api/log_config": api_log_config, "/api/log_sessions": api_log_sessions,
               "/api/log_status": api_log_status,

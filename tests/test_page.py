@@ -35,8 +35,8 @@ def function_body(name):
     return CODE[m.end():i - 1]
 
 
-# the two functions that keep the shown tyre types in localStorage; the tests of the other things the page stores count the rest
-TYRE_TYPES_STORAGE = function_body("storedTyreTypes") + function_body("storeTyreTypes")
+# the two functions that keep the shown optional columns in localStorage; the tests of the other things the page stores count the rest
+COLUMNS_STORAGE = function_body("storedColumns") + function_body("storeColumns")
 
 
 def dom_ids():
@@ -50,6 +50,7 @@ def referenced_ids():
     for array in re.findall(r"for \(const id of \[([^\]]*)\]", CODE):
         ids |= set(re.findall(r'"([^"]+)"', array))
     ids |= set(re.findall(r"""\bshowText\(\s*["']([^"']+)["']""", CODE))
+    ids |= set(re.findall(r"""\b(?:wrapId|rowsId|barId|buttonsId): "([^"]+)\"""", CODE))
     return ids
 
 
@@ -261,7 +262,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 41, calls)
+        self.assertEqual(len(calls), 42, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -453,7 +454,7 @@ class TestTexts(unittest.TestCase):
 
     def test_the_tables_have_the_documented_columns_in_order(self):
         heads = [h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', MARKUP)]
-        self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description",
+        self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Description",
                                  "Tyre", "Short", "Source", "Changed values", "Used by",
                                  "Variable name", "Value", "Default (source tyre)", "Description",
                                  "File", "Car", "Track", "Duration", "Samples", "Size", "Modified", "Copy for AI"])
@@ -790,96 +791,62 @@ class TestGroupList(unittest.TestCase):
         self.assertGreaterEqual(contrast(tokens["--color-text-muted"], tokens["--color-bg-elevated"]), 4.5)
 
 
-class TestBaseRangeColumn(unittest.TestCase):
+class TestNoBaseRangeColumn(unittest.TestCase):
     CAR_TABLE = MARKUP.split('<caption id="caption"', 1)[1].split("</table>")[0]
     TYRE_TABLE = MARKUP.split('<caption class="sr-only">Settings of the selected tyre</caption>', 1)[1].split('id="tyre-rows"')[0]
 
-    def test_the_header_sits_between_default_and_description_in_the_car_table_only(self):
+    def test_the_car_table_has_four_static_columns_like_the_tyre_table(self):
         heads = [h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', self.CAR_TABLE)]
-        self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description"])
-        self.assertNotIn("Range for base cars", self.TYRE_TABLE)
-
-    def test_the_tyre_table_has_no_range_header_and_no_range_column(self):
+        self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Description"])
         heads = re.findall(r'<th scope="col">(.*?)</th>', self.TYRE_TABLE)
         self.assertEqual(heads, ["Variable name", "Value", "Default<br>(source tyre)", "Description"])
-        self.assertNotIn("c-range", self.TYRE_TABLE)
-        self.assertNotIn("Range in", HTML)
-        self.assertNotIn("game min", HTML)
+        colgroup = '<colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>'
+        self.assertIn(colgroup, self.CAR_TABLE)
+        self.assertIn(colgroup, self.TYRE_TABLE)
 
-    def test_the_colgroup_has_the_range_column_between_default_and_description_in_the_car_table_only(self):
-        self.assertIn('<colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-range"><col class="c-desc"></colgroup>',
-                      self.CAR_TABLE)
-        self.assertIn('<colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>', self.TYRE_TABLE)
-        self.assertRegex(STYLE, r"col\.c-range \{ width: \d+%; \}")
+    def test_nothing_of_the_range_for_base_cars_is_left_in_the_page(self):
+        for text in ("Range for base cars", "c-range", "base_range", "buildRangeCell", "withRange", "Range in", "range column"):
+            with self.subTest(text):
+                self.assertNotIn(text, HTML)
+        self.assertEqual(re.findall(r"\bbr\.\w+", CODE), [])
 
-    def test_the_widths_of_the_car_table_add_up_to_100_and_the_tyre_table_keeps_its_own(self):
-        car = {m[0]: int(m[1]) for m in re.findall(r"(?:#panel-car )?col\.(c-(?:name|value|default|range|desc)) \{ width: (\d+)%; \}",
-                                                   "\n".join(l for l in STYLE.splitlines() if l.startswith("#panel-car ") or l.startswith("col.c-range")))}
-        self.assertEqual(sorted(car), ["c-default", "c-desc", "c-name", "c-range", "c-value"])
-        self.assertEqual(sum(car.values()), 100)
-        tyre = [int(w) for w in re.findall(r"^col\.c-(?:name|value|default|desc) \{ width: (\d+)%; \}", STYLE, re.M)]
-        self.assertEqual((len(tyre), sum(tyre)), (4, 100))
-
-    def test_the_tyre_table_uses_the_global_widths_and_has_none_of_its_own(self):
+    def test_both_tables_use_the_global_widths_and_none_of_their_own(self):
+        self.assertNotIn("#panel-car col", STYLE)
         self.assertNotIn("#panel-tyres col", STYLE)
         self.assertEqual({m[0]: int(m[1]) for m in re.findall(r"^col\.(c-(?:name|value|default|desc)) \{ width: (\d+)%; \}", STYLE, re.M)},
                          {"c-name": 22, "c-value": 23, "c-default": 17, "c-desc": 38})
 
-    def test_the_group_rows_span_the_columns_of_their_table(self):
-        self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
+    def test_the_group_rows_start_at_the_four_columns_of_their_table(self):
+        self.assertIn("th.colSpan = 4;", function_body("buildGroup"))
+        self.assertIn("g.th = th;", function_body("buildGroup"))
         self.assertIn("th.colSpan = 4;", function_body("buildTyreGroup"))
 
-    def test_the_cell_is_added_by_the_car_table_and_not_by_the_tyre_table(self):
-        self.assertIn("function buildRow(data, target, withRange) {", CODE)
+    def test_a_row_is_built_without_a_third_argument_by_both_tables(self):
+        self.assertIn("function buildRow(data, target) {", CODE)
         body = function_body("buildRow")
         self.assertIn("r.tr.append(nameCell, valueCell, defCell);", body)
-        self.assertIn("if (withRange) r.tr.appendChild(buildRangeCell(data));", body)
-        self.assertLess(body.index("buildRangeCell(data)"), body.index("r.tr.appendChild(descCell);"))
-        self.assertIn("buildRow(data, target, true)", function_body("buildTable"))
-        self.assertIn("buildRow(item, {}, false);", function_body("buildTyreRows"))
+        self.assertIn("r.tr.appendChild(descCell);", body)
+        self.assertIn("buildRow(data, target);", function_body("buildTable"))
+        self.assertIn("buildRow(item, {});", function_body("buildTyreRows"))
         self.assertEqual(len(re.findall(r"\bbuildRow\(", CODE)), 3)
 
-    def test_the_formatter_joins_low_and_high_with_an_en_dash_and_spaces(self):
-        body = function_body("buildRangeCell")
-        self.assertIn("const br = data.base_range;", body)
-        self.assertIn('low + " \\u2013 " + high', body)
-        self.assertIn("br.low === br.high ? low :", body)
-        self.assertIn("fmtVal(data.type, br.low)", body)
-        self.assertIn("fmtVal(data.type, br.high)", body)
-        self.assertIn('(data.unit ? " " + data.unit : "")', body)
-
-    def test_a_row_without_a_range_and_the_non_numeric_types_show_a_muted_en_dash(self):
-        body = function_body("buildRangeCell")
-        self.assertIn('if (!br || (data.type !== "int" && data.type !== "float")) {', body)
-        self.assertIn('el("td", "default mono", "\\u2013")', body)
-        self.assertIn('none.classList.add("range-none");', body)
-        self.assertIn('none.setAttribute("aria-label", "no range");', body)
-        self.assertIn(".range-none { color: var(--color-text-muted); }", STYLE)
-
-    def test_the_cell_is_plain_text_without_behaviour_title_or_tyre_branch(self):
-        body = function_body("buildRangeCell")
-        for word in ("addEventListener", "badge", "changed", "min", "max", "title", "total", "count", "toPrecision", "tyre", "aria-description"):
-            with self.subTest(word):
-                self.assertNotIn(word, body)
-        self.assertEqual(len(re.findall(r"\bbase_range\b", CODE)), 1)
-
-    def test_no_tyre_row_and_no_page_text_has_the_removed_column(self):
+    def test_the_server_has_no_range_of_base_cars_any_more(self):
+        self.assertNotIn("base_range", inspect.getsource(ts))
+        for name in ("compute_ranges", "write_ranges", "load_ranges", "valid_ranges", "ranges_path", "RANGES_FILE", "cmd_ranges", "_ranges_loaded", "_ranges_lock"):
+            with self.subTest(name):
+                self.assertFalse(hasattr(ts.tune, name))
+        self.assertNotIn("ranges", ts.tune.COMMANDS)
+        self.assertNotIn("ranges.json", inspect.getsource(ts.tune).replace("car_ranges.json", "").replace("tyre_ranges.json", ""))
         self.assertNotIn("base_range", inspect.getsource(ts.tune.tyre_rows))
         self.assertNotIn('"ranges"', inspect.getsource(ts.tune.read_tyre_ranges))
-        self.assertNotIn("base_range", inspect.getsource(ts.api_tyre) + inspect.getsource(ts.api_tyre_set) + inspect.getsource(ts.api_tyre_unset))
         self.assertNotIn("game min", inspect.getsource(ts.tune.cmd_tyre_show))
-        for text in ("Range in", "range column"):
-            self.assertNotIn(text, MARKUP + CODE)
-
-    def test_the_server_sends_the_field_the_page_reads(self):
-        self.assertIn('"base_range"', inspect.getsource(ts.row_json))
 
 
 class TestTyreTypeColumns(unittest.TestCase):
     PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]
     EDITOR = re.search(r'<section id="tyre-editor".*?</section>', PANEL, re.S).group(0)
     MINUS = "\\u2212"
-    TYPED = re.compile(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}")
+    TYPED = re.compile(r"\.coltable\.typed[^{]*\{[^}]*\}")
 
     def test_the_line_with_the_toggle_buttons_sits_below_the_search_and_above_the_table_and_is_hidden_until_there_are_types(self):
         self.assertIn('<div id="tyre-types" class="typebar" hidden>', self.EDITOR)
@@ -888,161 +855,288 @@ class TestTyreTypeColumns(unittest.TestCase):
         self.assertLess(self.EDITOR.index('id="tyre-search"'), self.EDITOR.index('id="tyre-types"'))
         self.assertLess(self.EDITOR.index('id="tyre-types"'), self.EDITOR.index('id="tyre-table-wrap"'))
         self.assertLess(self.EDITOR.index('id="tyre-table-wrap"'), self.EDITOR.index("<table>"))
-        self.assertIn('<div id="tyre-table-wrap" class="tablewrap">', self.EDITOR)
+        self.assertIn('<div id="tyre-table-wrap" class="tablewrap coltable">', self.EDITOR)
         for ident in ("tyre-types", "tyre-type-buttons", "tyre-table-wrap"):
             self.assertEqual(len(re.findall(r'\bid="%s"' % ident, MARKUP)), 1)
+
+    def test_the_tyre_table_is_one_set_of_optional_columns_with_the_state_of_its_own(self):
+        self.assertIn('const TYRE_TYPES_KEY = "tuner.tyre_types";', CODE)
+        state = re.search(r"const tyreCols = newColumns\(\{(.*?)\n\}\);", CODE, re.S).group(1)
+        for part in ('key: TYRE_TYPES_KEY', 'wrapId: "tyre-table-wrap"', 'rowsId: "tyre-rows"', 'barId: "tyre-types"', 'buttonsId: "tyre-type-buttons"',
+                     'noun: "tyre"', "zero: true", "rows: () => tyreRows", "groups: () => tyreGroups",
+                     "entry: (data, c) => data.type_ranges && data.type_ranges[c.key]"):
+            self.assertIn(part, state)
+        body = function_body("newColumns")
+        self.assertIn("shown: new Set(storedColumns(o.key))", body)
+        self.assertEqual(len(re.findall(r"= newColumns\(", CODE)), 2)
 
     def test_the_static_table_has_no_type_column_they_are_added_by_the_script(self):
         table = self.EDITOR[self.EDITOR.index("<table>"):]
         self.assertEqual(len(re.findall(r'<th scope="col">', table)), 4)
         self.assertEqual(table.count("<col "), 4)
-        body = function_body("buildTyreTypes")
-        self.assertIn('$("tyre-rows").closest("table")', body)
-        self.assertIn("cols.insertBefore(t.col, cols.lastElementChild);", body)
-        self.assertIn("head.insertBefore(t.th, head.lastElementChild);", body)
+        body = function_body("buildColumns")
+        self.assertIn('$(cs.rowsId).closest("table")', body)
+        self.assertIn("cols.insertBefore(c.col, cols.lastElementChild);", body)
+        self.assertIn("head.insertBefore(c.th, head.lastElementChild);", body)
         self.assertIn('el("col", "c-type")', body)
 
     def test_a_button_per_type_says_plus_or_minus_the_label_and_what_it_shows_or_hides(self):
-        body = function_body("applyTyreTypes")
-        self.assertIn('t.btn.textContent = (on ? "%s " : "+ ") + t.label;' % self.MINUS, body)
-        self.assertIn('t.btn.setAttribute("aria-pressed", on ? "true" : "false");', body)
-        self.assertIn('t.btn.title = (on ? "Hide" : "Show") + " the values of the " + t.total + " " + t.label + " tyres";', body)
-        self.assertIn('t.btn.addEventListener("click", () => toggleTyreType(t, false));', function_body("buildTyreTypes"))
-        self.assertIn('$("tyre-types").hidden = tyreTypes.length === 0;', function_body("buildTyreTypes"))
+        body = function_body("applyColumns")
+        self.assertIn('c.btn.textContent = (on ? "%s " : "+ ") + c.label;' % self.MINUS, body)
+        self.assertIn('c.btn.setAttribute("aria-pressed", on ? "true" : "false");', body)
+        self.assertIn('c.btn.title = (on ? "Hide" : "Show") + " the values of" + columnWhat(cs, c);', body)
+        self.assertIn('c.cars ? ": " + c.cars.join(", ") : " the " + c.total + " " + c.label + " " + cs.noun + "s"', function_body("columnWhat"))
+        build = function_body("buildColumns")
+        self.assertIn('c.btn.addEventListener("click", () => toggleColumn(cs, c, false));', build)
+        self.assertIn("$(cs.barId).hidden = cs.items.length === 0;", build)
         self.assertIn("flex-wrap: wrap", re.search(r"\.typebar \{([^}]*)\}", STYLE).group(1))
         self.assertIn("flex-wrap: wrap", re.search(r"\.typebuttons \{([^}]*)\}", STYLE).group(1))
 
-    def test_the_header_of_a_column_has_the_label_the_number_of_tyres_and_a_button_that_hides_it(self):
-        body = function_body("buildTyreTypeHead")
+    def test_the_header_of_a_column_has_the_label_the_number_of_items_and_a_button_that_hides_it(self):
+        body = function_body("buildColumnHead")
         self.assertIn('el("button", "small", "%s")' % self.MINUS, body)
-        self.assertIn('hide.setAttribute("aria-label", "Hide " + t.label);', body)
-        self.assertIn('hide.addEventListener("click", () => toggleTyreType(t, true));', body)
-        self.assertIn('el("div", "tcount", t.total + (t.total === 1 ? " tyre" : " tyres"))', body)
+        self.assertIn('hide.setAttribute("aria-label", "Hide " + c.label);', body)
+        self.assertIn('hide.title = "Hide the values of" + columnWhat(cs, c);', body)
+        self.assertIn('hide.addEventListener("click", () => toggleColumn(cs, c, true));', body)
+        self.assertIn('el("div", "tcount", c.total + " " + cs.noun + (c.total === 1 ? "" : "s"))', body)
         self.assertIn('th.scope = "col";', body)
         self.assertIn(".tcount { font-size: 12px; font-weight: normal; color: var(--color-text-muted); }", STYLE)
 
-    def test_the_cells_are_built_with_the_rows_between_the_range_and_the_description_in_the_order_of_the_types(self):
-        body = function_body("addTyreTypeCells")
-        self.assertIn("for (const t of tyreTypes) {", body)
+    def test_the_cells_are_built_with_the_rows_between_the_default_and_the_description_in_the_order_of_the_types(self):
+        body = function_body("addColumnCells")
+        self.assertIn("for (const c of cs.items) {", body)
         self.assertIn("r.tr.insertBefore(cell, r.tr.lastElementChild);", body)
         self.assertIn("cell.hidden = true;", body)
-        self.assertIn("r.typeCells[t.type] = cell;", body)
+        self.assertIn("r.colCells[c.key] = cell;", body)
         rows = function_body("buildTyreRows")
-        self.assertLess(rows.index("buildRow(item, {}, false);"), rows.index("addTyreTypeCells(r, item);"))
-        self.assertLess(rows.index("applyTyreFilter();"), rows.index("applyTyreTypes();"))
-        self.assertIn("buildRow(data, target, true)", function_body("buildTable"))
-        self.assertNotIn("Type", function_body("buildRow"))
-        self.assertNotIn("type_ranges", function_body("buildRow") + function_body("buildRangeCell"))
+        self.assertLess(rows.index("buildRow(item, {});"), rows.index("addColumnCells(tyreCols, r, item);"))
+        self.assertLess(rows.index("applyTyreFilter();"), rows.index("applyColumns(tyreCols);"))
+        self.assertNotIn("Column", function_body("buildRow"))
+        self.assertNotIn("colCells", function_body("buildRow"))
+        self.assertNotIn("type_ranges", function_body("buildRow"))
 
     def test_a_float_cell_is_low_to_high_with_five_digits_the_unit_and_the_exact_values_in_the_title(self):
-        body = function_body("buildTyreTypeCell")
-        self.assertIn("const e = data.type_ranges && data.type_ranges[t.type];", body)
+        body = function_body("buildColumnCell")
+        self.assertIn("const e = cs.entry(data, c);", body)
         self.assertIn("fmtVal(data.type, Number(e.low.toPrecision(5)))", body)
         self.assertIn("fmtVal(data.type, Number(e.high.toPrecision(5)))", body)
         self.assertIn('text = (e.low === e.high ? low : low + " \\u2013 " + high) + (data.unit ? " " + data.unit : "");', body)
         self.assertIn('const exact = e.low === e.high ? fmtVal(data.type, e.low) : fmtVal(data.type, e.low) + " \\u2013 " + fmtVal(data.type, e.high);', body)
-        self.assertIn('e.count < t.total ? "Stored in " + where + "; the others count as 0"', body)
-        self.assertIn('const where = e.count + " of " + t.total + " " + t.label + " tyres";', body)
-        self.assertIn('"Lowest and highest value of all " + t.total + " " + t.label + " tyres"', body)
+        self.assertIn('e.count < c.total ? "Stored in " + where + (cs.zero ? "; the others count as 0" : "")', body)
+        self.assertIn('const where = e.count + " of " + c.total + " " + c.label + " " + cs.noun + "s";', body)
+        self.assertIn('"Lowest and highest value of all " + c.total + " " + c.label + " " + cs.noun + "s"', body)
+        self.assertIn('const all = c.total === 1 ? "Value of " + (c.cars ? c.cars[0] : "the one " + c.label + " " + cs.noun) :', body)
+        self.assertIn('e.count < c.total ? "Stored in " + where + (cs.zero ? "; the others count as 0" : "") : all);', body)
         self.assertIn('cell.setAttribute("aria-description", tip);', body)
 
     def test_a_bool_cell_says_off_on_or_off_slash_on_and_an_enum_cell_joins_the_names(self):
-        body = function_body("buildTyreTypeCell")
+        body = function_body("buildColumnCell")
         self.assertIn('e.values.map((v) => fmtVal("bool", v)).join(" / ")', body)
         self.assertIn('e.values.join(", ")', body)
         self.assertIn('data.type === "bool"', body)
+        self.assertIn('(cs.zero && data.type === "bool" ? "; the others count as off" : "")', body)
         self.assertEqual(function_body("fmtVal").count('"on" : "off"'), 1)
 
     def test_a_type_without_a_value_is_a_muted_dash_that_says_the_field_counts_as_0(self):
-        body = function_body("buildTyreTypeCell")
+        body = function_body("buildColumnCell")
         self.assertIn('const none = el("td", "default mono", "\\u2013");', body)
         self.assertIn('none.classList.add("range-none");', body)
-        self.assertIn('none.title = "No " + t.label + " tyre stores this value; it counts as 0";', body)
+        self.assertIn('none.title = "No " + c.label + " " + cs.noun + (cs.zero ? " stores this value; it counts as 0" : " has this value");', body)
+        self.assertIn(".range-none { color: var(--color-text-muted); }", STYLE)
 
     def test_showing_and_hiding_changes_only_hidden_flags_and_the_layout_and_loads_and_rebuilds_nothing(self):
-        for name in ("applyTyreTypes", "toggleTyreType"):
+        for name in ("applyColumns", "toggleColumn"):
             with self.subTest(name):
                 body = function_body(name)
-                for word in ("api(", "load", "buildTyre", "buildRow", "replaceChildren", "scroll", "createElement", "el("):
+                for word in ("api(", "load", "buildTyre", "buildRow", "buildColumn", "replaceChildren", "scroll", "createElement", "el("):
                     self.assertNotIn(word, body)
-        body = function_body("applyTyreTypes")
-        for part in ("t.col.hidden = !on;", "t.th.hidden = !on;", "r.typeCells[t.type].hidden = !on;", "g.th.colSpan = 4 + shown;",
-                     'wrap.classList.toggle("typed", shown > 0);', 'wrap.style.setProperty("--tyre-types", String(shown));'):
+        body = function_body("applyColumns")
+        for part in ("c.col.hidden = !on;", "c.th.hidden = !on;", "if (r.colCells) r.colCells[c.key].hidden = !on;", "g.th.colSpan = 4 + shown;",
+                     'wrap.classList.toggle("typed", shown > 0);', 'wrap.style.setProperty("--extra-cols", String(shown));',
+                     "for (const r of cs.rows())", "for (const g of cs.groups())", "const wrap = $(cs.wrapId);"):
             self.assertIn(part, body)
-        body = function_body("toggleTyreType")
-        self.assertIn("if (!tyreShownTypes.delete(t.type)) tyreShownTypes.add(t.type);", body)
-        self.assertLess(body.index("storeTyreTypes();"), body.index("applyTyreTypes();"))
-        self.assertIn("t.btn.focus({ preventScroll: true });", body)
+        body = function_body("toggleColumn")
+        self.assertIn("if (!cs.shown.delete(c.key)) cs.shown.add(c.key);", body)
+        self.assertLess(body.index("storeColumns(cs);"), body.index("applyColumns(cs);"))
+        self.assertIn("c.btn.focus({ preventScroll: true });", body)
 
     def test_the_group_rows_of_the_tyre_table_start_at_4_columns_and_cover_the_shown_columns(self):
         self.assertIn("th.colSpan = 4;", function_body("buildTyreGroup"))
         self.assertIn("g.th = th;", function_body("buildTyreGroup"))
-        self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
-        self.assertNotIn("tyreShownTypes", function_body("buildGroup"))
+        self.assertIn("g.th.colSpan = 4 + shown;", function_body("applyColumns"))
+        self.assertNotIn("shown", function_body("buildGroup"))
+        self.assertNotIn("shown", function_body("buildTyreGroup"))
 
     def test_the_types_come_with_a_loaded_tyre_before_its_rows_and_the_columns_stay_for_the_next_one(self):
         body = function_body("loadTyre")
-        self.assertLess(body.index("buildTyreTypes(res.types || []);"), body.index("buildTyreRows(res.rows, id, res.groups);"))
-        body = function_body("buildTyreTypes")
-        self.assertIn("if (same) return;", body)
-        self.assertNotIn("tyreShownTypes", body)
-        self.assertNotIn("tyreShownTypes", function_body("clearTyreRows"))
-        self.assertIn("let tyreShownTypes = new Set(storedTyreTypes());", CODE)
+        self.assertIn("buildColumns(tyreCols, (res.types || []).map((t) => ({ key: t.type, label: t.label, total: t.total })));", body)
+        self.assertLess(body.index("buildColumns(tyreCols,"), body.index("buildTyreRows(res.rows, id, res.groups);"))
+        body = function_body("buildColumns")
+        self.assertIn("if (sig === cs.sig) return;", body)
+        self.assertIn("const sig = JSON.stringify(list);", body)
+        self.assertNotIn("cs.shown", body)
+        self.assertNotIn("shown", function_body("clearTyreRows"))
+        self.assertNotIn("tyreCols", function_body("clearTyreRows"))
 
     def test_the_shown_types_are_remembered_in_the_browser_like_the_selection_and_unknown_ones_are_ignored(self):
-        self.assertIn('const TYRE_TYPES_KEY = "tuner.tyre_types";', CODE)
-        read = function_body("storedTyreTypes")
-        self.assertIn("window.localStorage.getItem(TYRE_TYPES_KEY)", read)
+        read = function_body("storedColumns")
+        self.assertIn("window.localStorage.getItem(key)", read)
         self.assertIn("try {", read)
         self.assertIn("} catch (e) {", read)
         self.assertIn('Array.isArray(list) ? list.filter((t) => typeof t === "string") : []', read)
         self.assertIn("return [];", read)
-        write = function_body("storeTyreTypes")
-        self.assertIn("window.localStorage.setItem(TYRE_TYPES_KEY, JSON.stringify(tyreTypes.map((t) => t.type).filter((t) => tyreShownTypes.has(t))));", write)
+        write = function_body("storeColumns")
+        self.assertIn("window.localStorage.setItem(cs.key, JSON.stringify(cs.items.map((c) => c.key).filter((k) => cs.shown.has(k))));", write)
         self.assertIn("} catch (e) {", write)
         self.assertLess(write.index("setItem"), write.index("catch"))
-        self.assertIn("for (const t of tyreTypes) {\n    const on = tyreShownTypes.has(t.type);", function_body("applyTyreTypes"))
+        self.assertIn("for (const c of cs.items) {\n    const on = cs.shown.has(c.key);", function_body("applyColumns"))
 
     def test_a_shown_column_is_120px_wide_the_wrapper_scrolls_and_the_page_does_not(self):
         self.assertIn("col.c-type { width: 120px; }", STYLE)
-        self.assertIn("#tyre-table-wrap.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }", STYLE)
-        table = re.search(r"#tyre-table-wrap\.typed table \{([^}]*)\}", STYLE).group(1)
+        self.assertIn(".coltable.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }", STYLE)
+        table = re.search(r"\.coltable\.typed table \{([^}]*)\}", STYLE).group(1)
         floors = {"name": 190, "value": 190, "default": 130}
         panel = {k: int(v) for k, v in re.findall(r"^col\.c-(name|value|default|desc) \{ width: (\d+)%; \}", STYLE, re.M)}
         for k, floor in floors.items():
             self.assertIn("--w-%s: max(%dpx, %dcqw);" % (k, floor, panel[k]), table)
-            self.assertIn("#tyre-table-wrap.typed col.c-%s { width: var(--w-%s); }" % (k, k), STYLE)
-        self.assertIn("width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--tyre-types, 0) * 120px));", table)
-        self.assertIn("#tyre-table-wrap.typed col.c-desc { width: auto; }", STYLE)
+            self.assertIn(".coltable.typed col.c-%s { width: var(--w-%s); }" % (k, k), STYLE)
+        self.assertIn("width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--extra-cols, 0) * 120px));", table)
+        self.assertIn(".coltable.typed col.c-desc { width: auto; }", STYLE)
         self.assertNotIn("--w-range", STYLE)
         self.assertEqual(sorted(panel), ["default", "desc", "name", "value"])
-        self.assertNotIn("cqw", re.sub(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", "", STYLE))
+        self.assertNotIn("cqw", re.sub(r"\.coltable\.typed[^{]*\{[^}]*\}", "", STYLE))
         self.assertNotRegex(STYLE, r"\.page[^{}]*\{[^}]*overflow")
         self.assertNotRegex(STYLE, r"body[^{}]*\{[^}]*overflow")
 
     def test_the_header_keeps_sticking_inside_the_scrolling_wrapper_and_the_first_column_stays_from_700px(self):
         self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
         media = re.search(r"@media \(min-width: 700px\) \{(.*?)\n\}", STYLE, re.S).group(1)
-        self.assertRegex(media, r"#tyre-table-wrap\.typed thead th:first-child \{ left: 0; z-index: 3; \}")
-        cell = re.search(r"#tyre-table-wrap\.typed td\.name \{([^}]*)\}", media).group(1)
+        self.assertRegex(media, r"\.coltable\.typed thead th:first-child \{ left: 0; z-index: 3; \}")
+        cell = re.search(r"\.coltable\.typed td\.name \{([^}]*)\}", media).group(1)
         for part in ("position: sticky;", "left: 0;", "background: var(--color-bg-alt);"):
             self.assertIn(part, cell)
-        self.assertIn("box-shadow: inset 0 0 0 999px var(--color-accent-tint)", re.search(r"#tyre-table-wrap\.typed tr\.changed td\.name \{([^}]*)\}", media).group(1))
-        self.assertIn("#tyre-table-wrap.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }", media)
-        self.assertIn("#tyre-table-wrap.typed tr.group th > .gdesc { position: sticky; left: 0; }", media)
+        self.assertIn("box-shadow: inset 0 0 0 999px var(--color-accent-tint)", re.search(r"\.coltable\.typed tr\.changed td\.name \{([^}]*)\}", media).group(1))
+        self.assertIn(".coltable.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }", media)
+        self.assertIn(".coltable.typed tr.group th > .gdesc { position: sticky; left: 0; }", media)
 
-    def test_everything_new_in_the_style_is_below_the_tyre_wrapper_and_uses_the_colour_tokens(self):
+    def test_everything_new_in_the_style_is_below_the_shared_wrapper_class_and_uses_the_colour_tokens(self):
         rules = self.TYPED.findall(STYLE)
         self.assertGreaterEqual(len(rules), 6)
-        for rule in re.findall(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", STYLE):
+        for rule in rules:
             self.assertNotRegex(rule, r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
         self.assertNotIn("#panel-car", "".join(rules))
+        self.assertNotIn("#tyre-table-wrap", STYLE)
+        self.assertEqual(len(re.findall(r'class="tablewrap coltable"', MARKUP)), 2)
 
     def test_the_server_sends_the_types_and_the_values_by_type_the_page_reads(self):
         self.assertIn('"types": tune.tyre_type_list(work, cat, CONFIG["game"])', inspect.getsource(ts.api_tyre))
         self.assertIn('"type_ranges"', inspect.getsource(ts.tune.tyre_rows))
-        self.assertEqual(set(re.findall(r"\be\.(\w+)", function_body("buildTyreTypeCell"))), {"values", "count", "low", "high"})
-        self.assertEqual(set(re.findall(r"\bt\.(\w+)", function_body("buildTyreTypeCell"))), {"type", "label", "total"})
+        self.assertEqual(set(re.findall(r"\be\.(\w+)", function_body("buildColumnCell"))), {"values", "count", "low", "high"})
+        self.assertEqual(set(re.findall(r"\bc\.(\w+)", function_body("buildColumnCell"))), {"cars", "label", "total"})
+
+
+class TestCarCategoryColumns(unittest.TestCase):
+    TUNER = MARKUP[MARKUP.index('<section id="tuner"'):MARKUP.index('id="panel-tyres"')]
+    MINUS = "\\u2212"
+
+    def test_the_line_with_the_toggle_buttons_sits_directly_above_the_settings_table_and_is_hidden_until_there_are_categories(self):
+        self.assertIn('<div id="car-categories" class="typebar" hidden>', self.TUNER)
+        self.assertIn('<span class="tunenote">Values by car category:</span>', self.TUNER)
+        self.assertIn('<span id="car-category-buttons" class="typebuttons" role="group" aria-label="Values by car category"></span>', self.TUNER)
+        self.assertIn('<div id="car-table-wrap" class="tablewrap coltable">', self.TUNER)
+        self.assertRegex(self.TUNER, r'</span>\s*</div>\s*<div id="car-table-wrap"')
+        self.assertLess(self.TUNER.index('<div class="toolbar">'), self.TUNER.index('id="car-categories"'))
+        self.assertLess(self.TUNER.index('id="car-table-wrap"'), self.TUNER.index("<table>"))
+        for ident in ("car-categories", "car-category-buttons", "car-table-wrap"):
+            self.assertEqual(len(re.findall(r'\bid="%s"' % ident, MARKUP)), 1)
+
+    def test_the_car_table_is_the_second_set_of_optional_columns_with_a_key_of_its_own(self):
+        self.assertIn('const CAR_CATEGORIES_KEY = "tuner.car_categories";', CODE)
+        self.assertNotEqual(re.search(r'CAR_CATEGORIES_KEY = "([^"]+)"', CODE).group(1), re.search(r'TYRE_TYPES_KEY = "([^"]+)"', CODE).group(1))
+        state = re.search(r"const carCols = newColumns\(\{(.*?)\n\}\);", CODE, re.S).group(1)
+        for part in ('key: CAR_CATEGORIES_KEY', 'wrapId: "car-table-wrap"', 'rowsId: "rows"', 'barId: "car-categories"', 'buttonsId: "car-category-buttons"',
+                     'noun: "car"', "zero: false", "rows: () => rows", "groups: () => groups",
+                     "entry: (data, c) => carRanges && carRanges.by_category[data.id] && carRanges.by_category[data.id][c.key]"):
+            self.assertIn(part, state)
+        self.assertEqual(len(re.findall(r"\bstoredColumns\(", CODE)), 2)
+        self.assertEqual(len(re.findall(r"\bstoreColumns\(", CODE)), 2)
+
+    def test_the_static_table_has_no_category_column_they_are_added_by_the_script(self):
+        table = self.TUNER[self.TUNER.index("<table>"):self.TUNER.index("</table>")]
+        self.assertEqual(len(re.findall(r'<th scope="col">', table)), 4)
+        self.assertEqual(table.count("<col "), 4)
+
+    def test_the_values_are_read_once_in_the_background_when_the_page_has_loaded(self):
+        body = function_body("loadCarRanges")
+        self.assertIn('await api("/api/car_ranges", undefined, selection);', body)
+        self.assertEqual(len(re.findall(r"/api/car_ranges", CODE)), 1)
+        self.assertIn("if (carRanges || carRangesLoading) return;", body)
+        self.assertIn("carRangesLoading = true;", body)
+        self.assertIn("carRangesLoading = false;", body)
+        self.assertTrue(CODE.rstrip().endswith("refresh();\nloadCarRanges();"))
+        self.assertNotRegex(CODE, r"await loadCarRanges|return loadCarRanges")
+        self.assertEqual(len(re.findall(r"\bloadCarRanges\(\);", CODE)), 2)
+        self.assertNotIn("loadCarRanges", function_body("loadSettings") + function_body("refresh") + function_body("buildTable"))
+
+    def test_the_columns_are_filled_into_the_shown_table_without_rebuilding_it(self):
+        body = function_body("loadCarRanges")
+        self.assertIn("carRanges = res;", body)
+        self.assertIn("buildColumns(carCols, res.categories.map((c) => ({ key: c.id, label: c.label, total: c.total, cars: c.cars })));", body)
+        self.assertIn("for (const r of rows) addColumnCells(carCols, r, r.data);", body)
+        self.assertLess(body.index("buildColumns(carCols,"), body.index("addColumnCells(carCols, r, r.data);"))
+        self.assertLess(body.index("addColumnCells(carCols, r, r.data);"), body.index("applyColumns(carCols);"))
+        for word in ("buildTable", "buildRow", "loadSettings", "replaceChildren", "clearTable", "focus", "scroll", "valuewrap", "setField", "showRow"):
+            with self.subTest(word):
+                self.assertNotIn(word, body)
+
+    def test_a_failed_read_shows_nothing_and_is_tried_again_with_the_next_car_selection(self):
+        body = function_body("loadCarRanges")
+        self.assertIn("} catch (e) {\n    carRanges = null;\n  } finally {", body)
+        self.assertIn("if (!res || !Array.isArray(res.categories) || !res.by_category) throw new Error(", body)
+        for word in ("localError", "serverError", "showText", "setMsg", "textContent", "alert"):
+            self.assertNotIn(word, body)
+        self.assertIn("loadCarRanges();\n  refresh();", function_body("switchCar"))
+        self.assertLess(function_body("switchCar").index("clearTable();"), function_body("switchCar").index("loadCarRanges();"))
+
+    def test_the_rows_get_their_cells_when_they_are_built_and_the_columns_are_applied_after_the_filter(self):
+        body = function_body("buildTable")
+        self.assertLess(body.index("buildRow(data, target);"), body.index("addColumnCells(carCols, r, data);"))
+        self.assertLess(body.index("addColumnCells(carCols, r, data);"), body.index("r.group = current;"))
+        self.assertLess(body.index("applyFilter();"), body.index("applyColumns(carCols);"))
+
+    def test_the_shown_categories_are_kept_when_another_car_is_selected_or_values_are_saved(self):
+        for name in ("clearTable", "buildTable", "switchCar", "loadSettings", "showRow", "sendSet", "sendUnset", "applyFilter", "setAllGroups", "toggleGroup", "resetAll"):
+            with self.subTest(name):
+                self.assertNotIn("carCols.shown", function_body(name))
+                self.assertNotIn("carCols.items", function_body(name))
+                self.assertNotIn("storeColumns", function_body(name))
+        self.assertNotIn("carCols", function_body("clearTable"))
+        self.assertIn("rows = [];", function_body("clearTable"))
+        self.assertIn("shown: new Set(storedColumns(o.key))", function_body("newColumns"))
+
+    def test_the_cells_say_what_the_shared_function_says_without_the_zero_sentences_of_the_tyre_table(self):
+        body = function_body("buildColumnCell")
+        self.assertEqual(body.count("cs.zero"), 3)
+        self.assertIn('" has this value"', body)
+        self.assertEqual(set(re.findall(r"\bc\.(\w+)", body)), {"cars", "label", "total"})
+
+    def test_the_header_of_a_category_lists_its_cars_and_the_titles_of_the_buttons_name_them(self):
+        self.assertIn('if (c.cars) th.title = c.cars.join(", ");', function_body("buildColumnHead"))
+        self.assertIn('c.cars ? ": " + c.cars.join(", ")', function_body("columnWhat"))
+
+    def test_the_server_sends_the_categories_and_the_values_by_category_the_page_reads(self):
+        self.assertIn('{"categories": data["categories"], "by_category": data["by_category"]}', inspect.getsource(ts.api_car_ranges))
+        self.assertIn("/api/car_ranges", ts.GET_ROUTES)
+        self.assertIn("by_category", inspect.getsource(ts.tune.car_ranges))
+        self.assertEqual(set(re.findall(r"\bres\.(\w+)", function_body("loadCarRanges"))), {"categories", "by_category"})
+        self.assertEqual(set(re.findall(r"\bc\.(\w+)", function_body("loadCarRanges"))), {"id", "label", "total", "cars"})
+        self.assertIn('"cars"', inspect.getsource(ts.tune.car_ranges))
+
+    def test_the_table_has_the_layout_of_the_tyre_table_the_wrapper_scrolls_and_the_phone_does_not_scroll_the_page(self):
+        self.assertEqual(len(re.findall(r"\.coltable\.typed table \{", STYLE)), 1)
+        self.assertNotIn("#car-table-wrap", STYLE)
+        self.assertNotRegex(STYLE, r"\.page[^{}]*\{[^}]*overflow")
+        self.assertIn(".coltable.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }", STYLE)
 
 
 class TestTyreGroups(unittest.TestCase):
@@ -1159,7 +1253,6 @@ class TestTyreGroups(unittest.TestCase):
         group = set(re.findall(r"\bknown\.(\w+)", function_body("buildTyreGroup")))
         sent = quoted_words(ts.tune.tyre_group_list)
         self.assertEqual(sorted(group - sent), [])
-        self.assertEqual(set(re.findall(r"\bbr\.(\w+)", function_body("buildRangeCell"))), {"low", "high"})
         self.assertIn("tyre_rows(", inspect.getsource(ts.tyre_row))
         self.assertIn("tyre_row(", inspect.getsource(ts.api_tyre_set))
         self.assertIn("tyre_row(", inspect.getsource(ts.api_tyre_unset))
@@ -1943,7 +2036,7 @@ class TestTabs(unittest.TestCase):
         self.assertIn("if (ev.altKey || ev.ctrlKey || ev.metaKey) return;", body)
 
     def test_the_active_tab_lives_in_a_variable_only_and_changes_nothing_of_the_car_tuner(self):
-        self.assertEqual(CODE.count("localStorage") - TYRE_TYPES_STORAGE.count("localStorage"), 2)
+        self.assertEqual(CODE.count("localStorage") - COLUMNS_STORAGE.count("localStorage"), 2)
         self.assertNotIn("activeTab", function_body("storeSelection") + function_body("storedSelection"))
         for name in ("refresh", "switchCar", "applyFilter", "renderButtons", "toggleGroup", "closeDialog", "openDialog"):
             with self.subTest(name):
@@ -2176,13 +2269,13 @@ class TestTyreCreator(unittest.TestCase):
     def test_the_rows_are_the_values_of_one_tyre_in_the_order_of_the_server_under_the_group_rows_of_the_tyre_table(self):
         body = function_body("buildTyreRows")
         self.assertIn("for (const item of list) {", body)
-        self.assertIn("buildRow(item, {}, false)", body)
+        self.assertIn("buildRow(item, {});", body)
         self.assertIn("r.save = sendTyreSet;", body)
         self.assertIn("r.clear = sendTyreUnset;", body)
         self.assertIn("r.tyre = id;", body)
         self.assertIn("buildTyreGroup(item.group)", body)
         self.assertNotIn("buildGroup", body)
-        self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
+        self.assertIn("th.colSpan = 4;", function_body("buildGroup"))
         fields = tune_catalogue_tyre_fields()
         self.assertEqual(len([f for f in fields if "front_id" in f]), 12)
         self.assertEqual(len(fields), 12 + len(ts.tune.load_catalogue()["tyre_settings"]))
@@ -2352,8 +2445,8 @@ class TestGarage(unittest.TestCase):
     def test_the_panel_sits_in_the_settings_section_below_the_table(self):
         tuner = MARKUP[MARKUP.index('<section id="tuner"'):MARKUP.index('id="panel-tyres"')]
         self.assertIn('id="garage"', tuner)
-        self.assertLess(tuner.index('<div class="toolbar">'), tuner.index('<div class="tablewrap">'))
-        self.assertLess(tuner.index('<div class="tablewrap">'), tuner.index('id="garage"'))
+        self.assertLess(tuner.index('<div class="toolbar">'), tuner.index('<div id="car-table-wrap"'))
+        self.assertLess(tuner.index('<div id="car-table-wrap"'), tuner.index('id="garage"'))
         self.assertNotRegex(self.tag("garage"), r"\bhidden\b")
         self.assertIn('id="garage"', self.CAR_PANEL)
         self.assertNotIn('id="garage"', MARKUP[MARKUP.index('id="panel-tyres"'):])
@@ -3668,7 +3761,7 @@ class TestLogging(unittest.TestCase):
 
     def test_the_header_of_the_log_table_is_the_sticky_one_of_the_car_table_and_only_the_sessions_wrapper_scrolls(self):
         self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
-        self.assertEqual(STYLE.count("position: sticky") - sum(r.count("position: sticky") for r in re.findall(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", STYLE)), 1)
+        self.assertEqual(STYLE.count("position: sticky") - sum(r.count("position: sticky") for r in re.findall(r"\.coltable\.typed[^{]*\{[^}]*\}", STYLE)), 1)
         self.assertEqual(STYLE.count("overflow-x"), 1)
         self.assertIn("\n.sessions { overflow-x: auto; }", STYLE)
         self.assertNotRegex(STYLE, r"\.tablewrap[^{}]*\{[^}]*overflow(?!-wrap)")
@@ -3803,7 +3896,7 @@ class TestLogging(unittest.TestCase):
                 self.assertNotRegex(function_body(name), r"\blog[A-Z]")
 
     def test_the_choice_is_kept_in_the_page_only_and_the_boxes_get_their_focus_back_after_the_redraw(self):
-        self.assertEqual(CODE.count("localStorage") - TYRE_TYPES_STORAGE.count("localStorage"), 2)
+        self.assertEqual(CODE.count("localStorage") - COLUMNS_STORAGE.count("localStorage"), 2)
         body = function_body("renderLog")
         self.assertIn("const focused = logBoxes.find((b) => b.input === document.activeElement);", body)
         self.assertIn("const back = focused && logBoxes.find((b) => b.key === focused.key);", body)

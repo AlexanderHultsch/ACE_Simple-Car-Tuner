@@ -33,7 +33,7 @@ Updated 2026-11-17 (after the full-scope review, [HANDOVER.md](HANDOVER.md) sect
 
 ## 3. Design decisions (made with the user)
 
-- One HTML table is the only editing surface; columns Variable name, Value, Default, Range for base cars, Description. Local server, Windows batch start.
+- One HTML table is the only editing surface; columns Variable name, Value, Default, Description, plus the optional columns per car category (section 4e). Local server, Windows batch start.
 - Apply installs only; the user starts and closes the game; refused while the game runs; a backup of the previous install every time.
 - Each car gets its own copy under an id of the same length as the stock id: `ks_` replaced by `ax_` (`ks_bmw_m3_e46_csl` -> `ax_bmw_m3_e46_csl`). Name: the stock display name from the game's `system\cars.table` (not editable) plus a suffix the user chooses in a field next to it (setting `name_suffix`, default `MY`, 1-30 characters, no control characters (the DEL character included), trimmed, inner runs of spaces collapsed; the game name is the stock name, ONE space and the suffix, so `Supercharged` gives `BMW M3 E46 CSL Supercharged`; the default sorts the car next to the stock one in the game's list; counting `MY` -> `MY 2` -> `MY 3`; a saved legacy `_MY` / `_MY<n>` is read as `MY` / `MY <n>` since 2026-11-15, other saved suffixes are shown as they are, for example `_Drift` as `... _Drift`). The stock cars are never modified. Further modded cars of the same stock car get their own ids and suffixes (section 4c).
 - Settings the car does not have are hidden (turbo values on naturally aspirated cars unless a turbo kit is chosen, gears beyond the real count). Settings with `"ui": "hidden"` in the catalogue have no row (`variant_name`, the 24 old tyre values).
@@ -60,7 +60,8 @@ Updated 2026-11-17 (after the full-scope review, [HANDOVER.md](HANDOVER.md) sect
 |---|---|
 | `GET /ACESCT/` | the page (every route below is served under the prefix `/ACESCT`, for example `/ACESCT/api/state`; the tables show the route without it) |
 | `GET /api/state` | work folder, car, game running, installed package, background job, all cars, number of applicable and hidden settings |
-| `GET /api/settings` | applicable settings with default, value, changed flag, and `base_range` `{low, high}` when `<work>\ranges.json` has the setting (section 4e) |
+| `GET /api/settings` | applicable settings with default, value, changed flag |
+| `GET /api/car_ranges` | the values by car category: `categories` (id, label, total, cars) and `by_category` (section 4e); the same for every car, needs no base car |
 | `GET /api/groups` | the setting groups of the catalogue in display order (`groups`: name, description); static, the same for every car and tune, needs no base car |
 | `POST /api/set`, `/api/unset`, `/api/reset_all` | change, remove or clear values |
 | `POST /api/init` | pull the car's game files (the page calls it "Install car (pull game files)"; background job, 202) |
@@ -145,14 +146,15 @@ Alex asked whether a car can be changed while the game is running (a staged "new
 - **The game reads the mods folder only at start.** A second, brand-new package (another car id and name, `BMW M3 E46 CSL_PB`) copied into the mods folder while the game ran did not show up after leaving the selection to the main menu, nor after going to the garage and back; it appeared only after restarting the game. So a second car id as the other "bank" does not help either.
 - **Consequence:** the workflow stays: close the game, Apply, start the game. The tuner keeps refusing to install while the game runs (`game_running` guard); no staging or pending-swap feature is built (Alex's decision: topic closed). The `.part` copy plus `os.replace` in `clone_car.install` already keeps the old package valid if a swap fails.
 
-## 4e. Range for base cars
+## 4e. Values by car category (2026-11-25)
 
-The Car Tuner table has a column "Range for base cars": the lowest and the highest default of the setting over all game cars installed in the work folder. It is a soft border (information only; values outside stay allowed) and carries no car names, counts or tooltip.
+The Car Tuner table has one column per car category, hidden by default, shown and hidden one by one with the buttons "+ GT3" ... above the table (remembered in the browser, like the tyre type columns of section 4d; both tables share the code). The columns are information only and limit nothing. They replaced the column "Range for base cars" (over installed cars, from `ranges.json` and the command `tune.py ranges`; both removed).
 
-- **Source:** `python tools\tune.py ranges [--work <dir>]` reads the defaults of every car with an extracted base (`<work>\<car>\base`), never the game package, and writes `<work>\ranges.json` = `{setting id: {"low", "high"}}` (derived game data: stays in the work folder, not in git). Counted: settings of kind value and type float or int, applicable on the car, not absent in its files. Cars whose defaults cannot be resolved are listed on stderr and skipped; with no readable car the command fails and writes nothing.
-- **Served:** `GET /api/settings` (and the row of `/api/set`, `/api/unset`) adds `base_range` `{low, high}` to a row when the file has the setting; a missing or damaged file means no key (`tune.load_ranges` returns `{}`).
-- **Page:** the cell shows `low – high` (en dash) or a single number when both are equal, with the unit like the Default column; `–` (muted) for settings without a range and for non-numeric types. The Tyre Creator shows the values per tyre type instead (section 4d).
-- **State on Alex's PC (2026-11-13):** all 71 game cars installed in the work folder (27.9 GB), `ranges.json` has 135 settings (71 cars read, none skipped). Some ranges mix units or are wide because the game's cars differ (for example `brake_bias_hw` stores a percentage on most cars and a fraction on some, `gear_1` reaches 13.97 on one car); the range shows what is stored, not a recommendation.
+- **Categories (Alex's choice, `CAR_CATEGORIES`):** every game car is in exactly one, from the tags of `system\cars.table`, first rule that fits: not a road car: formula, GT3, GT2, GT4 by tag, else Cup/other race; electric; AWD road; no RWD tag: FWD road; front engine: Front RWD modern or classic (Modern against Vintage / YoungTimer); else Mid/rear RWD. Extra column Drift: the mechanical presets whose label contains "drift" (today only the Supra MKIV's). Game 0.9.1: 7, 9, 13, 9, 6, 2 (electric), 3 (GT4), 5 (GT3), 8 (GT2), 7, 2 (formula), 1 (Drift); 71 cars.
+- **Source (`tune.car_ranges`):** read from the game package alone, no car needs to be installed: the `data` and `presets` folders and `.actor` files of all cars are extracted to `<work>\.car_ranges_tmp` (48 MB, removed again), resolved like an installed car, and the lowest and highest value (choice settings: the values used) per category are cached in `<work>\car_ranges.json` (package stamp, hash of the settings, categories). About 8 s the first time after a game update or a change of the settings list. Left out: text settings, the hidden tyre values, flags.
+- **Served:** `GET /api/car_ranges` (`categories`, `by_category`), the same for every car, asked once by the page without holding up the table.
+- **Reading them:** they show what the files store. One unusual car widens a range (Caterham 680 kg and Camaro 1828 kg are both Front RWD modern); signs and placeholders differ between cars (steering ratio negative on some, final ratio 1.0 on some, `brake_bias_hw` percent and fraction).
+- **Verified:** 1298 comparisons with an independent survey of all 71 cars without a difference; the page in a browser on a scratch copy (values, versions, search, widths, phone).
 
 ## 4d. Own tyres and the tyres offered in the game (rebuilt 2026-11-24/25)
 

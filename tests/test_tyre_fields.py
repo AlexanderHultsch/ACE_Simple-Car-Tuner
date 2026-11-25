@@ -283,7 +283,6 @@ class TestAbsentFieldsInRows(Fields):
         self.a.store[self.a.key(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))]["modelData"]["wearCurve"] = GS + "tyres\\slick\\wear_slick.curve"
         rows = self.rows(self.create("Other"))
         self.assertEqual((rows["tyre_wear"]["default"], rows["tyre_wear"]["value"]), ("slick", "slick"))
-        self.assertNotIn("base_range", rows["tyre_wear"])
 
 
 class TestAbsentFieldsInBuilds(Fields):
@@ -634,8 +633,6 @@ class TestTyreRangesByType(Fields):
         res = self.ranges()
         self.assertEqual(sorted(res), ["by_type", "total", "types"])
         self.assertEqual(res["total"], 6)
-        for row in self.rows(self.create()).values():
-            self.assertNotIn("base_range", row)
 
     def test_a_bool_with_absent_counts_a_tyre_that_does_not_store_it_as_false_but_not_in_count(self):
         self.assertEqual(self.by_type("tyre_flag"), {"road": {"values": [False, True], "count": 1}, "supercar": {"values": [False], "count": 0},

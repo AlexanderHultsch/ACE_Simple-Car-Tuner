@@ -4629,7 +4629,7 @@ class TestUsageText(unittest.TestCase):
         commands = [line.split()[2] for line in self.usage_lines()]
         self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "version-lock", "version-unlock", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-index",
                                     "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "tyres-convert", "garage", "garage-set", "garage-reset", "turbo-donors",
-                                    "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
+                                    "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset"])
         self.assertEqual(list(tune.COMMANDS), commands)
         for cmd in commands:
             self.assertEqual(tune.COMMANDS[cmd].__name__, "cmd_" + cmd.replace("-", "_"))

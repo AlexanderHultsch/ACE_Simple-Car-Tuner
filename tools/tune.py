@@ -33,7 +33,6 @@ usage:
   python tools/tune.py sounds       [--tune ID | --draft] [--car ID] [--work <dir>]
   python tools/tune.py sound-set    <slot> <key> [--tune ID | --draft] [--version ID] [--car ID] [--work <dir>]
   python tools/tune.py sound-reset  [<slot>] [--tune ID | --draft] [--version ID] [--car ID] [--work <dir>]
-  python tools/tune.py ranges       [--work <dir>]
 
 --car ID picks any car of the game (default: the default car of tuner/cars.json); an id that is not a game car is
 rejected with the closest matches. The game's cars come from system/cars.table, read once and cached in
@@ -331,13 +330,6 @@ sounds:       lists per slot "<slot> (own: <key or none>, selected: <key or ->)"
           sound that is not offered any more is a warning.
 sound-set:    chooses the option with the given key for a slot (turbo or backfire); the car's own sound removes the choice of the slot.
 sound-reset:  removes the choice of one slot, or of every slot without an argument.
-ranges:       the soft borders for the settings page (library functions compute_ranges, write_ranges, load_ranges): reads the
-          defaults of every car with an extracted base in the work folder (every <work>/<car>/base) and writes the lowest and
-          highest default of every numeric setting (kind value, type int or float; a field a car does not store does not
-          count) to <work>/ranges.json = {setting id: {"low", "high"}}, never reading the game package. A value outside the
-          range is allowed. Prints how many cars were read, how many were skipped and how many settings got a range; each
-          skipped car (its defaults cannot be resolved) is listed on stderr and does not change the exit code. Without any
-          readable car it fails and writes nothing. load_ranges gives {} for a missing or damaged file.
 <work> defaults to %USERPROFILE%\\ace_modded_cars_work. --game is accepted by cars and init only; the other commands use the default Steam path of the game package for what they extract on first need. Writes nothing outside <work> and the mods folder. File
 operations on car trees use extended-length paths (kspkg.long_path), so deep Windows paths work.
 
@@ -496,9 +488,15 @@ OLD_CHOICE = "the saved tyre choice was made before the tyre rebuild: choose the
 TYRE_VALUES_REFUSED = "tyre values are edited in the Tyre Creator: choose or create a tyre there"
 CONVERT_CHOICE = "this car has a tyre choice already: reset the tyre values or the choice first"
 CONVERT_NONE = "no saved tyre values to convert"
-RANGES_FILE = "ranges.json"
 TYRE_RANGES_FILE = "tyre_ranges.json"
 TYRE_RANGES_VERSION = 3
+CAR_RANGES_FILE = "car_ranges.json"
+CAR_RANGES_VERSION = 1
+CAR_RANGES_TMP = ".car_ranges_tmp"
+CAR_CATEGORIES = (("rwd_front_modern", "Front RWD modern"), ("rwd_front_classic", "Front RWD classic"), ("rwd_mid_rear", "Mid/rear RWD"),
+                  ("awd", "AWD road"), ("fwd", "FWD road"), ("electric", "Electric"), ("gt4", "GT4"), ("gt3", "GT3"), ("gt2", "GT2"),
+                  ("race_other", "Cup/other race"), ("formula", "Formula"), ("drift", "Drift"))
+CAR_RANGE_KEYS = ("id", "kind", "type", "targets", "needs", "curve_from", "choices", "choice_values", "default", "hide_if_absent", "handler")
 CAR_FILE = "data/CarData.car"
 VERSION_SKIP_FOLDERS = ("uiresources/", "generated/")
 VERSION_SKIP_TYPES = (".actor", ".moddedcarcontent")
@@ -510,10 +508,11 @@ _resolved = {}
 _donor_listings = {}
 _actor_options = {}
 _engine_inputs = {}
-_ranges_lock = threading.Lock()
-_ranges_loaded = {}
 _tyre_ranges_lock = threading.Lock()
 _tyre_ranges_loaded = {}
+_car_ranges_lock = threading.Lock()
+_car_ranges_compute_lock = threading.Lock()
+_car_ranges_loaded = {}
 _catalogue_lock = threading.Lock()
 _catalogue_loaded = {}
 _stdout_lock = threading.Lock()
@@ -5340,10 +5339,6 @@ def sound_notes(changed):
     return ["note: sound %s: %s" % (c["slot"], "- added %s" % c["to"] if c["added"] else "%s -> %s" % (c["from"], c["to"])) for c in changed]
 
 
-def ranges_path(work):
-    return os.path.join(work, RANGES_FILE)
-
-
 def finite_number(v):
     return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
 
@@ -5358,62 +5353,263 @@ def installed_cars(work):
     return found
 
 
-def compute_ranges(work, catalogue=None, game=DEFAULT_GAME):
-    """The lowest and highest default of every numeric value setting (kind value, type int or float) over the cars with
-    an extracted base in the work folder: {"ranges": {setting id: {"low", "high"}}, "cars": [ids read], "skipped":
-    [{"car", "reason"}]}. A car whose defaults cannot be resolved is skipped; a field the car does not store does not count."""
-    cat = catalogue or load_catalogue()
-    ranges, cars, skipped = {}, [], []
-    for car_id in installed_cars(work):
-        try:
-            rows = resolve_defaults(work, car_id, cat, game, hidden=True)
-        except (ValueError, OSError, SystemExit) as e:
-            skipped.append({"car": car_id, "reason": str(e)})
-            continue
-        cars.append(car_id)
-        for r in rows:
-            if (r["applicable"] and r["kind"] == "value" and r["type"] in ("float", "int") and not r["absent"]
-                    and finite_number(r["default"])):
-                low, high = ranges.get(r["id"], (r["default"], r["default"]))
-                ranges[r["id"]] = (min(low, r["default"]), max(high, r["default"]))
-    return {"ranges": {i: {"low": low, "high": high} for i, (low, high) in ranges.items()}, "cars": cars, "skipped": skipped}
+def car_property(content, key, default):
+    """The lower case value name of a property of a cars.table row ("Property1_Road" gives "road"); the default when the row leaves it off."""
+    return (content.get(key) or "").rpartition("_")[2].lower() or default
 
 
-def write_ranges(work, ranges):
-    path = ranges_path(work)
-    save_json(path, ranges)
-    return path
+def car_category(content):
+    """The id of CAR_CATEGORIES of a car_content row of cars.table, the first rule that fits: a car whose property_1 is not Road is
+    formula, gt3, gt2, gt4 (by its tag) or race_other; property_3 EV is electric; the tag awd is awd; no tag rwd is fwd; with the tag
+    front_engine rwd_front_modern (property_2 Modern) or rwd_front_classic; else rwd_mid_rear. The tags are the sub_categories'
+    categories without "CarCategoryEnum_"."""
+    tags = {c.removeprefix("CarCategoryEnum_").lower() for sub in content.get("sub_categories") or [] for c in sub.get("categories") or []}
+    if car_property(content, "property_1", "road") != "road":
+        return next((t for t in ("formula", "gt3", "gt2", "gt4") if t in tags), "race_other")
+    if car_property(content, "property_3", "ice") == "ev":
+        return "electric"
+    if "awd" in tags:
+        return "awd"
+    if "rwd" not in tags:
+        return "fwd"
+    if "front_engine" in tags:
+        return "rwd_front_modern" if car_property(content, "property_2", "modern") == "modern" else "rwd_front_classic"
+    return "rwd_mid_rear"
 
 
-def valid_ranges(data):
-    return (isinstance(data, dict)
-            and all(isinstance(r, dict) and finite_number(r.get("low")) and finite_number(r.get("high")) and r["low"] <= r["high"]
-                    for r in data.values()))
+def car_range_settings(cat):
+    """The settings car_ranges collects: kind value, type float, int, bool or enum, not in the group Tyres."""
+    return [s for s in cat["settings"] if s["kind"] == "value" and s["type"] in ("float", "int", "bool", "enum") and s.get("group") != "Tyres"]
 
 
-def load_ranges(work):
-    """{setting id: {"low", "high"}} from <work>/ranges.json; {} when the file is missing, unreadable or invalid. Read again
-    only when its (mtime_ns, size) changed."""
-    path = ranges_path(work)
+def car_ranges_path(work):
+    return os.path.join(work, CAR_RANGES_FILE)
+
+
+def car_ranges_key(settings, st):
+    """What the cached car ranges depend on: the package's [size, mtime_ns], a hash of the keys of the collected settings that decide
+    their values (CAR_RANGE_KEYS) and the categories with their labels."""
+    digest = hashlib.sha1(json.dumps([{k: s[k] for k in CAR_RANGE_KEYS if k in s} for s in settings], sort_keys=True).encode()).hexdigest()
+    return {"stamp": [st.st_size, st.st_mtime_ns], "settings": digest, "category_list": [list(c) for c in CAR_CATEGORIES]}
+
+
+def valid_car_ranges(data, key):
+    if not (isinstance(data, dict) and data.get("version") == CAR_RANGES_VERSION and all(data.get(k) == key[k] for k in key)):
+        return False
+    categories, by_category, skipped = data.get("categories"), data.get("by_category"), data.get("skipped")
+    if not (isinstance(categories, list) and isinstance(by_category, dict) and isinstance(skipped, list)):
+        return False
+    labels, order = dict(CAR_CATEGORIES), [c[0] for c in CAR_CATEGORIES]
+    if not all(isinstance(c, dict) and c.get("id") in labels and c.get("label") == labels[c["id"]] and type(c.get("total")) is int and c["total"] >= 1
+               and isinstance(c.get("cars"), list) and len(c["cars"]) == c["total"] and all(isinstance(n, str) for n in c["cars"])
+               for c in categories):
+        return False
+    listed = [c["id"] for c in categories]
+    if listed != sorted(set(listed), key=order.index):
+        return False
+    return (all(isinstance(per, dict) and all(k in listed and valid_type_entry(e) for k, e in per.items()) for per in by_category.values())
+            and all(isinstance(x, dict) and isinstance(x.get("car"), str) and isinstance(x.get("reason"), str) for x in skipped))
+
+
+def cached_car_ranges(path, key):
+    """A copy of the stored car ranges when the memory copy or the file at path is valid for key, else None."""
     try:
         st = stat_or_none(path)
     except OSError:
-        return {}
-    if st is None:
-        return {}
-    stamp = (st.st_mtime_ns, st.st_size)
-    with _ranges_lock:
-        hit = _ranges_loaded.get(path)
-    if hit and hit[0] == stamp:
-        return copy.deepcopy(hit[1])
+        st = None
+    stamp = (st.st_mtime_ns, st.st_size) if st else None
+    with _car_ranges_lock:
+        hit = _car_ranges_loaded.get(path)
+    if hit and hit[0] == stamp and hit[1] == key:
+        return copy.deepcopy(hit[2])
     try:
-        data = read_json(path)
+        data = read_json(path) if st else None
     except (ValueError, OSError):
         data = None
-    found = {i: {"low": r["low"], "high": r["high"]} for i, r in data.items()} if valid_ranges(data) else {}
-    with _ranges_lock:
-        _ranges_loaded[path] = (stamp, copy.deepcopy(found))
+    if not valid_car_ranges(data, key):
+        return None
+    found = {k: data[k] for k in ("categories", "by_category", "skipped")}
+    with _car_ranges_lock:
+        _car_ranges_loaded[path] = (stamp, key, copy.deepcopy(found))
     return found
+
+
+def store_car_ranges(work, path, key, found):
+    try:
+        if os.path.isdir(work):
+            save_json(path, dict(key, version=CAR_RANGES_VERSION, **found))
+    except OSError:
+        pass
+    try:
+        st = stat_or_none(path)
+    except OSError:
+        st = None
+    with _car_ranges_lock:
+        _car_ranges_loaded[path] = ((st.st_mtime_ns, st.st_size) if st else None, key, copy.deepcopy(found))
+
+
+def extract_cars_for_ranges(game, dest):
+    """Extract the data and presets folders and the .actor files of every car of the game package's cars.table to <dest>/<car>/base and
+    return {car id: its car_content row}; None when the package or its cars.table cannot be read (what was extracted stays)."""
+    try:
+        with open(game, "rb") as f:
+            key, entries, _ = kspkg.read_table(f)
+            table_entry = next((e for e in entries if e["path"].lower() == CARS_TABLE and not e["flags"] & kspkg.FLAG_DIR), None)
+            if table_entry is None:
+                return None
+            data = bytearray()
+            kspkg.copy_entry(f, table_entry, key, data.extend)
+            rows = {}
+            for line in cars_table_lines(bytes(data)):
+                c = line.get("car_content", {})
+                if isinstance(c.get("name"), str) and c["name"]:
+                    rows.setdefault(c["name"], c)
+            if not rows:
+                return None
+            wanted = {n.lower(): n for n in rows}
+            for e in entries:
+                parts = e["path"].lower().replace("/", "\\").split("\\")
+                if (e["flags"] & kspkg.FLAG_DIR or len(parts) < 4 or parts[0] != "content" or parts[1] != "cars" or parts[2] not in wanted
+                        or not (parts[3] in ("data", "presets") or parts[-1].endswith(".actor"))):
+                    continue
+                out = kspkg.safe_path(os.path.join(dest, wanted[parts[2]], "base"), e["path"])
+                os.makedirs(os.path.dirname(out), exist_ok=True)
+                with open(out, "wb") as o:
+                    kspkg.copy_entry(f, e, key, o.write)
+            return rows
+    except (ValueError, OSError):
+        return None
+
+
+def add_car_values(acc, category, by_id, rows):
+    """Add the values of the rows of one car (or variant) to acc = {setting id: {category: entry}}."""
+    for r in rows:
+        s, value = by_id.get(r["id"]), r["default"]
+        if s is None or not r["applicable"] or r["absent"]:
+            continue
+        per = acc.setdefault(s["id"], {})
+        if s["type"] in ("float", "int"):
+            if finite_number(value):
+                per[category] = widen(per.get(category), value)
+        elif (s["type"] == "bool" and type(value) is bool) or (s["type"] == "enum" and isinstance(value, str)):
+            e = per.setdefault(category, {"values": set(), "count": 0})
+            e["values"].add(value)
+            e["count"] += 1
+
+
+def finish_car_entry(s, e):
+    if "values" not in e:
+        return e
+    choices = s.get("choices", [])
+    values = sorted(e["values"]) if s["type"] == "bool" else sorted(e["values"], key=lambda n: (choices.index(n) if n in choices else len(choices), n))
+    return {"values": values, "count": e["count"]}
+
+
+def cut_folder(text, folder):
+    """text without the path of folder (and the separator after it)."""
+    for form in (kspkg.long_path(folder), kspkg.plain_path(folder), folder):
+        text = text.replace(form + os.sep, "").replace(form, "")
+    return text
+
+
+def compute_car_ranges(work, cat, settings, game):
+    """car_ranges without the cache: the cars are extracted to the folder CAR_RANGES_TMP of the work folder (no car folder: its name is
+    no car id), resolved there and the folder is removed again, also on an error. None when the package, its cars.table or the work
+    folder cannot be read."""
+    if not os.path.isdir(work):
+        return None
+    tmp, run = os.path.join(work, CAR_RANGES_TMP), dict(cat, settings=settings)
+    by_id = {s["id"]: s for s in settings}
+    members = {c[0]: [] for c in CAR_CATEGORIES}
+    acc, skipped = {}, []
+    try:
+        if os.path.lexists(kspkg.long_path(tmp)):
+            remove_tree(work, tmp)
+        rows = extract_cars_for_ranges(game, tmp)
+        if rows is None:
+            return None
+        for car_id, content in rows.items():
+            name = content.get("display_name") or car_id
+            try:
+                try:
+                    base = resolve_defaults(tmp, car_id, run, game, hidden=True)
+                except (ValueError, OSError, SystemExit) as e:
+                    skipped.append({"car": car_id, "reason": cut_folder(str(e), tmp)})
+                    continue
+                category = car_category(content)
+                members[category].append(name)
+                add_car_values(acc, category, by_id, base)
+                try:
+                    variants = list_variants(tmp, car_id)
+                except (ValueError, OSError):
+                    variants = []
+                for v in variants:
+                    if v["error"] or "drift" not in v["label"].lower():
+                        continue
+                    label = "%s (%s)" % (name, v["label"])
+                    try:
+                        vrows = resolve_defaults(tmp, car_id, run, game, hidden=True, variant=v["id"])
+                    except (ValueError, OSError, SystemExit) as e:
+                        skipped.append({"car": label, "reason": cut_folder(str(e), tmp)})
+                        continue
+                    members["drift"].append(label)
+                    add_car_values(acc, "drift", by_id, vrows)
+            finally:
+                forget_resolved(tmp, car_id)
+    finally:
+        with contextlib.suppress(OSError):
+            if os.path.lexists(kspkg.long_path(tmp)):
+                remove_tree(work, tmp)
+    by_category = {}
+    for s in settings:
+        per = acc.get(s["id"], {})
+        mine = {c: finish_car_entry(s, per[c]) for c, _ in CAR_CATEGORIES if c in per}
+        if mine:
+            by_category[s["id"]] = mine
+    labels = dict(CAR_CATEGORIES)
+    return {"categories": [{"id": c, "label": labels[c], "total": len(members[c]), "cars": sorted(members[c], key=lambda n: (n.lower(), n))}
+                           for c, _ in CAR_CATEGORIES if members[c]],
+            "by_category": by_category, "skipped": skipped}
+
+
+def car_ranges(work, catalogue=None, game=DEFAULT_GAME):
+    """What every car of the game package stores in the numeric, on/off and choice settings, by car category: {"categories": [{"id", "label",
+    "total", "cars"}] (CAR_CATEGORIES in their order, only those with members; "cars" are the display names, sorted; the category "drift"
+    holds the mechanical presets whose label contains "drift" as "<car> (<label>)", the cars keep their own category), "by_category": {setting
+    id: {category id: entry}} with {"low", "high", "count"} for a number and {"values", "count"} for a bool or an enum (count = cars of the
+    category with the setting applicable and stored), "skipped": [{"car", "reason"}] (cars that cannot be read, not counted)}. The values are
+    the defaults of resolve_defaults. Read from the package alone (see compute_car_ranges), cached in <work>/car_ranges.json while the
+    package (size, mtime) and the settings stay the same; a damaged or outdated file is read again, a failed write is no error, one
+    computation at a time. Without the package or its cars.table the lists are empty and nothing is written."""
+    empty = {"categories": [], "by_category": {}, "skipped": []}
+    if not os.path.isfile(game):
+        return empty
+    try:
+        st = os.stat(game)
+    except OSError:
+        return empty
+    cat = catalogue or load_catalogue()
+    settings = car_range_settings(cat)
+    key, path = car_ranges_key(settings, st), car_ranges_path(work)
+    found = cached_car_ranges(path, key)
+    if found is None:
+        with _car_ranges_compute_lock:
+            found = cached_car_ranges(path, key)
+            if found is None:
+                found = compute_car_ranges(work, cat, settings, game)
+                if found is None:
+                    return empty
+                store_car_ranges(work, path, key, found)
+                found = copy.deepcopy(found)
+    return found
+
+
+def car_range_data(work, catalogue=None, game=DEFAULT_GAME):
+    """car_ranges, or its empty answer when it cannot be computed."""
+    try:
+        return car_ranges(work, catalogue, game)
+    except (ValueError, OSError):
+        return {"categories": [], "by_category": {}, "skipped": []}
 
 
 def table(headers, rows):
@@ -5911,20 +6107,6 @@ def cmd_sound_reset():
     print("%ssound selection %s" % (pos[0] + " " if pos else "", "removed from the state" if res["removed"] else "was not set"))
 
 
-def cmd_ranges():
-    pos, opts = cli_args(("work",))
-    if pos:
-        usage()
-    work = work_arg(opts)
-    res = compute_ranges(work, game="")
-    for s in res["skipped"]:
-        print("skipped %s: %s" % (s["car"], s["reason"]), file=sys.stderr)
-    if not res["cars"]:
-        raise ValueError("no car could be read in %s" % work if res["skipped"] else "no installed car in %s, run init first" % work)
-    write_ranges(work, res["ranges"])
-    print("read %d cars, skipped %d, %d settings with a range" % (len(res["cars"]), len(res["skipped"]), len(res["ranges"])))
-
-
 COMMANDS = {
     "cars": cmd_cars,
     "init": cmd_init,
@@ -5958,7 +6140,6 @@ COMMANDS = {
     "sounds": cmd_sounds,
     "sound-set": cmd_sound_set,
     "sound-reset": cmd_sound_reset,
-    "ranges": cmd_ranges,
 }
 
 

@@ -145,11 +145,6 @@ col.c-name { width: 22%; }
 col.c-value { width: 23%; }
 col.c-default { width: 17%; }
 col.c-desc { width: 38%; }
-#panel-car col.c-name { width: 19%; }
-#panel-car col.c-value { width: 20%; }
-#panel-car col.c-default { width: 14%; }
-col.c-range { width: 13%; }
-#panel-car col.c-desc { width: 34%; }
 col.c-type { width: 120px; }
 col.c-tick { width: 44px; }
 col.c-unit { width: 9%; }
@@ -219,24 +214,24 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .typebuttons button[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-tint); }
 .typehead { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
 .tcount { font-size: 12px; font-weight: normal; color: var(--color-text-muted); }
-/* a shown type column: the table gets a width of its own and the wrapper scrolls, with the header and the first column kept in view */
-#tyre-table-wrap.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }
-#tyre-table-wrap.typed table {
+/* a shown optional column (tyre type, car category): the table gets a width of its own and the wrapper scrolls, with the header and the first column kept in view */
+.coltable.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }
+.coltable.typed table {
   --w-name: max(190px, 22cqw); --w-value: max(190px, 23cqw); --w-default: max(130px, 17cqw);
-  width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--tyre-types, 0) * 120px));
+  width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--extra-cols, 0) * 120px));
 }
-#tyre-table-wrap.typed col.c-name { width: var(--w-name); }
-#tyre-table-wrap.typed col.c-value { width: var(--w-value); }
-#tyre-table-wrap.typed col.c-default { width: var(--w-default); }
-#tyre-table-wrap.typed col.c-desc { width: auto; }
+.coltable.typed col.c-name { width: var(--w-name); }
+.coltable.typed col.c-value { width: var(--w-value); }
+.coltable.typed col.c-default { width: var(--w-default); }
+.coltable.typed col.c-desc { width: auto; }
 @media (min-width: 700px) {
-  #tyre-table-wrap.typed thead th:first-child { left: 0; z-index: 3; }
-  #tyre-table-wrap.typed td.name {
+  .coltable.typed thead th:first-child { left: 0; z-index: 3; }
+  .coltable.typed td.name {
     position: sticky; left: 0; z-index: 1; background: var(--color-bg-alt); box-shadow: 1px 0 0 var(--color-border);
   }
-  #tyre-table-wrap.typed tr.changed td.name { box-shadow: inset 0 0 0 999px var(--color-accent-tint), 1px 0 0 var(--color-border); }
-  #tyre-table-wrap.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }
-  #tyre-table-wrap.typed tr.group th > .gdesc { position: sticky; left: 0; }
+  .coltable.typed tr.changed td.name { box-shadow: inset 0 0 0 999px var(--color-accent-tint), 1px 0 0 var(--color-border); }
+  .coltable.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }
+  .coltable.typed tr.group th > .gdesc { position: sticky; left: 0; }
 }
 .garage { padding: 0; overflow-wrap: anywhere; }
 .tablewrap + .garage { margin-top: 12px; }
@@ -375,16 +370,19 @@ tr.picked td { background: var(--color-accent-tint); }
         <span class="spacer"></span>
         <button id="btn-reset-all" type="button">Reset all</button>
       </div>
-      <div class="tablewrap">
+      <div id="car-categories" class="typebar" hidden>
+        <span class="tunenote">Values by car category:</span>
+        <span id="car-category-buttons" class="typebuttons" role="group" aria-label="Values by car category"></span>
+      </div>
+      <div id="car-table-wrap" class="tablewrap coltable">
         <table>
           <caption id="caption" class="sr-only">Settings of the selected car</caption>
-          <colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-range"><col class="c-desc"></colgroup>
+          <colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>
           <thead>
             <tr>
               <th scope="col">Variable name</th>
               <th scope="col">Value</th>
               <th scope="col">Default<br>(for the selected car)</th>
-              <th scope="col">Range for base cars</th>
               <th scope="col">Description</th>
             </tr>
           </thead>
@@ -553,7 +551,7 @@ tr.picked td { background: var(--color-accent-tint); }
         <span class="tunenote">Values by tyre type:</span>
         <span id="tyre-type-buttons" class="typebuttons" role="group" aria-label="Values by tyre type"></span>
       </div>
-      <div id="tyre-table-wrap" class="tablewrap">
+      <div id="tyre-table-wrap" class="tablewrap coltable">
         <table>
           <caption class="sr-only">Settings of the selected tyre</caption>
           <colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>
@@ -634,6 +632,7 @@ const POLL_HIDDEN_MS = 30000;
 const LOG_POLL_MS = 2000;
 const SELECTION_KEY = "tuner.selection";
 const TYRE_TYPES_KEY = "tuner.tyre_types";
+const CAR_CATEGORIES_KEY = "tuner.car_categories";
 // the routes that work on the version of the selected modded car when the request carries its id
 const VERSION_PATHS = ["/api/settings", "/api/set", "/api/unset", "/api/reset_all", "/api/garage", "/api/garage_set", "/api/garage_reset",
   "/api/turbo", "/api/turbo_set", "/api/turbo_reset", "/api/sounds", "/api/sound_set", "/api/sound_reset"];
@@ -653,6 +652,15 @@ let serverError = "";
 let localError = "";
 let rows = [];
 let groups = [];
+// what the cars of the game store by car category as /api/car_ranges listed it ({categories, by_category}), null until it is read
+// (once, in the background; carRangesLoading is that read), and the optional columns of the car table made from it: one per car category
+let carRanges = null;
+let carRangesLoading = false;
+const carCols = newColumns({
+  key: CAR_CATEGORIES_KEY, wrapId: "car-table-wrap", rowsId: "rows", barId: "car-categories", buttonsId: "car-category-buttons", noun: "car", zero: false,
+  rows: () => rows, groups: () => groups,
+  entry: (data, c) => carRanges && carRanges.by_category[data.id] && carRanges.by_category[data.id][c.key]
+});
 // the groups of the catalogue as the server lists them, in display order ({name, description}); null until read, then the
 // table falls back to the order of the settings and shows no descriptions
 let catalogueGroups = null;
@@ -695,11 +703,11 @@ let tyreRows = [];
 let tyreGroupList = [];
 let tyreGroups = [];
 const tyreExpanded = new Set();
-// the tyre types of the game as the server listed them with the selected tyre ({type, label, total}, in menu order; each also holds its
-// header cell th, column col and toggle button btn) and the names of the types whose column is shown, remembered in the browser; the cell
-// of a type in a row is r.typeCells[type]
-let tyreTypes = [];
-let tyreShownTypes = new Set(storedTyreTypes());
+// the optional columns of the tyre table: one per tyre type of the game, as the server lists them with the selected tyre
+const tyreCols = newColumns({
+  key: TYRE_TYPES_KEY, wrapId: "tyre-table-wrap", rowsId: "tyre-rows", barId: "tyre-types", buttonsId: "tyre-type-buttons", noun: "tyre", zero: true,
+  rows: () => tyreRows, groups: () => tyreGroups, entry: (data, c) => data.type_ranges && data.type_ranges[c.key]
+});
 let tyreLoaded = false;
 let tyreError = "";
 // the open Create / Rename / Change source / Delete panel: {kind, id, opener, busy}, else null
@@ -793,19 +801,19 @@ function storeSelection(s) {
   }
 }
 
-// the tyre types whose column is shown in the Tyre Creator (names of types, in no order)
-function storedTyreTypes() {
+// the keys of the optional columns that are shown in a table (in no order)
+function storedColumns(key) {
   try {
-    const list = JSON.parse(window.localStorage.getItem(TYRE_TYPES_KEY));
+    const list = JSON.parse(window.localStorage.getItem(key));
     return Array.isArray(list) ? list.filter((t) => typeof t === "string") : [];
   } catch (e) {
     return [];
   }
 }
 
-function storeTyreTypes() {
+function storeColumns(cs) {
   try {
-    window.localStorage.setItem(TYRE_TYPES_KEY, JSON.stringify(tyreTypes.map((t) => t.type).filter((t) => tyreShownTypes.has(t))));
+    window.localStorage.setItem(cs.key, JSON.stringify(cs.items.map((c) => c.key).filter((k) => cs.shown.has(k))));
   } catch (e) {
     /* the page works without it */
   }
@@ -1457,21 +1465,7 @@ function buildHeaderRow(data, target) {
   return r;
 }
 
-// the "Range for base cars" cell of the car table: the soft borders from the server, or a muted dash
-function buildRangeCell(data) {
-  const br = data.base_range;
-  if (!br || (data.type !== "int" && data.type !== "float")) {
-    const none = el("td", "default mono", "\u2013");
-    none.classList.add("range-none");
-    none.setAttribute("aria-label", "no range");
-    return none;
-  }
-  const low = fmtVal(data.type, br.low);
-  const high = fmtVal(data.type, br.high);
-  return el("td", "default mono", (br.low === br.high ? low : low + " \u2013 " + high) + (data.unit ? " " + data.unit : ""));
-}
-
-function buildRow(data, target, withRange) {
+function buildRow(data, target) {
   const r = newRow(data, target);
   r.tr = el("tr");
 
@@ -1518,7 +1512,6 @@ function buildRow(data, target, withRange) {
   }
 
   r.tr.append(nameCell, valueCell, defCell);
-  if (withRange) r.tr.appendChild(buildRangeCell(data));
   r.tr.appendChild(descCell);
   r.hay = (data.id + " " + data.label + " " + data.description).toLowerCase();
   showRow(r, data, false);
@@ -1550,7 +1543,8 @@ function buildTable(list, target) {
         groups.push(current);
       }
     }
-    const r = buildRow(data, target, true);
+    const r = buildRow(data, target);
+    addColumnCells(carCols, r, data);
     r.group = current;
     r.tr.id = "row-" + rows.length;
     current.rows.push(r);
@@ -1566,13 +1560,15 @@ function buildTable(list, target) {
     body.append(g.tr, ...g.rows.map((r) => r.tr));
   }
   applyFilter();
+  applyColumns(carCols);
 }
 
 function buildGroup(name) {
   const g = { name: name, tr: el("tr", "group"), rows: [], desc: null };
   const th = el("th");
-  th.colSpan = 5;
+  th.colSpan = 4;
   th.scope = "rowgroup";
+  g.th = th;
   g.btn = el("button", "grouptoggle");
   g.btn.type = "button";
   g.btn.setAttribute("aria-expanded", "false");
@@ -1663,6 +1659,26 @@ async function loadGroupInfo(target) {
     catalogueGroups = res.groups;
   } catch (e) {
     catalogueGroups = null;
+  }
+}
+
+// the values by car category are the same for every car: read once in the background when the page has loaded (the first answer after a
+// game update takes seconds) and again with the next car selection only when that read failed; a failure is no error of the table, which
+// then has no buttons for the columns. The columns are filled into the table that is shown, the value fields stay as they are
+async function loadCarRanges() {
+  if (carRanges || carRangesLoading) return;
+  carRangesLoading = true;
+  try {
+    const res = await api("/api/car_ranges", undefined, selection);
+    if (!res || !Array.isArray(res.categories) || !res.by_category) throw new Error("no values by car category");
+    carRanges = res;
+    buildColumns(carCols, res.categories.map((c) => ({ key: c.id, label: c.label, total: c.total, cars: c.cars })));
+    for (const r of rows) addColumnCells(carCols, r, r.data);
+    applyColumns(carCols);
+  } catch (e) {
+    carRanges = null;
+  } finally {
+    carRangesLoading = false;
   }
 }
 
@@ -1943,6 +1959,7 @@ function switchCar(next) {
   localError = "";
   $("tuner").hidden = true;
   $("init-panel").hidden = true;
+  loadCarRanges();
   refresh();
 }
 
@@ -2135,75 +2152,92 @@ function buildTyreGroup(name) {
   return g;
 }
 
-// the header cell of a type column: the label with a button that hides the column, and the number of tyres of the type below
-function buildTyreTypeHead(t) {
+// the optional columns of a table (the tyre types of the Tyre Creator, the car categories of the Car Tuner) are made by the functions below
+// from a state object (newColumns): items are {key, label, total, cars (car categories only)} in the order of the server, each also holding
+// its header cell th, column col and toggle button btn; shown holds the keys whose column is shown, remembered in the browser; the cell of
+// an item in a row is r.colCells[key]. noun is what the items count ("tyre", "car"), zero says whether a value that is not stored counts as
+// 0 (tyres) or is just missing (cars), entry(data, c) is what the item stores in the setting of a row
+function newColumns(o) {
+  return Object.assign({ items: [], sig: "", shown: new Set(storedColumns(o.key)) }, o);
+}
+
+// the end of the titles of an item: what its column shows the values of
+function columnWhat(cs, c) {
+  return c.cars ? ": " + c.cars.join(", ") : " the " + c.total + " " + c.label + " " + cs.noun + "s";
+}
+
+// the header cell of an optional column: the label with a button that hides the column, and the number of items below
+function buildColumnHead(cs, c) {
   const th = el("th");
   th.scope = "col";
+  if (c.cars) th.title = c.cars.join(", ");
   const top = el("div", "typehead");
-  top.appendChild(el("span", "", t.label));
+  top.appendChild(el("span", "", c.label));
   const hide = el("button", "small", "\u2212");
   hide.type = "button";
-  hide.setAttribute("aria-label", "Hide " + t.label);
-  hide.title = "Hide the values of the " + t.total + " " + t.label + " tyres";
-  hide.addEventListener("click", () => toggleTyreType(t, true));
+  hide.setAttribute("aria-label", "Hide " + c.label);
+  hide.title = "Hide the values of" + columnWhat(cs, c);
+  hide.addEventListener("click", () => toggleColumn(cs, c, true));
   top.appendChild(hide);
-  th.append(top, el("div", "tcount", t.total + (t.total === 1 ? " tyre" : " tyres")));
+  th.append(top, el("div", "tcount", c.total + " " + cs.noun + (c.total === 1 ? "" : "s")));
   return th;
 }
 
-// the header cells, columns and toggle buttons of the tyre types, in the order of the server; the columns start hidden (applyTyreTypes
-// shows the remembered ones) and stay as they are while the list of types does not change
-function buildTyreTypes(types) {
-  const same = JSON.stringify(types.map((t) => [t.type, t.label, t.total])) === JSON.stringify(tyreTypes.map((t) => [t.type, t.label, t.total]));
-  if (same) return;
-  const table = $("tyre-rows").closest("table");
+// the header cells, columns and toggle buttons of the optional columns, in the order of the list; the columns start hidden (applyColumns
+// shows the remembered ones) and stay as they are while the list does not change
+function buildColumns(cs, list) {
+  const sig = JSON.stringify(list);
+  if (sig === cs.sig) return;
+  cs.sig = sig;
+  const table = $(cs.rowsId).closest("table");
   const head = table.tHead.rows[0];
   const cols = table.querySelector("colgroup");
-  const buttons = $("tyre-type-buttons");
-  for (const t of tyreTypes) {
-    t.th.remove();
-    t.col.remove();
+  const buttons = $(cs.buttonsId);
+  for (const c of cs.items) {
+    c.th.remove();
+    c.col.remove();
   }
   buttons.replaceChildren();
-  tyreTypes = types.map((t) => ({ type: t.type, label: t.label, total: t.total }));
-  for (const t of tyreTypes) {
-    t.col = el("col", "c-type");
-    t.col.hidden = true;
-    t.th = buildTyreTypeHead(t);
-    t.th.hidden = true;
-    t.btn = el("button", "small");
-    t.btn.type = "button";
-    t.btn.addEventListener("click", () => toggleTyreType(t, false));
-    cols.insertBefore(t.col, cols.lastElementChild);
-    head.insertBefore(t.th, head.lastElementChild);
-    buttons.appendChild(t.btn);
+  cs.items = list.map((c) => Object.assign({}, c));
+  for (const c of cs.items) {
+    c.col = el("col", "c-type");
+    c.col.hidden = true;
+    c.th = buildColumnHead(cs, c);
+    c.th.hidden = true;
+    c.btn = el("button", "small");
+    c.btn.type = "button";
+    c.btn.addEventListener("click", () => toggleColumn(cs, c, false));
+    cols.insertBefore(c.col, cols.lastElementChild);
+    head.insertBefore(c.th, head.lastElementChild);
+    buttons.appendChild(c.btn);
   }
-  $("tyre-types").hidden = tyreTypes.length === 0;
+  $(cs.barId).hidden = cs.items.length === 0;
 }
 
-// the cell of a type column: what the tyres of the type store in the field (type_ranges of the row), or a muted dash
-function buildTyreTypeCell(data, t) {
-  const e = data.type_ranges && data.type_ranges[t.type];
+// the cell of an optional column: what the items store in the field (entry of the state), or a muted dash
+function buildColumnCell(cs, data, c) {
+  const e = cs.entry(data, c);
   if (!e) {
     const none = el("td", "default mono", "\u2013");
     none.classList.add("range-none");
     none.setAttribute("aria-label", "no value");
-    none.title = "No " + t.label + " tyre stores this value; it counts as 0";
+    none.title = "No " + c.label + " " + cs.noun + (cs.zero ? " stores this value; it counts as 0" : " has this value");
     return none;
   }
-  const where = e.count + " of " + t.total + " " + t.label + " tyres";
+  const where = e.count + " of " + c.total + " " + c.label + " " + cs.noun + "s";
   let text;
   let tip = "";
   if (e.values) {
     text = data.type === "bool" ? e.values.map((v) => fmtVal("bool", v)).join(" / ") : e.values.join(", ");
-    if (e.count < t.total) tip = "Stored in " + where + (data.type === "bool" ? "; the others count as off" : "");
+    if (e.count < c.total) tip = "Stored in " + where + (cs.zero && data.type === "bool" ? "; the others count as off" : "");
   } else {
     const low = fmtVal(data.type, Number(e.low.toPrecision(5)));
     const high = fmtVal(data.type, Number(e.high.toPrecision(5)));
     text = (e.low === e.high ? low : low + " \u2013 " + high) + (data.unit ? " " + data.unit : "");
     const exact = e.low === e.high ? fmtVal(data.type, e.low) : fmtVal(data.type, e.low) + " \u2013 " + fmtVal(data.type, e.high);
-    tip = exact + ". " + (e.count < t.total ? "Stored in " + where + "; the others count as 0" :
-      "Lowest and highest value of all " + t.total + " " + t.label + " tyres");
+    const all = c.total === 1 ? "Value of " + (c.cars ? c.cars[0] : "the one " + c.label + " " + cs.noun) :
+      "Lowest and highest value of all " + c.total + " " + c.label + " " + cs.noun + "s";
+    tip = exact + ". " + (e.count < c.total ? "Stored in " + where + (cs.zero ? "; the others count as 0" : "") : all);
   }
   const cell = el("td", "default mono", text);
   if (tip) {
@@ -2213,43 +2247,44 @@ function buildTyreTypeCell(data, t) {
   return cell;
 }
 
-// the cells of all type columns of a row, between the default and the description; they are built once and hidden until their type is shown
-function addTyreTypeCells(r, data) {
-  r.typeCells = {};
-  for (const t of tyreTypes) {
-    const cell = buildTyreTypeCell(data, t);
+// the cells of all optional columns of a row, between the default and the description; they are built once and hidden until their column is shown
+function addColumnCells(cs, r, data) {
+  if (r.colCells) for (const old of Object.values(r.colCells)) old.remove();
+  r.colCells = {};
+  for (const c of cs.items) {
+    const cell = buildColumnCell(cs, data, c);
     cell.hidden = true;
-    r.typeCells[t.type] = cell;
+    r.colCells[c.key] = cell;
     r.tr.insertBefore(cell, r.tr.lastElementChild);
   }
 }
 
-// shows or hides the columns of the types by their state, without building anything again: header cells, columns, cells, the toggle
+// shows or hides the optional columns by their state, without building anything again: header cells, columns, cells, the toggle
 // buttons, the span of the group rows and the layout of the wrapper (a shown column widens the table, then the wrapper scrolls)
-function applyTyreTypes() {
+function applyColumns(cs) {
   let shown = 0;
-  for (const t of tyreTypes) {
-    const on = tyreShownTypes.has(t.type);
+  for (const c of cs.items) {
+    const on = cs.shown.has(c.key);
     if (on) shown += 1;
-    t.col.hidden = !on;
-    t.th.hidden = !on;
-    for (const r of tyreRows) r.typeCells[t.type].hidden = !on;
-    t.btn.textContent = (on ? "\u2212 " : "+ ") + t.label;
-    t.btn.setAttribute("aria-pressed", on ? "true" : "false");
-    t.btn.title = (on ? "Hide" : "Show") + " the values of the " + t.total + " " + t.label + " tyres";
+    c.col.hidden = !on;
+    c.th.hidden = !on;
+    for (const r of cs.rows()) if (r.colCells) r.colCells[c.key].hidden = !on;
+    c.btn.textContent = (on ? "\u2212 " : "+ ") + c.label;
+    c.btn.setAttribute("aria-pressed", on ? "true" : "false");
+    c.btn.title = (on ? "Hide" : "Show") + " the values of" + columnWhat(cs, c);
   }
-  for (const g of tyreGroups) g.th.colSpan = 4 + shown;
-  const wrap = $("tyre-table-wrap");
+  for (const g of cs.groups()) g.th.colSpan = 4 + shown;
+  const wrap = $(cs.wrapId);
   wrap.classList.toggle("typed", shown > 0);
-  wrap.style.setProperty("--tyre-types", String(shown));
+  wrap.style.setProperty("--extra-cols", String(shown));
 }
 
-// refocus: the button that was pressed is gone with its column, so the focus goes to the toggle button of the type
-function toggleTyreType(t, refocus) {
-  if (!tyreShownTypes.delete(t.type)) tyreShownTypes.add(t.type);
-  storeTyreTypes();
-  applyTyreTypes();
-  if (refocus) t.btn.focus({ preventScroll: true });
+// refocus: the button that was pressed is gone with its column, so the focus goes to the toggle button of the item
+function toggleColumn(cs, c, refocus) {
+  if (!cs.shown.delete(c.key)) cs.shown.add(c.key);
+  storeColumns(cs);
+  applyColumns(cs);
+  if (refocus) c.btn.focus({ preventScroll: true });
 }
 
 function toggleTyreGroup(g) {
@@ -2310,8 +2345,8 @@ function buildTyreRows(list, id, groupList) {
   clearTyreRows();
   tyreGroupList = groupList || [];
   for (const item of list) {
-    const r = buildRow(item, {}, false);
-    addTyreTypeCells(r, item);
+    const r = buildRow(item, {});
+    addColumnCells(tyreCols, r, item);
     r.tyre = id;
     r.save = sendTyreSet;
     r.clear = sendTyreUnset;
@@ -2336,7 +2371,7 @@ function buildTyreRows(list, id, groupList) {
   }
   body.append(...tyreRows.filter((r) => !r.group).map((r) => r.tr));
   applyTyreFilter();
-  applyTyreTypes();
+  applyColumns(tyreCols);
 }
 
 async function loadTyre() {
@@ -2350,7 +2385,7 @@ async function loadTyre() {
     const res = await api("/api/tyre?id=" + encodeURIComponent(id), undefined, selection);
     if (id !== tyreId) return;
     tyreError = "";
-    buildTyreTypes(res.types || []);
+    buildColumns(tyreCols, (res.types || []).map((t) => ({ key: t.type, label: t.label, total: t.total })));
     buildTyreRows(res.rows, id, res.groups);
   } catch (e) {
     if (id !== tyreId) return;
@@ -3898,6 +3933,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 refresh();
+loadCarRanges();
 </script>
 </body>
 </html>

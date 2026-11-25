@@ -1121,7 +1121,7 @@ class TestCommands(World):
             self.assertEqual(tune.COMMANDS[cmd].__name__, "cmd_" + cmd.replace("-", "_"))
         names = list(tune.COMMANDS)
         self.assertEqual(names[names.index("turbo-kit") + 1:names.index("turbo-kit") + 4], ["sounds", "sound-set", "sound-reset"])
-        self.assertEqual(names[-1], "ranges")
+        self.assertEqual(names[-1], "sound-reset")
 
     def test_the_module_text_describes_the_state_key_and_the_commands(self):
         doc = tune.__doc__

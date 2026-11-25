@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "name": "Drift rear",
+  "short": "DR",
+  "source": "content\\cars\\common_phsx\\tyres\\road\\road_265_30_19.tyre",
+  "values": {
+    "tyre_grip_lateral": 1.1993119,
+    "tyre_grip_longitudinal": 1.265897,
+    "tyre_peak_slip_angle": 8.35,
+    "tyre_load_reference": 3720.0,
+    "tyre_pressure_ref": 24.0,
+    "tyre_flex_lateral": 38000.0,
+    "tyre_flex_longitudinal": 20000.0,
+    "tyre_stiffness_rate": 312000.0,
+    "tyre_heat_partition": 0.85,
+    "tyre_grain_gain": 0.47,
+    "tyre_grain_slip_angle_gain": 0.565,
+    "tyre_thermal_curve": "supercar"
+  }
+}

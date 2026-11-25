@@ -1,41 +1,69 @@
-"""Tests for the tyre library of tools/tune.py (data layer and CLI): ids and names, the file format in <work>/tyres, source tyres of the extracted cars, values and rows, users and delete.
+"""Tests for the tyre library of tools/tune.py (data layer and CLI): ids, names and short names, the file format version 2 in <work>/tyres, the fields of a library tyre, the tyres to choose from (game package or extracted files), values and rows, users and delete.
 
-No game data and no schemas: the cars are synthetic (support.FakeCar replaces tune.load_msg with in-memory messages, one shared store for both fake cars); the CLI is run in-process on those cars, and as a subprocess where nothing decodes a car file.
+No game data and no schemas: the cars are synthetic (support.FakeCar replaces tune.load_msg with in-memory messages, one shared store for both fake cars), the game package is a small package packed by kspkg.cmd_pack or does not exist; the CLI is run in-process on those cars, and as a subprocess where nothing decodes a car file.
 """
+import contextlib
+import io
 import json
 import os
+import shutil
+import tempfile
 import unittest
 from unittest import mock
 
 from support import FakeCar, Sandbox, mini_catalogue, mini_setting, run_main, run_tool, tmp, usage_cases
 
+import kspkg
 import tune
+import tyre_sets
 
 USAGE = tune.__doc__.split("\n\n")[1]
 GS = "content\\cars\\common_phsx\\"
 ROAD_A, ROAD_B, SLICK_S = GS + "tyres\\road\\a.tyre", GS + "tyres\\road\\b.tyre", GS + "tyres\\slick\\s.tyre"
-KEY_AB, KEY_SS = ROAD_A + "|" + ROAD_B, SLICK_S + "|" + SLICK_S
 CURVES = {"road": GS + "tyres\\road\\tcurve_road.curve", "slick": GS + "tyres\\slick\\tcurve_slick.curve"}
+REAL_FIELDS = ["tyre_grip_lateral", "tyre_grip_longitudinal", "tyre_peak_slip_angle", "tyre_load_reference", "tyre_pressure_ref",
+               "tyre_flex_lateral", "tyre_flex_longitudinal", "tyre_stiffness_rate", "tyre_heat_partition", "tyre_grain_gain",
+               "tyre_grain_slip_angle_gain", "tyre_thermal_curve"]
 
 
 def tyre_cat():
     return mini_catalogue(
-        mini_setting("tyre_dy_front", group="Tyres", unit="mu", min=0.5, max=2.5, targets=[("@tyre_front", "modelData.Dy0")]),
-        mini_setting("tyre_dy_rear", group="Tyres", unit="mu", min=0.5, max=2.5, targets=[("@tyre_rear", "modelData.Dy0")]),
-        mini_setting("tyre_th_front", group="Tyres", type="enum", choices=["road", "slick"], choice_values=CURVES,
+        mini_setting("tyre_dy_front", group="Tyres", label="Front tyre lateral grip", unit="mu", min=0.5, max=2.5, description="grip",
+                     targets=[("@tyre_front", "modelData.Dy0"), ("@tyre_front", "modelData.Dy1")]),
+        mini_setting("tyre_dy_rear", group="Tyres", label="Rear tyre lateral grip", unit="mu", min=0.5, max=2.5,
+                     targets=[("@tyre_rear", "modelData.Dy0")]),
+        mini_setting("tyre_th_front", group="Tyres", label="Front tyre thermal curve", type="enum", choices=["road", "slick"], choice_values=CURVES,
                      targets=[("@tyre_front", "thermalData.thermalPerformanceCurve")]),
         mini_setting("tyre_deep_front", group="Tyres", targets=[("@tyre_front", "modelData.nope.x")]),
+        mini_setting("tyre_maybe_front", group="Tyres", targets=[("@tyre_front", "modelData.maybe", True)]),
+        mini_setting("tyre_front_only", group="Other", targets=[("@tyre_front", "modelData.Dy0")]),
         mini_setting("limiter", type="int", targets=[("@engine", "limiter")]))
 
 
 def tyre_obj(dy, curve="road"):
-    return {"modelData": {"Dy0": dy}, "thermalData": {"thermalPerformanceCurve": CURVES[curve]}}
+    return {"name": "stock", "shortName": "ST", "modelData": {"Dy0": dy, "Dy1": dy}, "thermalData": {"thermalPerformanceCurve": CURVES[curve]}}
+
+
+def pack(dst, names):
+    """A package with the shared tyre files names (below content\\cars\\common_phsx\\tyres) as files with placeholder bytes."""
+    src = tempfile.mkdtemp()
+    try:
+        for rel in names:
+            path = os.path.join(src, "content", "cars", "common_phsx", "tyres", *rel.split("\\"))
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(b"tyre " + rel.encode())
+        with contextlib.redirect_stdout(io.StringIO()):
+            kspkg.cmd_pack(src, dst)
+    finally:
+        shutil.rmtree(src)
 
 
 class Base(Sandbox):
     def setUp(self):
         super().setUp()
         self.work = str(self.d / "work")
+        self.game = str(self.d / "no_game.kspkg")
 
     def read(self, tyre_id):
         with open(tune.tyre_path(self.work, tyre_id), "rb") as f:
@@ -53,9 +81,8 @@ class Base(Sandbox):
 
 
 class World(Base):
-    """Two extracted cars. ks_a: road a/b (rear as a string), slick s (rear as a list), a pair with a missing rear file and a
-    pair with a file inside the car folder. ks_b: road a/b again (rear as a list, other case and slashes) and slick s, whose
-    file ks_b does not have."""
+    """Two extracted cars sharing one message store. ks_a: road a/b, slick s (the file of ks_b does not have it), supercar sc_235_35_19 and
+    the two files road/dup and slick/dup. ks_b: road a/b again with other values. The game package does not exist (self.game)."""
 
     def setUp(self):
         super().setUp()
@@ -65,26 +92,17 @@ class World(Base):
         self.a.add_shared("tyres/road/a.tyre", tyre_obj(1.2))
         self.a.add_shared("tyres/road/b.tyre", {"modelData": {"Dy0": 1.1}})
         self.a.add_shared("tyres/slick/s.tyre", tyre_obj(1.0, "slick"))
-        self.a.add("data/tyres/own.tyre", {"modelData": {"Dy0": 0.9}})
-        self.a.add("presets/p.compatibletyres", {"physic_compounds": [
-            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": ROAD_B},
-            {"front_tyre_data_path": SLICK_S, "rear_tyre_data_paths": [SLICK_S, ROAD_B]},
-            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": GS + "tyres\\road\\missing.tyre"},
-            {"front_tyre_data_path": self.a.game_path("data/tyres/own.tyre"), "rear_tyre_data_paths": ROAD_B},
-            {"front_tyre_data_path": ROAD_A},
-            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": []}]})
+        self.a.add_shared("tyres/supercar/supercar_235_35_19.tyre", tyre_obj(1.5))
+        self.a.add_shared("tyres/road/dup.tyre", tyre_obj(1.0))
+        self.a.add_shared("tyres/slick/dup.tyre", tyre_obj(1.0))
         self.b.add_shared("tyres/road/a.tyre", tyre_obj(1.25))
-        self.b.add_shared("tyres/road/b.tyre", {"modelData": {"Dy0": 1.15}})
-        self.b.add("presets/q.compatibletyres", {"physic_compounds": [
-            {"front_tyre_data_path": "CONTENT/CARS/COMMON_PHSX/TYRES/ROAD/A.TYRE", "rear_tyre_data_paths": [ROAD_B, SLICK_S]},
-            {"front_tyre_data_path": SLICK_S, "rear_tyre_data_paths": SLICK_S}]})
         self.cat = tyre_cat()
 
-    def create(self, name="Slick", key=KEY_AB):
-        return tune.create_tyre(self.work, name, key)["id"]
+    def create(self, name="Slick", source=ROAD_A, **kw):
+        return tune.create_tyre(self.work, name, source, game=self.game, **kw)["id"]
 
     def rows(self, tyre_id):
-        return {r["id"]: r for r in tune.tyre_rows(self.work, tyre_id, self.cat)}
+        return {r["id"]: r for r in tune.tyre_rows(self.work, tyre_id, self.cat, self.game)}
 
 
 class TestIds(Base):
@@ -98,11 +116,11 @@ class TestIds(Base):
                 tune.check_tyre_id(bad)
 
     def test_every_function_that_takes_an_id_checks_it_before_a_path_is_built(self):
-        self.write_tyre("x", {"version": 1, "name": "X", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        self.write_tyre("x", {"version": 2, "name": "X", "short": "X", "source": ROAD_A, "values": {}})
         calls = (lambda i: tune.load_tyre(self.work, i), lambda i: tune.rename_tyre(self.work, i, "N"),
-                 lambda i: tune.set_tyre_source(self.work, i, KEY_AB), lambda i: tune.set_tyre_value(self.work, i, "tyre_dy_front", "1", tyre_cat()),
-                 lambda i: tune.unset_tyre_value(self.work, i, "tyre_dy_front", tyre_cat()), lambda i: tune.reset_tyre(self.work, i),
-                 lambda i: tune.tyre_rows(self.work, i, tyre_cat()), lambda i: tune.tyre_users(self.work, i),
+                 lambda i: tune.set_tyre_source(self.work, i, "a", self.game), lambda i: tune.set_tyre_value(self.work, i, "tyre_dy", "1", tyre_cat()),
+                 lambda i: tune.unset_tyre_value(self.work, i, "tyre_dy", tyre_cat()), lambda i: tune.reset_tyre(self.work, i),
+                 lambda i: tune.tyre_rows(self.work, i, tyre_cat(), self.game), lambda i: tune.tyre_users(self.work, i),
                  lambda i: tune.delete_tyre(self.work, i))
         self.patch(tune, "tyres_dir", lambda work: self.fail("a path was built for a bad id"))
         for bad in self.BAD:
@@ -111,7 +129,7 @@ class TestIds(Base):
                     call(bad)
 
     def test_a_traversal_id_does_not_reach_a_file_outside_the_library(self):
-        self.write_tyre("x", {"version": 1, "name": "X", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        self.write_tyre("x", {"version": 2, "name": "X", "short": "X", "source": ROAD_A, "values": {}})
         outside = os.path.join(self.work, "x.json")
         os.replace(os.path.join(self.work, "tyres", "x.json"), outside)
         with self.assertRaisesRegex(ValueError, "^bad tyre id "):
@@ -139,8 +157,6 @@ class TestIds(Base):
         for n in range(3, 10):
             self.write_tyre("a" * 23 + str(n), "{}")
         self.assertEqual(tune.free_tyre_id(self.work, "a" * 30), "a" * 22 + "10")
-        self.write_tyre("a" * 22 + "10", "{}")
-        self.assertEqual(tune.free_tyre_id(self.work, "a" * 30), "a" * 22 + "11")
 
     def test_a_damaged_file_with_the_id_counts_as_taken(self):
         self.write_tyre("tyre", "not json")
@@ -151,26 +167,35 @@ class TestNames(World):
     def test_name_rules(self):
         for bad in ("", "   ", "a\x01b", "a\tb", "a\nb", "a\x7fb", "x" * 41, None, 5):
             with self.subTest(repr(bad)), self.assertRaisesRegex(ValueError, "a tyre name"):
-                tune.create_tyre(self.work, bad, KEY_AB)
+                tune.create_tyre(self.work, bad, ROAD_A, game=self.game)
         self.assertFalse(os.path.exists(os.path.join(self.work, "tyres")))
 
     def test_the_name_is_stripped_and_40_characters_are_fine(self):
-        self.assertEqual(tune.create_tyre(self.work, "  Soft  ", KEY_AB)["name"], "Soft")
-        self.assertEqual(tune.create_tyre(self.work, "y" * 40, KEY_AB)["name"], "y" * 40)
+        self.assertEqual(tune.create_tyre(self.work, "  Soft  ", ROAD_A, game=self.game)["name"], "Soft")
+        self.assertEqual(tune.create_tyre(self.work, "y" * 40, ROAD_A, game=self.game)["name"], "y" * 40)
 
     def test_the_name_must_be_unique_ignoring_case(self):
         self.create("Slick")
         for dup in ("Slick", "SLICK", " slick "):
             with self.subTest(dup), self.assertRaisesRegex(ValueError, "^a tyre named 'Slick' exists already"):
-                tune.create_tyre(self.work, dup, KEY_AB)
+                tune.create_tyre(self.work, dup, ROAD_A, game=self.game)
         self.assertEqual([t["id"] for t in tune.list_tyres(self.work)], ["slick"])
 
-    def test_rename_changes_the_name_and_keeps_id_source_and_values(self):
+    def test_rename_changes_the_name_and_keeps_id_short_source_and_values(self):
         tid = self.create("Slick")
-        tune.set_tyre_value(self.work, tid, "tyre_dy_front", "1.4", self.cat)
-        self.assertEqual(tune.rename_tyre(self.work, tid, "Soft"), {"id": "slick", "name": "Soft"})
+        tune.set_tyre_value(self.work, tid, "tyre_dy", "1.4", self.cat)
+        self.assertEqual(tune.rename_tyre(self.work, tid, "Soft"), {"id": "slick", "name": "Soft", "short": "SL"})
         t = tune.load_tyre(self.work, "slick")
-        self.assertEqual((t["name"], t["source"], t["values"]), ("Soft", {"front": ROAD_A, "rear": ROAD_B}, {"tyre_dy_front": 1.4}))
+        self.assertEqual((t["name"], t["short"], t["source"], t["values"]), ("Soft", "SL", ROAD_A, {"tyre_dy": 1.4}))
+
+    def test_rename_can_change_the_short_name(self):
+        tid = self.create("Slick")
+        self.assertEqual(tune.rename_tyre(self.work, tid, "Slick", "Q9")["short"], "Q9")
+        self.assertEqual(tune.load_tyre(self.work, tid)["short"], "Q9")
+        before = self.read(tid)
+        with self.assertRaisesRegex(ValueError, "a tyre short name needs 1 to 3 characters"):
+            tune.rename_tyre(self.work, tid, "Other", "q")
+        self.assertEqual(self.read(tid), before)
 
     def test_rename_to_the_same_name_or_another_case_of_it_is_fine(self):
         tid = self.create("Slick")
@@ -191,516 +216,439 @@ class TestNames(World):
         with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
             tune.rename_tyre(self.work, "nope", "x")
 
+    def test_the_name_can_be_reused_after_a_delete(self):
+        tid = self.create("Slick")
+        tune.delete_tyre(self.work, tid)
+        self.assertEqual(self.create("Slick"), "slick")
+
+
+class TestShortNames(World):
+    def test_the_default_is_made_from_the_last_two_words(self):
+        for name, expected in (("Soft", "SO"), ("Slick Soft", "SS"), ("My Slick Soft", "SS"), ("a", "A"), ("  hard   road  ", "HR"), ("Q", "Q"),
+                               ("Road 205", "R2"), ("(x) y", "Y"), ("--", "X"), ("Ärger Test", "T"), ("ab", "AB"), ("12345", "12")):
+            with self.subTest(name):
+                self.assertEqual(tune.default_short(name), expected)
+
+    def test_a_short_name_is_one_to_three_characters_of_a_z_and_0_9(self):
+        for good in ("A", "AB", "A1", "123", "Z9X"):
+            self.assertEqual(tune.check_tyre_short(good), good)
+        for bad in ("", "ab", "A B", "ABCD", "A-", "ä", "A\n", None, 5, ["A"]):
+            with self.subTest(repr(bad)), self.assertRaisesRegex(ValueError, "^a tyre short name needs 1 to 3 characters A-Z and 0-9 \\(upper case, no spaces\\)"):
+                tune.check_tyre_short(bad)
+
+    def test_create_takes_the_short_name_or_makes_one(self):
+        self.assertEqual(tune.create_tyre(self.work, "Slick Soft", ROAD_A, game=self.game)["short"], "SS")
+        self.assertEqual(tune.create_tyre(self.work, "Other", ROAD_A, "Z1", game=self.game)["short"], "Z1")
+        self.assertEqual(tune.load_tyre(self.work, "other")["short"], "Z1")
+
+    def test_a_bad_short_name_writes_nothing(self):
+        for bad in ("", "abc", "ABCD", " A"):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, "a tyre short name"):
+                tune.create_tyre(self.work, "Soft", ROAD_A, bad, self.game)
+        self.assertFalse(os.path.exists(os.path.join(self.work, "tyres")))
+
+
+class TestFields(World):
+    def test_one_field_per_front_setting_of_the_group_tyres(self):
+        fields = tune.tyre_fields(self.cat)
+        self.assertEqual([f["id"] for f in fields], ["tyre_dy", "tyre_th", "tyre_deep", "tyre_maybe"])
+        self.assertEqual([f["front_id"] for f in fields], ["tyre_dy_front", "tyre_th_front", "tyre_deep_front", "tyre_maybe_front"])
+
+    def test_the_label_loses_the_word_front_and_keeps_the_rest_of_the_definition(self):
+        dy, th = tune.tyre_fields(self.cat)[:2]
+        self.assertEqual((dy["label"], th["label"]), ("Tyre lateral grip", "Tyre thermal curve"))
+        self.assertEqual((dy["type"], dy["unit"], dy["min"], dy["max"], dy["description"]), ("float", "mu", 0.5, 2.5, "grip"))
+        self.assertEqual(th["choices"], ["road", "slick"])
+        self.assertEqual(th["choice_values"], CURVES)
+
+    def test_the_targets_are_the_paths_after_tyre_front(self):
+        dy, _, _, maybe = tune.tyre_fields(self.cat)
+        self.assertEqual([(t["file"], t["path"]) for t in dy["targets"]], [("@tyre", "modelData.Dy0"), ("@tyre", "modelData.Dy1")])
+        self.assertTrue(maybe["targets"][0]["optional"])
+
+    def test_the_label_word_is_matched_as_a_whole_word_in_any_case(self):
+        cat = mini_catalogue(mini_setting("a_front", group="Tyres", label="FRONT grip"), mini_setting("b_front", group="Tyres", label="Frontal front lift"),
+                             mini_setting("c_front", group="Tyres", label="Grip"))
+        self.assertEqual([f["label"] for f in tune.tyre_fields(cat)], ["Grip", "Frontal lift", "Grip"])
+
+    def test_the_catalogue_of_the_tuner_gives_the_twelve_derived_fields_and_the_tyre_settings(self):
+        cat = tune.load_catalogue()
+        fields = tune.tyre_fields()
+        derived = [f for f in fields if "front_id" in f]
+        self.assertEqual(sorted(f["id"] for f in derived), sorted(REAL_FIELDS))
+        self.assertEqual(len(fields), 12 + len(cat["tyre_settings"]))
+        self.assertTrue(all(f["id"] + "_front" == f["front_id"] for f in derived))
+        self.assertTrue(all("front" not in f["label"].lower().split() for f in fields))
+        self.assertEqual(fields[0]["label"], "Tyre lateral grip")
+        self.assertEqual(next(f for f in fields if f["id"] == "tyre_thermal_curve")["type"], "enum")
+
+    def test_a_field_id_that_is_no_field_is_refused(self):
+        for bad, text in (("tyre_dy_front", "^tyre_dy_front is not a tyre setting$"), ("tyre_dy_rear", "^tyre_dy_rear is not a tyre setting$"),
+                          ("limiter", "^limiter is not a tyre setting$"), ("nope", "^unknown setting 'nope'$")):
+            with self.subTest(bad), self.assertRaisesRegex(ValueError, text):
+                tune.tyre_field(self.cat, bad)
+
+
+class TestChoosableTyres(World):
+    def test_without_the_package_only_the_extracted_files_count(self):
+        index = tune.available_tyres(self.work, self.game)
+        self.assertEqual([t["file"] for t in index], ["a", "b", "dup", "supercar_235_35_19", "dup", "s"])
+        self.assertEqual(index[0]["path"], ROAD_A)
+        self.assertEqual(index[3]["label"], "Supercar 235/35 R19")
+
+    def test_the_extracted_tyres_of_the_tyre_files_folder_count_too(self):
+        os.makedirs(os.path.join(self.work, "tyre_files", "content", "cars", "common_phsx", "tyres", "eco"))
+        with open(os.path.join(self.work, "tyre_files", "content", "cars", "common_phsx", "tyres", "eco", "eco_175_50_13.tyre"), "wb"):
+            pass
+        self.assertIn("eco_175_50_13", [t["file"] for t in tune.available_tyres(self.work, self.game)])
+
+    def test_no_extracted_car_and_no_package_gives_none(self):
+        self.assertEqual(tune.available_tyres(str(self.d / "empty"), self.game), [])
+
+    def test_with_the_package_the_index_of_its_table_counts(self):
+        pkg = str(self.d / "content.kspkg")
+        pack(pkg, ["road\\road_235_35_19.tyre", "supercar\\supercar_265_30_19.tyre"])
+        self.assertEqual([t["file"] for t in tune.available_tyres(self.work, pkg)], ["road_235_35_19", "supercar_265_30_19"])
+        self.assertEqual(tune.available_tyres(self.work, pkg), tyre_sets.read_index(pkg))
+
+    def test_a_game_path_finds_its_entry_with_any_slashes_case_and_extension(self):
+        for text in (ROAD_A, ROAD_A[:-len(".tyre")], ROAD_A.replace("\\", "/"), ROAD_A.upper(), "  " + ROAD_A + " "):
+            with self.subTest(text):
+                self.assertEqual(tune.find_tyre(self.work, text, self.game)["path"], ROAD_A)
+
+    def test_a_file_name_finds_its_entry(self):
+        self.assertEqual(tune.find_tyre(self.work, "supercar_235_35_19", self.game)["label"], "Supercar 235/35 R19")
+        self.assertEqual(tune.find_tyre(self.work, "SUPERCAR_235_35_19.TYRE", self.game)["file"], "supercar_235_35_19")
+
+    def test_an_unknown_tyre_a_foreign_path_or_text_that_is_not_text_is_refused(self):
+        for text in ("nope", GS + "tyres\\road\\nope.tyre", "content\\cars\\ks_a\\data\\a.tyre", "road\\a.tyre"):
+            with self.subTest(text), self.assertRaisesRegex(ValueError, "^unknown tyre .*, tyre-index lists the tyres$"):
+                tune.find_tyre(self.work, text, self.game)
+        for bad in (None, 5, "", "  ", ["a"]):
+            with self.subTest(repr(bad)), self.assertRaisesRegex(ValueError, "^a tyre source must be a game path or a file name"):
+                tune.find_tyre(self.work, bad, self.game)
+
+    def test_a_file_name_that_two_tyres_have_is_refused_and_the_game_path_works(self):
+        with self.assertRaisesRegex(ValueError, "^'dup' names 2 tyres \\(.*road\\\\dup.tyre.*slick\\\\dup.tyre\\), give the game path$"):
+            tune.find_tyre(self.work, "dup", self.game)
+        self.assertEqual(tune.find_tyre(self.work, GS + "tyres\\slick\\dup", self.game)["type"], "slick")
+
+    def test_a_tyre_that_is_only_in_the_package_can_be_a_source(self):
+        pkg = str(self.d / "content.kspkg")
+        pack(pkg, ["road\\road_205_55_16.tyre"])
+        res = tune.create_tyre(self.work, "Far", "road_205_55_16", game=pkg)
+        self.assertEqual(res["source"], GS + "tyres\\road\\road_205_55_16.tyre")
+        with self.assertRaisesRegex(ValueError, "unknown tyre"):
+            tune.create_tyre(self.work, "Near", ROAD_A, game=pkg)
+
 
 class TestLibraryFiles(World):
     def test_create_writes_the_documented_file(self):
-        res = tune.create_tyre(self.work, "Slick Soft", KEY_AB)
-        self.assertEqual(res, {"id": "slick_soft", "name": "Slick Soft", "source": {"front": ROAD_A, "rear": ROAD_B}})
+        res = tune.create_tyre(self.work, "Slick Soft", "a", game=self.game)
+        self.assertEqual(res, {"id": "slick_soft", "name": "Slick Soft", "short": "SS", "source": ROAD_A})
         raw = self.read("slick_soft")
         self.assertNotIn(b"\r", raw)
-        self.assertTrue(raw.endswith(b"}\n"))
-        self.assertEqual(json.loads(raw), {"version": 1, "name": "Slick Soft", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
-        self.assertEqual(list(json.loads(raw)), ["version", "name", "source", "values"])
-        self.assertEqual(os.listdir(os.path.join(self.work, "tyres")), ["slick_soft.json"])
-
-    def test_the_file_is_written_like_a_state_file(self):
-        tid = self.create()
-        tune.save_state(self.work, "ks_a", {"x": 1})
-        with open(tune.state_path(self.work, "ks_a"), "rb") as f:
-            state_raw = f.read()
-        self.assertEqual(self.read(tid).decode("utf-8"), json.dumps(json.loads(self.read(tid)), indent=2, ensure_ascii=False) + "\n")
-        self.assertEqual(state_raw.decode("utf-8"), json.dumps({"x": 1}, indent=2) + "\n")
-
-    def test_the_file_is_written_atomically(self):
-        tid = self.create()
-        before = self.read(tid)
-        self.patch(tune.os, "replace", mock.Mock(side_effect=OSError("disk full")))
-        with self.assertRaises(OSError):
-            tune.set_tyre_value(self.work, tid, "tyre_dy_front", "1.3", self.cat)
-        self.assertEqual(self.read(tid), before)
-        self.assertEqual(os.listdir(os.path.join(self.work, "tyres")), ["slick.json"])
-
-    def test_non_ascii_names_are_kept_as_they_are(self):
-        res = tune.create_tyre(self.work, "Reifen Größe", KEY_AB)
-        self.assertEqual(res["id"], "reifen_gr_e")
-        self.assertIn("Größe".encode("utf-8"), self.read(res["id"]))
-        self.assertEqual(tune.load_tyre(self.work, res["id"])["name"], "Reifen Größe")
-
-    def test_create_load_list_round_trip(self):
-        self.create("Slick")
-        t = tune.load_tyre(self.work, "slick")
-        self.assertEqual(t, {"version": 1, "name": "Slick", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
-        self.assertEqual(tune.list_tyres(self.work), [{"id": "slick", "name": "Slick", "source": {"front": ROAD_A, "rear": ROAD_B}, "changed": 0}])
-
-    def test_create_never_overwrites(self):
-        self.write_tyre("slick", "damaged")
-        self.assertEqual(self.create("Slick"), "slick2")
-        with open(os.path.join(self.work, "tyres", "slick.json"), encoding="utf-8") as f:
-            self.assertEqual(f.read(), "damaged")
+        self.assertTrue(raw.endswith(b"\n"))
+        self.assertEqual(json.loads(raw), {"version": 2, "name": "Slick Soft", "short": "SS", "source": ROAD_A, "values": {}})
+        self.assertEqual(list(json.loads(raw)), ["version", "name", "short", "source", "values"])
+        self.assertEqual(tune.load_tyre(self.work, "slick_soft"), json.loads(raw))
 
     def test_create_with_an_unknown_source_writes_nothing(self):
-        for key in ("nope", "", KEY_AB + "x", ROAD_B + "|" + ROAD_A, None):
-            with self.subTest(key), self.assertRaisesRegex(ValueError, "^unknown tyre source"):
-                tune.create_tyre(self.work, "Slick", key)
+        for source in ("nope", "dup", ROAD_A + "|" + ROAD_B, GS + "tyres\\road\\missing.tyre"):
+            with self.subTest(source), self.assertRaises(ValueError):
+                tune.create_tyre(self.work, "Slick", source, game=self.game)
         self.assertFalse(os.path.exists(os.path.join(self.work, "tyres")))
 
-    def test_list_is_empty_without_the_folder(self):
-        self.assertEqual(tune.list_tyres(self.work), [])
-        self.assertEqual(tune.list_tyres(os.path.join(self.work, "none")), [])
+    def test_only_changed_values_are_stored(self):
+        tid = self.create()
+        tune.set_tyre_value(self.work, tid, "tyre_dy", "1.4", self.cat)
+        self.assertEqual(json.loads(self.read(tid))["values"], {"tyre_dy": 1.4})
 
-    def test_list_sorts_by_name_ignoring_case_and_counts_the_values(self):
-        for name in ("gamma", "Beta", "alpha"):
-            self.create(name)
-        tune.set_tyre_value(self.work, "beta", "tyre_dy_front", "1.4", self.cat)
-        tune.set_tyre_value(self.work, "beta", "tyre_dy_rear", "1.3", self.cat)
-        self.assertEqual([(t["name"], t["changed"]) for t in tune.list_tyres(self.work)], [("alpha", 0), ("Beta", 2), ("gamma", 0)])
+    def test_a_second_tyre_whose_name_makes_the_same_id_gets_a_numbered_id(self):
+        self.assertEqual(self.create("Slick Soft"), "slick_soft")
+        self.assertEqual(self.create("Slick-Soft!"), "slick_soft2")
 
-    def test_list_ignores_other_files(self):
-        self.create("Slick")
-        for n in ("notes.txt", "Upper.json", "bad name.json", "slick.json.tmp"):
-            with open(os.path.join(self.work, "tyres", n), "w", encoding="utf-8") as f:
-                f.write("x")
-        self.assertEqual([t["id"] for t in tune.list_tyres(self.work)], ["slick"])
-
-    def test_a_damaged_file_is_listed_with_its_error_after_the_good_ones(self):
-        self.create("Zeta")
-        self.write_tyre("broken", "{not json")
-        self.write_tyre("aaa", "[]")
+    def test_list_sorts_by_name_ignoring_case_then_id_and_puts_damaged_files_last(self):
+        self.create("beta")
+        self.create("Alpha")
+        self.create("Gamma")
+        self.write_tyre("zzz", "{")
+        self.write_tyre("old", {"version": 1, "name": "Old", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        self.write_tyre("short_bad", {"version": 2, "name": "X", "short": "x", "source": ROAD_A, "values": {}})
         listed = tune.list_tyres(self.work)
-        self.assertEqual([t["id"] for t in listed], ["zeta", "aaa", "broken"])
-        self.assertEqual(set(listed[1]), {"id", "error"})
-        self.assertIn("expected an object", listed[1]["error"])
-        self.assertIn("broken.json", listed[2]["error"])
+        self.assertEqual([t["id"] for t in listed], ["alpha", "beta", "gamma", "old", "short_bad", "zzz"])
+        self.assertEqual(listed[0], {"id": "alpha", "name": "Alpha", "short": "AL", "source": ROAD_A, "changed": 0})
+        self.assertTrue(all(set(t) == {"id", "error"} for t in listed[3:]))
 
-    def test_wrong_shapes_are_errors(self):
-        good = {"version": 1, "name": "N", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}}
-        cases = {"list": [], "no_version": {k: v for k, v in good.items() if k != "version"}, "version_2": dict(good, version=2),
-                 "version_true": dict(good, version=True), "version_text": dict(good, version="1"), "name_int": dict(good, name=5),
-                 "name_empty": dict(good, name=""), "no_source": {k: v for k, v in good.items() if k != "source"},
-                 "source_text": dict(good, source="x"), "source_no_rear": dict(good, source={"front": ROAD_A}),
-                 "source_int": dict(good, source={"front": ROAD_A, "rear": 5}), "values_list": dict(good, values=[]),
-                 "no_values": {k: v for k, v in good.items() if k != "values"}}
-        for tid, data in cases.items():
-            self.write_tyre(tid, data)
-            with self.subTest(tid):
-                with self.assertRaisesRegex(ValueError, tid + r"\.json"):
-                    tune.load_tyre(self.work, tid)
-        self.assertEqual(sorted(t["id"] for t in tune.list_tyres(self.work)), sorted(cases))
-        self.assertTrue(all("error" in t for t in tune.list_tyres(self.work)))
+    def test_a_tyre_of_version_1_is_an_error_that_says_to_create_it_again(self):
+        self.write_tyre("old", {"version": 1, "name": "Old", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        with self.assertRaisesRegex(ValueError, "the tyre was saved in the old front/rear form and must be created again$"):
+            tune.load_tyre(self.work, "old")
+        self.assertIn("old front/rear form", tune.list_tyres(self.work)[0]["error"])
+        for call in (lambda: tune.rename_tyre(self.work, "old", "X"), lambda: tune.set_tyre_value(self.work, "old", "tyre_dy", "1", self.cat),
+                     lambda: tune.tyre_rows(self.work, "old", self.cat, self.game)):
+            with self.assertRaisesRegex(ValueError, "old front/rear form"):
+                call()
 
-    def test_a_good_file_is_loaded(self):
-        self.write_tyre("ok", {"version": 1, "name": "N", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {"tyre_dy_front": 1.5}})
-        self.assertEqual(tune.load_tyre(self.work, "ok")["values"], {"tyre_dy_front": 1.5})
-
-    def test_invalid_json_and_a_byte_order_mark(self):
-        self.write_tyre("bad", "{")
-        with self.assertRaisesRegex(ValueError, "bad.json"):
-            tune.load_tyre(self.work, "bad")
-        self.write_tyre("bom", "﻿" + json.dumps({"version": 1, "name": "N", "source": {"front": "f", "rear": "r"}, "values": {}}))
-        self.assertEqual(tune.load_tyre(self.work, "bom")["name"], "N")
+    def test_a_damaged_file_is_an_error_naming_the_fault(self):
+        good = {"version": 2, "name": "X", "short": "X", "source": ROAD_A, "values": {}}
+        cases = [("not json", "x.json"), ("[]", "expected an object"), (dict(good, version=3), "version 3 is not supported"),
+                 (dict(good, version="2"), "version '2' is not supported"), (dict(good, version=True), "is not supported"),
+                 (dict(good, name=""), "name must be text"), (dict(good, name=5), "name must be text"),
+                 (dict(good, short="abc"), "short must be 1 to 3 characters"), (dict(good, short=None), "short must be"),
+                 (dict(good, source=""), "source needs a tyre game path"), (dict(good, source={"front": ROAD_A, "rear": ROAD_B}), "source needs"),
+                 (dict(good, values=[]), "values must be an object")]
+        cases += [({k: v for k, v in good.items() if k != missing}, "") for missing in good]
+        for data, text in cases:
+            with self.subTest(str(data)[:70]):
+                self.write_tyre("x", data)
+                with self.assertRaises(ValueError) as caught:
+                    tune.load_tyre(self.work, "x")
+                self.assertIn(text, str(caught.exception))
+                self.assertEqual(list(tune.list_tyres(self.work)[0]), ["id", "error"])
 
     def test_a_missing_tyre(self):
         with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
             tune.load_tyre(self.work, "nope")
 
+    def test_set_source_keeps_the_values_name_and_short(self):
+        tid = self.create("Slick", ROAD_A, short="QQ")
+        tune.set_tyre_value(self.work, tid, "tyre_dy", "1.4", self.cat)
+        self.assertEqual(tune.set_tyre_source(self.work, tid, "s", self.game), {"id": tid, "source": SLICK_S})
+        self.assertEqual(json.loads(self.read(tid)), {"version": 2, "name": "Slick", "short": "QQ", "source": SLICK_S, "values": {"tyre_dy": 1.4}})
+
+    def test_set_source_with_an_unknown_source_changes_nothing(self):
+        tid = self.create()
+        before = self.read(tid)
+        for source in ("nope", "dup", ROAD_A + "|" + ROAD_B):
+            with self.subTest(source), self.assertRaises(ValueError):
+                tune.set_tyre_source(self.work, tid, source, self.game)
+        with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
+            tune.set_tyre_source(self.work, "nope", "a", self.game)
+        self.assertEqual(self.read(tid), before)
+
+    def test_the_library_is_shared_by_every_car_and_needs_no_car(self):
+        self.create()
+        self.assertEqual([t["id"] for t in tune.list_tyres(str(self.d / "work"))], ["slick"])
+        self.assertEqual(tune.list_tyres(str(self.d / "none")), [])
+
 
 class TestValues(World):
-    def setUp(self):
-        super().setUp()
-        self.tid = self.create()
+    def set(self, tid, field, value):
+        return tune.set_tyre_value(self.work, tid, field, value, self.cat)
 
-    def values(self):
-        return tune.load_tyre(self.work, self.tid)["values"]
-
-    def test_set_stores_the_coerced_value_and_returns_it_like_set_value(self):
-        res = tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", "1.4", self.cat)
-        self.assertEqual(res, {"id": "tyre_dy_front", "value": 1.4, "warnings": []})
-        self.assertEqual(self.values(), {"tyre_dy_front": 1.4})
-        self.assertIn(b'"tyre_dy_front": 1.4', self.read(self.tid))
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", 1.5, self.cat)
-        tune.set_tyre_value(self.work, self.tid, "tyre_th_front", "slick", self.cat)
-        self.assertEqual(self.values(), {"tyre_dy_front": 1.5, "tyre_th_front": "slick"})
-
-    def test_a_value_outside_the_suggested_range_is_a_warning_and_stored(self):
-        res = tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", "9", self.cat)
-        self.assertEqual(res["warnings"], ["tyre_dy_front=9.0 is outside the suggested range 0.5..2.5"])
-        self.assertEqual(self.values(), {"tyre_dy_front": 9.0})
-
-    def test_coerce_errors_change_nothing(self):
-        before = self.read(self.tid)
-        for sid, text, message in (("tyre_dy_front", "fast", "expects a number"), ("tyre_dy_front", "nan", "finite"),
-                                   ("tyre_dy_front", True, "expects a number"), ("tyre_th_front", "mud", "must be one of"),
-                                   ("tyre_th_front", "", "non-empty text")):
-            with self.subTest("%s %r" % (sid, text)), self.assertRaisesRegex(ValueError, message):
-                tune.set_tyre_value(self.work, self.tid, sid, text, self.cat)
-        self.assertEqual(self.read(self.tid), before)
-
-    def test_a_setting_that_is_not_a_tyre_setting_is_refused(self):
-        before = self.read(self.tid)
-        with self.assertRaisesRegex(ValueError, "^limiter is not a tyre setting$"):
-            tune.set_tyre_value(self.work, self.tid, "limiter", "7000", self.cat)
-        with self.assertRaisesRegex(ValueError, "^unknown setting 'nope'$"):
-            tune.set_tyre_value(self.work, self.tid, "nope", "1", self.cat)
-        self.assertEqual(self.read(self.tid), before)
-
-    def test_set_on_a_missing_tyre(self):
-        with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
-            tune.set_tyre_value(self.work, "nope", "tyre_dy_front", "1", self.cat)
-
-    def test_unset_removes_one_value(self):
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", "1.4", self.cat)
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_rear", "1.3", self.cat)
-        self.assertEqual(tune.unset_tyre_value(self.work, self.tid, "tyre_dy_front", self.cat), {"id": "tyre_dy_front", "removed": True})
-        self.assertEqual(self.values(), {"tyre_dy_rear": 1.3})
-        self.assertEqual(tune.unset_tyre_value(self.work, self.tid, "tyre_dy_front", self.cat), {"id": "tyre_dy_front", "removed": False})
-
-    def test_unset_checks_the_setting_only_when_it_is_not_set(self):
-        with self.assertRaisesRegex(ValueError, "^limiter is not a tyre setting$"):
-            tune.unset_tyre_value(self.work, self.tid, "limiter", self.cat)
-        with self.assertRaisesRegex(ValueError, "^unknown setting 'old'$"):
-            tune.unset_tyre_value(self.work, self.tid, "old", self.cat)
-        self.write_tyre(self.tid, {"version": 1, "name": "Slick", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {"old": 1}})
-        self.assertTrue(tune.unset_tyre_value(self.work, self.tid, "old", self.cat)["removed"])
-        self.assertEqual(self.values(), {})
-
-    def test_reset_clears_all_values_and_keeps_name_and_source(self):
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", "1.4", self.cat)
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_rear", "1.3", self.cat)
-        self.assertEqual(tune.reset_tyre(self.work, self.tid), {"id": "slick", "cleared": 2})
-        self.assertEqual(tune.load_tyre(self.work, self.tid), {"version": 1, "name": "Slick", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
-        self.assertEqual(tune.reset_tyre(self.work, self.tid)["cleared"], 0)
-
-    def test_set_source_keeps_the_values(self):
-        tune.set_tyre_value(self.work, self.tid, "tyre_dy_front", "1.4", self.cat)
-        res = tune.set_tyre_source(self.work, self.tid, KEY_SS)
-        self.assertEqual(res, {"id": "slick", "source": {"front": SLICK_S, "rear": SLICK_S}})
-        t = tune.load_tyre(self.work, self.tid)
-        self.assertEqual((t["name"], t["source"], t["values"]), ("Slick", {"front": SLICK_S, "rear": SLICK_S}, {"tyre_dy_front": 1.4}))
-
-    def test_set_source_with_an_unknown_key_changes_nothing(self):
-        before = self.read(self.tid)
-        with self.assertRaisesRegex(ValueError, "^unknown tyre source"):
-            tune.set_tyre_source(self.work, self.tid, "nope")
-        self.assertEqual(self.read(self.tid), before)
-
-    def test_tyre_settings_are_the_ones_with_a_tyre_role(self):
-        self.assertEqual([s["id"] for s in tune.tyre_settings(self.cat)], ["tyre_dy_front", "tyre_dy_rear", "tyre_th_front", "tyre_deep_front"])
-        self.assertEqual([tune.tyre_axle(s) for s in tune.tyre_settings(self.cat)], ["front", "rear", "front", "front"])
-
-    def test_the_committed_catalogue_has_24_tyre_settings_that_only_target_tyre_files(self):
-        cat = tune.load_catalogue()
-        found = tune.tyre_settings(cat)
-        self.assertEqual(len(found), 24)
-        self.assertEqual({s["group"] for s in found}, {"Tyres"})
-        for s in found:
-            self.assertEqual({t["file"] for t in s["targets"]}, {"@tyre_" + tune.tyre_axle(s)}, s["id"])
-            self.assertEqual((s["kind"], s.get("needs"), "curve_from" in s), ("value", None, False), s["id"])
-            self.assertTrue(s["id"].endswith("_" + tune.tyre_axle(s)))
-        self.assertEqual(sorted(s["id"] for s in cat["settings"] if s["group"] == "Tyres"), sorted(s["id"] for s in found))
-
-    def test_the_committed_catalogue_gives_range_warnings_and_refuses_other_settings(self):
-        res = tune.set_tyre_value(self.work, self.tid, "tyre_grip_lateral_front", "9")
-        self.assertEqual(res["value"], 9.0)
-        self.assertIn("outside the suggested range 0.5..2.5", res["warnings"][0])
-        with self.assertRaisesRegex(ValueError, "^name_suffix is not a tyre setting$"):
-            tune.set_tyre_value(self.work, self.tid, "name_suffix", "_X")
-        with self.assertRaisesRegex(ValueError, "must be one of"):
-            tune.set_tyre_value(self.work, self.tid, "tyre_thermal_curve_rear", "mud")
-        self.assertEqual(tune.set_tyre_value(self.work, self.tid, "tyre_thermal_curve_rear", "slick")["value"], "slick")
-
-
-class TestSources(World):
-    def test_pairs_are_deduplicated_sorted_and_list_their_cars(self):
-        found = tune.list_source_tyres(self.work)
-        self.assertEqual(found, [
-            {"key": KEY_AB, "front": ROAD_A, "rear": ROAD_B, "label": "tyres\\road\\a + tyres\\road\\b", "cars": ["ks_a", "ks_b"]},
-            {"key": KEY_SS, "front": SLICK_S, "rear": SLICK_S, "label": "tyres\\slick\\s", "cars": ["ks_a"]}])
-
-    def test_the_rear_is_the_string_or_the_first_entry_of_the_list(self):
-        self.assertEqual([e["rear"] for e in tune.list_source_tyres(self.work)], [ROAD_B, SLICK_S])
-        self.assertNotIn(ROAD_B + "|" + ROAD_B, [e["key"] for e in tune.list_source_tyres(self.work)])
-
-    def test_pairs_with_a_missing_file_or_a_file_in_the_car_folder_are_skipped(self):
-        keys = [e["key"] for e in tune.list_source_tyres(self.work)]
-        self.assertEqual(len(keys), 2)
-        self.assertFalse([k for k in keys if "missing" in k or "ks_a" in k or "own" in k])
-
-    def test_a_pair_needs_both_files_in_the_base_of_the_car_that_names_it(self):
-        os.remove(os.path.join(self.a.shared, "tyres", "road", "b.tyre"))
-        found = {e["key"]: e["cars"] for e in tune.list_source_tyres(self.work)}
-        self.assertEqual(found, {KEY_AB: ["ks_b"], KEY_SS: ["ks_a"]})
-
-    def test_the_game_path_case_and_slashes_do_not_matter(self):
-        self.assertEqual(tune.list_source_tyres(self.work)[0]["cars"], ["ks_a", "ks_b"])
-
-    def test_an_unreadable_preset_or_car_is_skipped(self):
-        self.a.store[self.a.key(os.path.join(self.a.car_root, "presets", "p.compatibletyres"))] = ValueError("truncated")
-        self.assertEqual([(e["key"], e["cars"]) for e in tune.list_source_tyres(self.work)], [(KEY_AB, ["ks_b"])])
-        os.remove(os.path.join(self.b.car_root, "presets", "q.compatibletyres"))
-        os.rmdir(os.path.join(self.b.car_root, "presets"))
-        self.assertEqual(tune.list_source_tyres(self.work), [])
-
-    def test_a_folder_without_a_base_car_offers_nothing(self):
-        os.makedirs(os.path.join(self.work, "ks_c", "tunes"))
-        self.assertEqual(len(tune.list_source_tyres(self.work)), 2)
-
-    def test_nothing_is_extracted_and_the_game_package_is_not_needed(self):
-        self.patch(tune.kspkg, "cmd_extract", lambda *a, **k: self.fail("extract"))
-        self.patch(tune, "read_game_file", lambda *a, **k: self.fail("game"))
-        before = sorted(os.walk(self.work))
-        tune.list_source_tyres(self.work)
-        self.assertEqual(sorted(os.walk(self.work)), before)
-
-    def test_the_label_adds_the_rear_only_when_it_differs(self):
-        self.assertEqual(tune.source_label(ROAD_A, ROAD_A), "tyres\\road\\a")
-        self.assertEqual(tune.source_label(ROAD_A, ROAD_B), "tyres\\road\\a + tyres\\road\\b")
-
-    def test_no_work_folder_gives_no_sources(self):
-        self.assertEqual(tune.list_source_tyres(os.path.join(self.work, "none")), [])
-
-
-class TestRepeatedCompounds(World):
-    def setUp(self):
-        super().setUp()
-        self.a.add("presets/r.compatibletyres", {"physic_compounds": [
-            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": ROAD_B},
-            {"front_tyre_data_path": ROAD_A, "rear_tyre_data_paths": GS + "tyres\\road\\missing.tyre"},
-            {"front_tyre_data_path": SLICK_S, "rear_tyre_data_paths": SLICK_S},
-            {"front_tyre_data_path": GS + "TYRES/ROAD/A.TYRE", "rear_tyre_data_paths": [ROAD_B]},
-            {"front_tyre_data_path": GS + "tyres\\road\\missing.tyre", "rear_tyre_data_paths": ROAD_B},
-            {"front_tyre_data_path": GS + "tyres\\road\\missing.tyre", "rear_tyre_data_paths": ROAD_B}]})
-
-    def test_the_pairs_are_the_first_of_each_in_file_order(self):
-        self.assertEqual(tune.preset_tyre_pairs(self.a.root, "ks_a"), [(ROAD_A, ROAD_B), (SLICK_S, SLICK_S)])
-        self.assertEqual(tune.preset_tyre_pairs(self.b.root, "ks_b"), [(ROAD_A, ROAD_B)])
-
-    def test_a_repeated_pair_is_checked_for_its_files_once(self):
-        real, checked = tune.tyre_present, []
-        self.patch(tune, "tyre_present", lambda root, path: checked.append(path) or real(root, path))
-        tune.preset_tyre_pairs(self.a.root, "ks_a")
-        self.assertEqual(checked, [ROAD_A, ROAD_B, SLICK_S, SLICK_S, ROAD_A, GS + "tyres\\road\\missing.tyre",
-                                   GS + "tyres\\road\\missing.tyre"])
-
-    def test_the_catalogue_is_the_same_as_before(self):
-        self.assertEqual(tune.list_source_tyres(self.work), [
-            {"key": KEY_AB, "front": ROAD_A, "rear": ROAD_B, "label": "tyres\\road\\a + tyres\\road\\b", "cars": ["ks_a", "ks_b"]},
-            {"key": KEY_SS, "front": SLICK_S, "rear": SLICK_S, "label": "tyres\\slick\\s", "cars": ["ks_a"]}])
-
-    def test_source_tyre_is_the_first_car_that_offers_the_pair_and_scans_no_further(self):
-        self.patch(tune, "list_source_tyres", lambda work: self.fail("the whole catalogue was built"))
-        scanned, real = [], tune.preset_tyre_pairs
-        self.patch(tune, "preset_tyre_pairs", lambda root, car_id: scanned.append(car_id) or real(root, car_id))
-        self.assertEqual(tune.source_tyre(self.work, KEY_AB), {"car": "ks_a", "front": ROAD_A, "rear": ROAD_B})
-        self.assertEqual(tune.source_tyre(self.work, KEY_SS), {"car": "ks_a", "front": SLICK_S, "rear": SLICK_S})
-        self.assertEqual(scanned, ["ks_a", "ks_a"])
-
-    def test_source_tyre_skips_a_car_that_cannot_be_read_and_names_an_unknown_key(self):
-        os.remove(os.path.join(self.a.shared, "tyres", "road", "b.tyre"))
-        self.assertEqual(tune.source_tyre(self.work, KEY_AB)["car"], "ks_b")
-        with self.assertRaisesRegex(ValueError, r"^unknown tyre source 'x\|y', tyre-sources lists the tyre pairs of the extracted cars$"):
-            tune.source_tyre(self.work, "x|y")
-
-    def test_tyre_rows_read_the_source_without_the_catalogue(self):
+    def test_set_stores_the_coerced_value_with_the_generic_id(self):
         tid = self.create()
-        self.patch(tune, "list_source_tyres", lambda work: self.fail("the whole catalogue was built"))
-        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.2)
-        os.remove(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))
-        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.25)
+        self.assertEqual(self.set(tid, "tyre_dy", "1.4"), {"id": "tyre_dy", "value": 1.4, "warnings": []})
+        self.assertEqual(self.set(tid, "tyre_dy", 2), {"id": "tyre_dy", "value": 2.0, "warnings": []})
+        self.assertEqual(tune.load_tyre(self.work, tid)["values"], {"tyre_dy": 2.0})
+        self.assertEqual(self.set(tid, "tyre_th", "slick")["value"], "slick")
+
+    def test_a_value_outside_the_range_of_the_front_setting_is_stored_with_a_warning(self):
+        tid = self.create()
+        res = self.set(tid, "tyre_dy", "9")
+        self.assertEqual((res["value"], res["warnings"]), (9.0, ["tyre_dy=9.0 is outside the suggested range 0.5..2.5"]))
+        self.assertEqual(tune.load_tyre(self.work, tid)["values"], {"tyre_dy": 9.0})
+
+    def test_a_bad_value_is_refused_and_changes_nothing(self):
+        tid = self.create()
+        before = self.read(tid)
+        for field, value, text in (("tyre_dy", "fast", "^tyre_dy expects a number, got 'fast'$"), ("tyre_dy", "nan", "finite"),
+                                   ("tyre_dy", True, "expects a number"), ("tyre_th", "grass", "^tyre_th must be one of: road, slick$"),
+                                   ("tyre_th", 5, "non-empty text")):
+            with self.subTest(field, value=value), self.assertRaisesRegex(ValueError, text):
+                self.set(tid, field, value)
+        self.assertEqual(self.read(tid), before)
+
+    def test_a_setting_that_is_no_field_is_refused(self):
+        tid = self.create()
+        before = self.read(tid)
+        for field, text in (("tyre_dy_front", "is not a tyre setting"), ("tyre_dy_rear", "is not a tyre setting"), ("limiter", "is not a tyre setting"),
+                            ("nope", "unknown setting 'nope'"), ("tyre_front_only", "is not a tyre setting")):
+            with self.subTest(field), self.assertRaisesRegex(ValueError, text):
+                self.set(tid, field, "1")
+        self.assertEqual(self.read(tid), before)
+
+    def test_unset_removes_one_value_and_is_a_noop_for_a_field_that_was_not_set(self):
+        tid = self.create()
+        self.set(tid, "tyre_dy", "1.4")
+        self.set(tid, "tyre_th", "slick")
+        self.assertEqual(tune.unset_tyre_value(self.work, tid, "tyre_dy", self.cat), {"id": "tyre_dy", "removed": True})
+        self.assertEqual(tune.load_tyre(self.work, tid)["values"], {"tyre_th": "slick"})
+        before = self.read(tid)
+        self.assertEqual(tune.unset_tyre_value(self.work, tid, "tyre_dy", self.cat), {"id": "tyre_dy", "removed": False})
+        self.assertEqual(self.read(tid), before)
+        with self.assertRaisesRegex(ValueError, "^unknown setting 'nope'$"):
+            tune.unset_tyre_value(self.work, tid, "nope", self.cat)
+        with self.assertRaisesRegex(ValueError, "tyre_dy_front is not a tyre setting"):
+            tune.unset_tyre_value(self.work, tid, "tyre_dy_front", self.cat)
+
+    def test_reset_drops_every_value_and_counts_them(self):
+        tid = self.create()
+        self.set(tid, "tyre_dy", "1.4")
+        self.set(tid, "tyre_th", "slick")
+        self.assertEqual(tune.reset_tyre(self.work, tid), {"id": tid, "cleared": 2})
+        self.assertEqual(tune.load_tyre(self.work, tid)["values"], {})
+        before = self.read(tid)
+        self.assertEqual(tune.reset_tyre(self.work, tid), {"id": tid, "cleared": 0})
+        self.assertEqual(self.read(tid), before)
+
+    def test_the_values_of_one_tyre_do_not_touch_another(self):
+        one, two = self.create("One"), self.create("Two", SLICK_S)
+        self.set(one, "tyre_dy", "1.4")
+        self.assertEqual(tune.load_tyre(self.work, two)["values"], {})
+        self.assertEqual(self.rows(two)["tyre_dy"]["value"], 1.0)
 
 
 class TestRows(World):
-    def test_defaults_come_from_the_source_files_of_the_axle(self):
+    def test_one_row_per_field_in_the_order_of_the_fields(self):
+        tid = self.create()
+        rows = tune.tyre_rows(self.work, tid, self.cat, self.game)
+        self.assertEqual([r["id"] for r in rows], ["tyre_dy", "tyre_th", "tyre_deep", "tyre_maybe"])
+        dy = rows[0]
+        self.assertEqual((dy["label"], dy["group"], dy["unit"], dy["type"], dy["min"], dy["max"]), ("Tyre lateral grip", "Tyres", "mu", "float", 0.5, 2.5))
+        self.assertNotIn("axle", dy)
+        self.assertEqual(rows[1]["choices"], ["road", "slick"])
+
+    def test_the_default_is_read_from_the_source_file(self):
+        rows = self.rows(self.create("A", ROAD_A))
+        self.assertEqual((rows["tyre_dy"]["default"], rows["tyre_dy"]["value"], rows["tyre_dy"]["changed"]), (1.2, 1.2, False))
+        self.assertEqual((rows["tyre_th"]["default"], rows["tyre_th"]["applicable"]), ("road", True))
+        rows = self.rows(self.create("S", SLICK_S))
+        self.assertEqual((rows["tyre_dy"]["default"], rows["tyre_th"]["default"]), (1.0, "slick"))
+
+    def test_the_source_file_is_the_one_of_the_first_extracted_car(self):
+        self.assertEqual(self.rows(self.create("A", ROAD_A))["tyre_dy"]["default"], 1.2)
+
+    def test_a_value_set_is_the_value_and_changed_unless_it_equals_the_default(self):
+        tid = self.create()
+        tune.set_tyre_value(self.work, tid, "tyre_dy", "1.4", self.cat)
+        row = self.rows(tid)["tyre_dy"]
+        self.assertEqual((row["default"], row["value"], row["changed"]), (1.2, 1.4, True))
+        tune.set_tyre_value(self.work, tid, "tyre_dy", "1.2", self.cat)
+        self.assertFalse(self.rows(tid)["tyre_dy"]["changed"])
+
+    def test_a_field_the_source_cannot_give_is_listed_with_the_reason_and_no_default(self):
         rows = self.rows(self.create())
-        self.assertEqual(list(rows), ["tyre_dy_front", "tyre_dy_rear", "tyre_th_front", "tyre_deep_front"])
-        self.assertEqual((rows["tyre_dy_front"]["default"], rows["tyre_dy_rear"]["default"], rows["tyre_th_front"]["default"]), (1.2, 1.1, "road"))
-        self.assertEqual([(r["axle"], r["value"], r["changed"], r["applicable"]) for r in list(rows.values())[:3]],
-                         [("front", 1.2, False, True), ("rear", 1.1, False, True), ("front", "road", False, True)])
+        self.assertEqual((rows["tyre_deep"]["applicable"], rows["tyre_deep"]["default"], rows["tyre_deep"]["value"]), (False, None, None))
+        self.assertIn("modelData.nope.x: missing field 'nope'", rows["tyre_deep"]["reason"])
+        self.assertTrue(rows["tyre_dy"]["applicable"] and rows["tyre_dy"]["reason"] is None)
 
-    def test_rows_carry_the_fields_a_page_needs(self):
-        row = self.rows(self.create())["tyre_th_front"]
-        self.assertEqual({k: row[k] for k in ("label", "group", "unit", "type", "kind", "description", "verified", "choices", "reason")},
-                         {"label": "L tyre_th_front", "group": "Tyres", "unit": "", "type": "enum", "kind": "value",
-                          "description": "d tyre_th_front", "verified": False, "choices": ["road", "slick"], "reason": None})
-        dy = self.rows("slick")["tyre_dy_front"]
-        self.assertEqual((dy["min"], dy["max"], dy["unit"]), (0.5, 2.5, "mu"))
-        self.assertNotIn("choices", dy)
+    def test_a_last_field_the_file_lacks_reads_as_zero_like_the_settings_of_a_car(self):
+        row = self.rows(self.create())["tyre_maybe"]
+        self.assertEqual((row["applicable"], row["default"], row["reason"]), (True, 0.0, None))
 
-    def test_overrides_are_the_value_and_mark_the_row_changed(self):
+    def test_a_stored_value_that_does_not_fit_is_an_error_naming_the_tyre(self):
         tid = self.create()
-        tune.set_tyre_value(self.work, tid, "tyre_dy_front", "1.4", self.cat)
-        tune.set_tyre_value(self.work, tid, "tyre_th_front", "slick", self.cat)
-        tune.set_tyre_value(self.work, tid, "tyre_dy_rear", "1.1", self.cat)
-        rows = self.rows(tid)
-        self.assertEqual([(r["value"], r["default"], r["changed"]) for r in list(rows.values())[:3]],
-                         [(1.4, 1.2, True), (1.1, 1.1, False), ("slick", "road", True)])
+        self.write_tyre(tid, {"version": 2, "name": "Slick", "short": "SL", "source": ROAD_A, "values": {"tyre_dy": "fast"}})
+        with self.assertRaisesRegex(ValueError, "^tyre slick: tyre_dy expects a number, got 'fast'$"):
+            tune.tyre_rows(self.work, tid, self.cat, self.game)
 
-    def test_a_changed_source_changes_the_defaults_and_keeps_the_values(self):
-        tid = self.create()
-        tune.set_tyre_value(self.work, tid, "tyre_dy_front", "1.4", self.cat)
-        tune.set_tyre_source(self.work, tid, KEY_SS)
-        row = self.rows(tid)["tyre_dy_front"]
-        self.assertEqual((row["default"], row["value"], row["changed"]), (1.0, 1.4, True))
-        self.assertEqual(self.rows(tid)["tyre_th_front"]["default"], "slick")
-
-    def test_the_files_are_read_from_a_car_that_offers_the_source(self):
-        tid = self.create()
-        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.2)
-        os.remove(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))
-        self.assertEqual(self.rows(tid)["tyre_dy_front"]["default"], 1.25)
-
-    def test_a_setting_whose_default_cannot_be_read_is_not_applicable_with_a_reason(self):
-        tid = self.create()
-        tune.set_tyre_value(self.work, tid, "tyre_dy_front", "1.4", self.cat)
-        row = self.rows(tid)["tyre_deep_front"]
-        self.assertEqual((row["applicable"], row["default"], row["value"], row["changed"]), (False, None, None, False))
-        self.assertEqual(row["reason"], "modelData.nope.x: missing field 'nope'")
-        self.assertTrue(self.rows(tid)["tyre_dy_front"]["applicable"])
-
-    def test_an_override_of_an_unreadable_setting_is_kept_in_its_row(self):
-        tid = self.create()
-        tune.set_tyre_value(self.work, tid, "tyre_deep_front", "2", self.cat)
-        row = self.rows(tid)["tyre_deep_front"]
-        self.assertEqual((row["applicable"], row["default"], row["value"], row["changed"]), (False, None, 2.0, True))
-
-    def test_a_curve_that_is_not_a_choice_is_not_applicable(self):
-        self.a.add_shared("tyres/road/a.tyre", {"modelData": {"Dy0": 1.2}, "thermalData": {"thermalPerformanceCurve": GS + "tyres\\x.curve"}})
-        row = self.rows(self.create())["tyre_th_front"]
-        self.assertEqual((row["applicable"], row["default"]), (False, None))
-        self.assertIn("is not one of the choices of tyre_th_front", row["reason"])
-
-    def test_an_unreadable_source_file_makes_only_its_axle_unsupported(self):
-        tid = self.create()
-        self.a.store[self.a.key(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))] = ValueError("a.tyre: truncated protobuf")
-        rows = self.rows(tid)
-        self.assertEqual([(r["id"], r["applicable"]) for r in rows.values()],
-                         [("tyre_dy_front", False), ("tyre_dy_rear", True), ("tyre_th_front", False), ("tyre_deep_front", False)])
-        self.assertIn("truncated protobuf", rows["tyre_dy_front"]["reason"])
-
-    def test_without_an_extracted_car_that_offers_the_source_it_is_an_error(self):
-        tid = self.create("Slick", KEY_SS)
+    def test_a_source_that_is_gone_is_an_error_naming_the_tyre_and_the_source(self):
+        tid = self.create("S", SLICK_S)
         os.remove(os.path.join(self.a.shared, "tyres", "slick", "s.tyre"))
-        with self.assertRaisesRegex(ValueError, "^tyre slick: no extracted car offers its source tyres\\\\slick\\\\s any more"):
-            tune.tyre_rows(self.work, tid, self.cat)
+        with self.assertRaisesRegex(ValueError, "^tyre s: the source %s cannot be read: " % SLICK_S.replace("\\", "\\\\")):
+            tune.tyre_rows(self.work, tid, self.cat, self.game)
 
-    def test_a_stored_value_that_does_not_fit_the_setting_is_an_error(self):
-        self.write_tyre("hand", {"version": 1, "name": "H", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {"tyre_dy_front": "fast"}})
-        with self.assertRaisesRegex(ValueError, "^tyre hand: tyre_dy_front expects a number"):
-            tune.tyre_rows(self.work, "hand", self.cat)
+    def test_a_source_file_that_cannot_be_decoded_is_an_error_naming_the_tyre(self):
+        tid = self.create()
+        self.a.store[self.a.key(os.path.join(self.a.shared, "tyres", "road", "a.tyre"))] = ValueError("broken file")
+        with self.assertRaisesRegex(ValueError, "^tyre slick: the source .* cannot be read: broken file$"):
+            tune.tyre_rows(self.work, tid, self.cat, self.game)
 
-    def test_values_of_unknown_settings_are_ignored_and_kept(self):
-        self.write_tyre("old", {"version": 1, "name": "O", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {"gone": 1}})
-        self.assertEqual(len(tune.tyre_rows(self.work, "old", self.cat)), 4)
-        tune.set_tyre_value(self.work, "old", "tyre_dy_front", "1.3", self.cat)
-        self.assertEqual(tune.load_tyre(self.work, "old")["values"], {"gone": 1, "tyre_dy_front": 1.3})
-
-    def test_a_missing_tyre(self):
-        with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
-            tune.tyre_rows(self.work, "nope", self.cat)
-
-    def test_every_setting_of_the_committed_catalogue_is_read_from_a_file_with_its_paths(self):
-        cat = tune.load_catalogue()
-        front, rear = {}, {}
-        for s in tune.tyre_settings(cat):
-            for t in s["targets"]:
-                tune.put_value(front if t["file"] == "@tyre_front" else rear, t["path"],
-                               s["choice_values"]["slick"] if s["type"] == "enum" else 1.5 if tune.tyre_axle(s) == "front" else 1.25)
-        self.a.add_shared("tyres/road/a.tyre", front)
-        self.a.add_shared("tyres/road/b.tyre", rear)
-        rows = tune.tyre_rows(self.work, self.create(), cat)
-        self.assertEqual(len(rows), 24)
-        self.assertTrue(all(r["applicable"] for r in rows), [r["id"] for r in rows if not r["applicable"]])
-        by_axle = {(r["axle"], r["type"]): r["default"] for r in rows}
-        self.assertEqual(by_axle, {("front", "float"): 1.5, ("front", "enum"): "slick", ("rear", "float"): 1.25, ("rear", "enum"): "slick"})
+    def test_the_rows_of_an_empty_catalogue_are_empty(self):
+        self.assertEqual(tune.tyre_rows(self.work, self.create(), mini_catalogue(mini_setting("limiter", type="int", targets=[("@engine", "limiter")])), self.game), [])
 
 
 class TestUsers(World):
-    def uses(self, car, tune_id, *entries):
-        tune.save_state(self.work, car, {"limiter": 1, tune.TYRE_KEY: list(entries)}, tune_id)
+    def use(self, tyre_id, tune_id=None, version=None, car="ks_a", value=None):
+        value = value or {"sets": [{"front": "own:" + tyre_id, "rear": "game:" + ROAD_B}], "split": False}
+        if version is None:
+            tune.save_state(self.work, car, {tune.TYRE_KEY: value}, tune_id)
+        else:
+            tune.save_version_state(self.work, car, {tune.TYRE_KEY: value}, version, tune_id)
 
-    def test_nothing_uses_a_tyre_without_states(self):
-        self.assertEqual(tune.tyre_users(self.work, "slick"), [])
-        self.assertEqual(tune.tyre_users(os.path.join(self.work, "none"), "slick"), [])
-
-    def test_the_default_tune_the_draft_and_other_tunes_are_found(self):
-        self.uses("ks_a", None, "own:slick")
-        self.uses("ks_a", "ax01", "own:slick", "own:soft")
-        self.uses("ks_a", "ax02", "own:soft")
-        self.uses("ks_a", tune.DRAFT, "own:slick")
-        self.uses("ks_b", "ax_b", "own:slick")
-        self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax_a"}, {"car": "ks_a", "tune": "ax01"},
-                                                               {"car": "ks_a", "tune": "draft"}, {"car": "ks_b", "tune": "ax_b"}])
-        self.assertEqual(tune.tyre_users(self.work, "soft"), [{"car": "ks_a", "tune": "ax01"}, {"car": "ks_a", "tune": "ax02"}])
-
-    def test_only_an_exact_own_entry_in_a_list_counts(self):
-        self.uses("ks_a", None, "own:slick2", "slick", "game:slick", "OWN:slick", "own:slic")
-        self.assertEqual(tune.tyre_users(self.work, "slick"), [])
-        self.assertEqual(tune.tyre_users(self.work, "slick2"), [{"car": "ks_a", "tune": "ax_a"}])
-        tune.save_state(self.work, "ks_b", {tune.TYRE_KEY: "own:slick"})
-        tune.save_state(self.work, "ks_b", {tune.TYRE_KEY: {"own:slick": 1}}, "ax01")
-        tune.save_state(self.work, "ks_b", {tune.TYRE_KEY: None}, tune.DRAFT)
+    def test_no_state_uses_a_new_tyre(self):
+        self.create()
         self.assertEqual(tune.tyre_users(self.work, "slick"), [])
 
-    def test_unreadable_state_files_are_ignored(self):
-        self.uses("ks_a", None, "own:slick")
-        for rel, text in (("tune_state.json", "{not json"), (os.path.join("tunes", "ax01", "tune_state.json"), "[1]"),
-                          ("draft_state.json", "\x00")):
-            path = os.path.join(self.work, "ks_b", rel)
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            with open(path, "w", encoding="utf-8") as f:
-                f.write(text)
-        self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax_a"}])
+    def test_the_default_tune_other_tunes_and_the_draft_are_found_in_order(self):
+        self.create()
+        self.use("slick", "ax01")
+        self.use("slick", tune.DRAFT)
+        self.use("slick", None)
+        self.use("slick", "ax02", car="ks_b")
+        tune.save_state(self.work, "ks_a", {"limiter": 7000}, "ax03")
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [
+            {"car": "ks_a", "tune": "ax_a"}, {"car": "ks_a", "tune": "ax01"}, {"car": "ks_a", "tune": tune.DRAFT},
+            {"car": "ks_b", "tune": "ax02"}])
 
-    def test_the_tune_folders_that_are_no_tune_ids_are_ignored(self):
-        self.uses("ks_a", "ax01", "own:slick")
-        path = os.path.join(self.work, "ks_a", "tunes", "Bad Id", "tune_state.json")
-        os.makedirs(os.path.dirname(path))
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({tune.TYRE_KEY: ["own:slick"]}, f)
+    def test_a_version_state_counts_and_names_the_version(self):
+        self.create()
+        tune.save_state(self.work, "ks_a", {}, "ax01")
+        vid = tune.add_version(self.work, "ks_a", "Heavy", "ax01")
+        self.use("slick", "ax01", vid)
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax01", "version": vid}])
+
+    def test_only_the_tyre_in_the_choice_counts_in_every_form_of_the_choice(self):
+        self.create()
+        self.create("Other")
+        self.use("other", "ax01")
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [])
+        self.use("x", "ax01", value={"split": True, "fronts": ["game:" + ROAD_A], "rears": ["own:slick"]})
         self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax01"}])
+        self.use("x", "ax01", value={"sets": [{"front": "game:" + ROAD_A, "rear": "game:" + ROAD_B}], "split": False, "start_front": "own:slick"})
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax01"}])
+        self.use("x", "ax01", value=["own:slick", "stock:a|b"])
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [{"car": "ks_a", "tune": "ax01"}])
+        self.use("x", "ax01", value=["own:slick2"])
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [])
 
-    def test_the_constants(self):
-        self.uses("ks_a", None, "own:slick")
-        self.assertEqual(tune.TYRE_KEY, "_tyres")
-        self.assertEqual(tune.TYRES_DIR, "tyres")
+    def test_an_unreadable_state_is_ignored(self):
+        self.create()
+        self.write(tune.state_path(self.work, "ks_a", "ax01"), "{")
+        self.write(tune.state_path(self.work, "ks_a", "ax02"), "[]")
+        self.write(tune.state_path(self.work, "ks_a", None), '{"_tyres": 5}')
+        self.assertEqual(tune.tyre_users(self.work, "slick"), [])
 
 
 class TestDelete(World):
-    def test_a_tyre_that_nobody_uses_is_removed(self):
+    def test_a_tyre_that_nothing_uses_is_deleted(self):
         tid = self.create()
         self.assertEqual(tune.delete_tyre(self.work, tid), {"id": "slick", "deleted": True})
-        self.assertEqual(tune.list_tyres(self.work), [])
-        self.assertFalse(os.path.exists(tune.tyre_path(self.work, tid)))
-
-    def test_refused_while_a_modded_car_or_the_draft_uses_it(self):
-        tid = self.create()
-        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: ["own:slick"]}, "ax01")
-        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: ["own:slick"]}, tune.DRAFT)
-        tune.save_state(self.work, "ks_b", {tune.TYRE_KEY: ["own:slick"]})
-        with self.assertRaisesRegex(ValueError, "^tyre slick is used by ks_a / ax01, ks_a \\(draft\\), ks_b / ax_b$"):
-            tune.delete_tyre(self.work, tid)
-        self.assertTrue(os.path.isfile(tune.tyre_path(self.work, tid)))
-
-    def test_allowed_after_the_last_user_let_go(self):
-        tid = self.create()
-        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: ["own:slick"]}, tune.DRAFT)
-        with self.assertRaisesRegex(ValueError, "ks_a \\(draft\\)"):
-            tune.delete_tyre(self.work, tid)
-        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: []}, tune.DRAFT)
-        self.assertTrue(tune.delete_tyre(self.work, tid)["deleted"])
-
-    def test_a_missing_tyre(self):
-        with self.assertRaisesRegex(ValueError, "^no tyre 'nope' in the library$"):
-            tune.delete_tyre(self.work, "nope")
-
-    def test_a_damaged_tyre_can_be_deleted(self):
-        self.write_tyre("broken", "{")
-        self.assertTrue(tune.delete_tyre(self.work, "broken")["deleted"])
+        self.assertFalse(tune.tyre_exists(self.work, tid))
         self.assertEqual(tune.list_tyres(self.work), [])
 
-    def test_the_name_can_be_reused_after_a_delete(self):
-        tid = self.create("Slick")
+    def test_delete_is_refused_while_a_state_a_version_or_the_draft_uses_the_tyre(self):
+        tid = self.create()
+        tune.save_state(self.work, "ks_a", {}, "ax01")
+        vid = tune.add_version(self.work, "ks_a", "Heavy", "ax01")
+        choice = {"sets": [{"front": "own:slick", "rear": "game:" + ROAD_B}], "split": False}
+        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: choice}, "ax01")
+        with self.assertRaisesRegex(ValueError, "^tyre slick is used by ks_a / ax01$"):
+            tune.delete_tyre(self.work, tid)
+        tune.save_version_state(self.work, "ks_a", {tune.TYRE_KEY: choice}, vid, "ax01")
+        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: choice}, tune.DRAFT)
+        with self.assertRaisesRegex(ValueError, "^tyre slick is used by ks_a / ax01, ks_a / ax01 / v01, ks_a \\(draft\\)$"):
+            tune.delete_tyre(self.work, tid)
+        self.assertTrue(tune.tyre_exists(self.work, tid))
+        tune.save_state(self.work, "ks_a", {}, "ax01")
+        tune.save_version_state(self.work, "ks_a", {}, vid, "ax01")
+        with self.assertRaisesRegex(ValueError, "^tyre slick is used by ks_a \\(draft\\)$"):
+            tune.delete_tyre(self.work, tid)
+        tune.save_state(self.work, "ks_a", {}, tune.DRAFT)
         tune.delete_tyre(self.work, tid)
-        self.assertEqual(self.create("Slick"), "slick")
+        self.assertFalse(tune.tyre_exists(self.work, tid))
+
+    def test_a_missing_tyre_is_an_error_even_when_a_state_names_it(self):
+        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: ["own:ghost"]}, "ax01")
+        with self.assertRaisesRegex(ValueError, "^no tyre 'ghost' in the library$"):
+            tune.delete_tyre(self.work, "ghost")
+
+    def test_a_damaged_tyre_file_can_be_deleted(self):
+        self.write_tyre("old", {"version": 1, "name": "Old", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        tune.delete_tyre(self.work, "old")
+        self.assertEqual(tune.list_tyres(self.work), [])
 
 
 class TestCommands(World):
@@ -708,69 +656,100 @@ class TestCommands(World):
         super().setUp()
         self.patch(tune, "load_catalogue", lambda path=None: self.cat)
 
-    def main(self, *argv):
-        return self.run_main(*argv, "--work", self.work)
+    def main(self, *argv, game=None):
+        game = argv[0] in ("tyre-index", "tyre-new", "tyre-show") if game is None else game
+        return self.run_main(*argv, "--work", self.work, *(["--game", self.game] if game else []))
 
     def test_tyres_on_an_empty_work_folder(self):
-        self.assertEqual(self.main("tyres"), (0, "no tyres in the library\n", ""))
-        self.assertFalse(os.path.exists(os.path.join(self.work, "tyres")))
+        self.assertEqual(self.run_main("tyres", "--work", str(self.d / "empty")), (0, "no tyres in the library\n", ""))
+        self.assertFalse(os.path.exists(str(self.d / "empty")))
 
-    def test_tyre_sources_lists_the_pairs_with_label_cars_and_key(self):
-        code, out, err = self.main("tyre-sources")
+    def test_tyre_index_lists_label_file_and_type_of_the_available_tyres(self):
+        code, out, err = self.main("tyre-index")
         self.assertEqual((code, err), (0, ""))
-        lines = out.splitlines()
-        self.assertEqual([c.strip() for c in lines[0].split(" | ")], ["label", "cars", "key"])
-        self.assertEqual([c.strip() for c in lines[2].split(" | ")], ["tyres\\road\\a + tyres\\road\\b", "ks_a, ks_b", KEY_AB])
-        self.assertEqual([c.strip() for c in lines[3].split(" | ")], ["tyres\\slick\\s", "ks_a", KEY_SS])
+        lines = [[c.strip() for c in line.split(" | ")] for line in out.splitlines()]
+        self.assertEqual(lines[0], ["label", "file", "type"])
+        self.assertEqual(lines[2], ["Road a", "a", "road"])
+        self.assertIn(["Supercar 235/35 R19", "supercar_235_35_19", "supercar"], lines)
+        self.assertEqual(len(lines), 2 + 6)
 
-    def test_tyre_sources_without_cars(self):
-        code, out, err = self.run_main("tyre-sources", "--work", str(self.d / "empty"))
+    def test_tyre_index_with_a_type_keeps_that_type_by_folder_name_or_label_in_any_case(self):
+        for text in ("slick", "SLICK", "Slick"):
+            with self.subTest(text):
+                out = self.main("tyre-index", "--type", text)[1]
+                self.assertEqual(sorted(line.split(" | ")[1].strip() for line in out.splitlines()[2:]), ["dup", "s"])
+        out = self.main("tyre-index", "--type", "Supercar")[1]
+        self.assertEqual([line.split(" | ")[1].strip() for line in out.splitlines()[2:]], ["supercar_235_35_19"])
+        code, out, err = self.main("tyre-index", "--type", "road")
+        self.assertEqual([line.split(" | ")[1].strip() for line in out.splitlines()[2:]], ["a", "b", "dup"])
+
+    def test_tyre_index_without_tyres_is_a_note(self):
+        code, out, err = self.run_main("tyre-index", "--work", str(self.d / "empty"), "--game", self.game)
         self.assertEqual((code, err), (0, ""))
-        self.assertTrue(out.startswith("note: no extracted car offers a tyre pair"))
+        self.assertTrue(out.startswith("note: no tyres to list"))
+        code, out, err = self.main("tyre-index", "--type", "nope")
+        self.assertTrue(out.startswith("note: no tyres to list"))
+
+    def test_tyre_index_reads_the_package_when_there_is_one(self):
+        pkg = str(self.d / "content.kspkg")
+        pack(pkg, ["road\\road_235_35_19.tyre"])
+        code, out, err = self.run_main("tyre-index", "--work", self.work, "--game", pkg)
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("road_235_35_19", out)
+        self.assertNotIn("supercar", out)
 
     def test_new_set_show_unset_delete(self):
-        code, out, err = self.main("tyre-new", "--name", "Slick Soft", "--source", KEY_AB)
-        self.assertEqual((code, out, err), (0, "created tyre slick_soft: Slick Soft (tyres\\road\\a + tyres\\road\\b)\n", ""))
-        self.assertEqual(self.main("tyre-set", "slick_soft", "tyre_dy_front", "1.4"), (0, "tyre_dy_front = 1.4\n", ""))
+        code, out, err = self.main("tyre-new", "--name", "Slick Soft", "--source", "a")
+        self.assertEqual((code, out, err), (0, "created tyre slick_soft: Slick Soft (SS, source %s)\n" % ROAD_A, ""))
+        self.assertEqual(self.main("tyre-set", "slick_soft", "tyre_dy", "1.4", game=False), (0, "tyre_dy = 1.4\n", ""))
         code, out, err = self.main("tyre-show", "slick_soft")
         self.assertEqual((code, err), (0, ""))
         lines = out.splitlines()
-        self.assertEqual(lines[0], "tyre slick_soft: Slick Soft, source tyres\\road\\a + tyres\\road\\b")
+        self.assertEqual(lines[0], "tyre slick_soft: Slick Soft (SS), source %s" % ROAD_A)
         rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")] for line in lines[3:]}
-        self.assertEqual(rows["tyre_dy_front"][:5], ["*", "tyre_dy_front", "1.4", "1.2", "mu"])
-        self.assertEqual(rows["tyre_dy_rear"][:5], ["", "tyre_dy_rear", "1.1", "1.1", "mu"])
-        self.assertEqual(rows["tyre_deep_front"][1:4], ["tyre_deep_front", "-", "-"])
-        self.assertIn("modelData.nope.x: missing field 'nope'", rows["tyre_deep_front"][5])
-        self.assertEqual(self.main("tyre-unset", "slick_soft", "tyre_dy_front"), (0, "tyre_dy_front removed from the tyre\n", ""))
-        self.assertEqual(self.main("tyre-unset", "slick_soft", "tyre_dy_front"), (0, "tyre_dy_front was not set\n", ""))
-        self.assertEqual(self.main("tyre-delete", "slick_soft"), (0, "deleted tyre slick_soft\n", ""))
-        self.assertEqual(self.main("tyres"), (0, "no tyres in the library\n", ""))
+        self.assertEqual([c.strip() for c in lines[1].split("|")], ["", "id", "value", "default", "unit", "note"])
+        self.assertEqual(rows["tyre_dy"][:5], ["*", "tyre_dy", "1.4", "1.2", "mu"])
+        self.assertEqual(rows["tyre_deep"][1:5], ["tyre_deep", "-", "-", ""])
+        self.assertIn("modelData.nope.x: missing field 'nope'", rows["tyre_deep"][5])
+        self.assertEqual(self.main("tyre-unset", "slick_soft", "tyre_dy", game=False), (0, "tyre_dy removed from the tyre\n", ""))
+        self.assertEqual(self.main("tyre-unset", "slick_soft", "tyre_dy", game=False), (0, "tyre_dy was not set\n", ""))
+        self.assertEqual(self.main("tyre-delete", "slick_soft", game=False), (0, "deleted tyre slick_soft\n", ""))
+        self.assertEqual(self.main("tyres", game=False), (0, "no tyres in the library\n", ""))
+
+    def test_new_with_a_short_name(self):
+        code, out, err = self.main("tyre-new", "--name", "Soft", "--source", ROAD_A, "--short", "Q7")
+        self.assertEqual((code, out), (0, "created tyre soft: Soft (Q7, source %s)\n" % ROAD_A))
+        self.assertEqual(tune.load_tyre(self.work, "soft")["short"], "Q7")
 
     def test_tyres_lists_one_line_per_tyre_and_the_damaged_ones(self):
-        self.main("tyre-new", "--name", "Slick", "--source", KEY_AB)
-        self.main("tyre-set", "slick", "tyre_dy_rear", "1.2")
+        self.main("tyre-new", "--name", "Slick", "--source", "a")
+        self.main("tyre-set", "slick", "tyre_dy", "1.2", game=False)
         self.write_tyre("broken", "{")
-        code, out, err = self.main("tyres")
+        self.write_tyre("old", {"version": 1, "name": "Old", "source": {"front": ROAD_A, "rear": ROAD_B}, "values": {}})
+        code, out, err = self.main("tyres", game=False)
         self.assertEqual((code, err), (0, ""))
         lines = out.splitlines()
-        self.assertEqual([c.strip() for c in lines[0].split("|")], ["id", "name", "source", "changed"])
-        self.assertEqual([c.strip() for c in lines[2].split("|")], ["slick", "Slick", "tyres\\road\\a + tyres\\road\\b", "1"])
+        self.assertEqual([c.strip() for c in lines[0].split("|")], ["id", "name", "short", "source", "changed"])
+        self.assertEqual([c.strip() for c in lines[2].split("|")], ["slick", "Slick", "SL", ROAD_A, "1"])
         self.assertTrue(lines[3].startswith("broken"))
-        self.assertIn("error: ", lines[3])
-        self.assertEqual(len(lines), 4)
+        self.assertIn("old front/rear form", lines[4])
+        self.assertEqual(len(lines), 5)
 
     def test_set_prints_the_range_warning_on_stderr(self):
-        self.main("tyre-new", "--name", "Slick", "--source", KEY_AB)
-        self.assertEqual(self.main("tyre-set", "slick", "tyre_dy_front", "9"),
-                         (0, "tyre_dy_front = 9.0\n", "warning: tyre_dy_front=9.0 is outside the suggested range 0.5..2.5\n"))
+        self.main("tyre-new", "--name", "Slick", "--source", "a")
+        self.assertEqual(self.main("tyre-set", "slick", "tyre_dy", "9", game=False),
+                         (0, "tyre_dy = 9.0\n", "warning: tyre_dy=9.0 is outside the suggested range 0.5..2.5\n"))
 
     def test_runtime_errors_are_error_lines_with_exit_1(self):
-        self.main("tyre-new", "--name", "Slick", "--source", KEY_AB)
-        for argv, message in ((("tyre-new", "--name", "Slick", "--source", KEY_AB), "error: a tyre named 'Slick' exists already (slick)\n"),
-                              (("tyre-new", "--name", "X", "--source", "nope"), "error: unknown tyre source 'nope'"),
+        self.main("tyre-new", "--name", "Slick", "--source", "a")
+        for argv, message in ((("tyre-new", "--name", "Slick", "--source", "a"), "error: a tyre named 'Slick' exists already (slick)\n"),
+                              (("tyre-new", "--name", "X", "--source", "nope"), "error: unknown tyre 'nope', tyre-index lists the tyres\n"),
+                              (("tyre-new", "--name", "X", "--source", "dup"), "error: 'dup' names 2 tyres"),
+                              (("tyre-new", "--name", "X", "--source", "a", "--short", "abc"), "error: a tyre short name needs"),
                               (("tyre-set", "slick", "limiter", "1"), "error: limiter is not a tyre setting\n"),
-                              (("tyre-set", "slick", "tyre_dy_front", "fast"), "error: tyre_dy_front expects a number, got 'fast'\n"),
-                              (("tyre-set", "nope", "tyre_dy_front", "1"), "error: no tyre 'nope' in the library\n"),
+                              (("tyre-set", "slick", "tyre_dy_front", "1"), "error: tyre_dy_front is not a tyre setting\n"),
+                              (("tyre-set", "slick", "tyre_dy", "fast"), "error: tyre_dy expects a number, got 'fast'\n"),
+                              (("tyre-set", "nope", "tyre_dy", "1"), "error: no tyre 'nope' in the library\n"),
                               (("tyre-show", "../x"), "error: bad tyre id '../x'"), (("tyre-delete", "nope"), "error: no tyre 'nope' in the library\n"),
                               (("tyre-unset", "slick", "nope"), "error: unknown setting 'nope'\n")):
             with self.subTest(argv):
@@ -779,36 +758,45 @@ class TestCommands(World):
                 self.assertTrue(err.startswith(message), err)
 
     def test_delete_is_refused_while_a_modded_car_uses_the_tyre(self):
-        self.main("tyre-new", "--name", "Slick", "--source", KEY_AB)
-        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: ["own:slick"]}, "ax01")
-        self.assertEqual(self.main("tyre-delete", "slick"), (1, "", "error: tyre slick is used by ks_a / ax01\n"))
+        self.main("tyre-new", "--name", "Slick", "--source", "a")
+        tune.save_state(self.work, "ks_a", {tune.TYRE_KEY: {"sets": [{"front": "own:slick", "rear": "game:" + ROAD_B}], "split": False}}, "ax01")
+        self.assertEqual(self.main("tyre-delete", "slick", game=False), (1, "", "error: tyre slick is used by ks_a / ax01\n"))
         self.assertTrue(os.path.isfile(tune.tyre_path(self.work, "slick")))
 
     def test_show_of_a_tyre_whose_source_is_gone_is_an_error_line(self):
-        self.main("tyre-new", "--name", "Slick", "--source", KEY_SS)
+        self.main("tyre-new", "--name", "Slick", "--source", "s")
         os.remove(os.path.join(self.a.shared, "tyres", "slick", "s.tyre"))
         code, out, err = self.main("tyre-show", "slick")
         self.assertEqual((code, out), (1, ""))
-        self.assertTrue(err.startswith("error: tyre slick: no extracted car offers its source"), err)
+        self.assertTrue(err.startswith("error: tyre slick: the source %s cannot be read" % SLICK_S), err)
 
     def test_the_work_folder_is_expanded(self):
         code, out, err = self.run_main("tyres", "--work", "%ACE_TEST_NO_SUCH_VAR%/w")
         self.assertEqual((code, out), (1, ""))
         self.assertTrue(err.startswith("error: cannot expand the work directory"), err)
 
+    def test_the_game_option_is_expanded_like_the_other_paths(self):
+        with mock.patch.dict(os.environ, {"ACE_TEST_GAME": self.game}):
+            code, out, err = self.run_main("tyre-index", "--work", self.work, "--game", "%ACE_TEST_GAME%")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("supercar_235_35_19", out)
+
 
 class TestCliUsage(unittest.TestCase):
     def test_the_usage_block_lists_every_tyre_command(self):
-        for cmd in ("tyres", "tyre-sources", "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete"):
+        for cmd in ("tyres", "tyre-index", "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete"):
             self.assertIn("python tools/tune.py " + cmd + " ", USAGE)
-        self.assertNotIn("--car", "\n".join(line for line in USAGE.splitlines() if "tyre" in line))
+        self.assertNotIn("tyre-sources", USAGE)
+        self.assertNotIn("--car", "\n".join(line for line in USAGE.splitlines() if "tyre" in line and "tyres-convert" not in line))
+        self.assertIn("python tools/tune.py tyres-convert --name <text>", USAGE)
 
 
-usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("tyres_with_a_positional", ["tyres", "x"]), ("tyre_sources_with_a_positional", ["tyre-sources", "x"]),
+usage_cases(TestCliUsage, USAGE, (("no_arguments", []), ("tyres_with_a_positional", ["tyres", "x"]), ("tyre_index_with_a_positional", ["tyre-index", "x"]),
+                                  ("tyre_index_with_the_old_name", ["tyre-sources"]), ("tyre_index_type_without_value", ["tyre-index", "--type"]),
                                   ("tyre_new_without_options", ["tyre-new"]), ("tyre_new_without_source", ["tyre-new", "--name", "x"]),
                                   ("tyre_new_without_name", ["tyre-new", "--source", "k"]),
                                   ("tyre_new_with_a_positional", ["tyre-new", "--name", "x", "--source", "k", "y"]),
-                                  ("tyre_new_option_without_value", ["tyre-new", "--name"]),
+                                  ("tyre_new_option_without_value", ["tyre-new", "--name"]), ("tyre_new_short_without_value", ["tyre-new", "--name", "x", "--source", "k", "--short"]),
                                   ("tyre_show_without_id", ["tyre-show"]), ("tyre_show_with_two_ids", ["tyre-show", "a", "b"]),
                                   ("tyre_set_with_two_operands", ["tyre-set", "a", "b"]), ("tyre_set_with_four_operands", ["tyre-set", "a", "b", "c", "d"]),
                                   ("tyre_set_without_operands", ["tyre-set"]),
@@ -825,20 +813,21 @@ class TestCliSubprocess(unittest.TestCase):
             self.assertEqual((r.returncode, r.stdout, r.stderr), (0, "no tyres in the library\n", ""))
             self.assertEqual(os.listdir(d), [])
 
-    def test_tyre_sources_on_an_empty_work_folder(self):
+    def test_tyre_index_on_an_empty_work_folder_without_a_package(self):
         with tmp() as d:
-            r = run_tool("tune.py", "tyre-sources", "--work", d / "w", cwd=d)
+            r = run_tool("tune.py", "tyre-index", "--work", d / "w", "--game", d / "no.kspkg", cwd=d)
             self.assertEqual((r.returncode, r.stderr), (0, ""))
-            self.assertTrue(r.stdout.startswith("note: no extracted car offers a tyre pair"))
+            self.assertTrue(r.stdout.startswith("note: no tyres to list"))
 
     def test_runtime_errors_are_error_lines_on_stderr_with_exit_1(self):
         with tmp() as d:
-            for argv, message in ((("tyre-new", "--name", "x", "--source", "nokey"), "error: unknown tyre source 'nokey'"),
+            for argv, message in ((("tyre-new", "--name", "x", "--source", "nokey"), "error: unknown tyre 'nokey'"),
                                   (("tyre-show", "nope"), "error: no tyre 'nope' in the library\n"),
-                                  (("tyre-set", "nope", "tyre_grip_lateral_front", "1"), "error: no tyre 'nope' in the library\n"),
+                                  (("tyre-set", "nope", "tyre_grip_lateral", "1"), "error: no tyre 'nope' in the library\n"),
                                   (("tyre-unset", "../x", "a"), "error: bad tyre id '../x'"), (("tyre-delete", "A"), "error: bad tyre id 'A'")):
                 with self.subTest(argv):
-                    code, out, err = run_main(tune.main, ["tune.py", *argv, "--work", str(d / "w")], cwd=d)
+                    game = ["--game", str(d / "no.kspkg")] if argv[0] in ("tyre-new", "tyre-show") else []
+                    code, out, err = run_main(tune.main, ["tune.py", *argv, "--work", str(d / "w"), *game], cwd=d)
                     self.assertEqual((code, out), (1, ""))
                     self.assertTrue(err.startswith(message), err)
             self.assertEqual(os.listdir(d), [])

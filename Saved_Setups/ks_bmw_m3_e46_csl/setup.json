@@ -1,8 +1,6 @@
 {
   "name_suffix": "Tuned",
   "variant_name": "Base",
-  "display_power_ps": 579.0,
-  "display_torque_nm": 400.0,
   "limiter": 8800,
   "idle_rpm": 800,
   "power_scale": 0.5714,

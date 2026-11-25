@@ -6,6 +6,7 @@ import builtins
 import contextlib
 import io
 import json
+import math
 import os
 import shutil
 import sys
@@ -1779,7 +1780,7 @@ class TestTuneSuffix(TuneCase):
         got = tune.free_suffix(self.work, "ks_alpha", wanted)
         self.assertEqual((got, len(got)), ("x" * 27 + " 11", 30))
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "x " + "9" * 28}, "ax_alp04")
-        with self.assertRaisesRegex(ValueError, "no free name suffix left"):
+        with self.assertRaisesRegex(ValueError, "no free car name left"):
             tune.free_suffix(self.work, "ks_alpha", "x " + "9" * 28)
 
     def test_free_suffix_never_leaves_a_space_at_the_end_of_the_cut_stem(self):
@@ -1858,7 +1859,7 @@ class TestDuplicateTune(TuneCase):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A"})
         self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", None, suffix="  Super   charged ")["name_suffix"], "Super charged")
         self.assertEqual(tune.load_state(self.work, "ks_alpha", "ax_alp01"), {"name_suffix": "Super charged"})
-        with self.assertRaisesRegex(ValueError, "name suffix already used by ax_alpha"):
+        with self.assertRaisesRegex(ValueError, "car name already used by ax_alpha"):
             tune.duplicate_tune(self.work, "ks_alpha", None, suffix=" _A ")
 
     def test_the_default_id_as_src_is_the_default_tune(self):
@@ -1943,9 +1944,9 @@ class TestDuplicateTune(TuneCase):
     def test_suffix_defaults_to_a_unique_one_and_an_explicit_one_is_checked(self):
         tune.save_state(self.work, "ks_alpha", {"name_suffix": "_A"})
         self.assertEqual(tune.duplicate_tune(self.work, "ks_alpha", None, suffix="_NEW")["name_suffix"], "_NEW")
-        with self.assertRaisesRegex(ValueError, "name suffix already used by ax_alpha"):
+        with self.assertRaisesRegex(ValueError, "car name already used by ax_alpha"):
             tune.duplicate_tune(self.work, "ks_alpha", None, suffix="_A")
-        with self.assertRaisesRegex(ValueError, "name suffix already used by ax_alp01"):
+        with self.assertRaisesRegex(ValueError, "car name already used by ax_alp01"):
             tune.duplicate_tune(self.work, "ks_alpha", None, suffix="_NEW")
 
     def test_a_suffix_of_another_stock_car_is_no_collision(self):
@@ -2490,20 +2491,20 @@ class TestVersions(CarCase):
 
     # ---------------------------------------------------------------------------- command line
     def test_versions_prints_the_base_and_every_version(self):
-        self.assertEqual(self.main("versions"), (0, "base\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\n", ""))
         tune.add_version(self.work, "ks_x", "Drift")
         tune.add_version(self.work, "ks_x", "Wet grip")
         tune.add_version(self.work, "ks_x", "Own", "ax01")
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
-        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base\nv01: Own\n", ""))
-        self.assertEqual(self.main("versions", "--tune", "ax_x", "--car", "ks_x"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\nv02: Wet grip\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base: Base\nv01: Own\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax_x", "--car", "ks_x"), (0, "base: Base\nv01: Drift\nv02: Wet grip\n", ""))
 
     def test_version_add_and_rename_print_the_id_and_the_name(self):
         self.assertEqual(self.main("version-add", " Drift "), (0, "car: ks_x, new version: v01\n", ""))
         self.assertEqual(self.main("version-add", "Copy", "--from", "v01", "--tune", "ax01")[::2], (1, "error: ks_x has no version v01 of ax01\n"))
         self.assertEqual(self.main("version-add", "Copy", "--from", "v01"), (0, "car: ks_x, new version: v02\n", ""))
         self.assertEqual(self.main("version-rename", "v02", "Wet grip"), (0, "v02: Wet grip\n", ""))
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Wet grip\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\nv02: Wet grip\n", ""))
         self.assertEqual(self.main("version-add", "ax", "--tune", "ax01"), (0, "car: ks_x, new version: v01\n", ""))
 
     def test_version_commands_report_runtime_errors_on_stderr_with_exit_1(self):
@@ -2723,22 +2724,22 @@ class TestVersions(CarCase):
     def test_versions_prints_a_locked_version_with_the_word_locked(self):
         tune.add_version(self.work, "ks_x", "Drift")
         self.lock("Grip")
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\nv02: Grip (locked)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\nv02: Grip (locked)\n", ""))
 
     def test_version_lock_and_unlock_print_the_id_and_the_name(self):
         tune.add_version(self.work, "ks_x", "Drift")
         self.keep("v01")
         self.assertEqual(self.main("version-lock", "v01"), (0, "locked v01 (Drift)\n", ""))
         self.assertEqual(self.main("version-lock", "v01", "--car", "ks_x", "--tune", "ax_x"), (0, "locked v01 (Drift)\n", ""))
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift (locked)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift (locked)\n", ""))
         self.assertEqual(self.main("version-unlock", "v01"), (0, "unlocked v01 (Drift)\n", ""))
         self.assertEqual(self.main("version-unlock", "v01", "--tune", "ax_x"), (0, "unlocked v01 (Drift)\n", ""))
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\n", ""))
         tune.add_version(self.work, "ks_x", "Own", "ax01")
         self.keep("v01", "ax01")
         self.assertEqual(self.main("version-lock", "v01", "--tune", "ax01"), (0, "locked v01 (Own)\n", ""))
-        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\n", ""))
-        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base\nv01: Own (locked)\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base: Base\nv01: Own (locked)\n", ""))
 
     def test_version_lock_and_unlock_report_runtime_errors_on_stderr_with_exit_1(self):
         tune.add_version(self.work, "ks_x", "Drift")
@@ -3532,9 +3533,9 @@ class TestApply(CarCase):
     def test_a_name_suffix_used_by_another_tune_is_refused_before_building(self):
         self.modded({"name_suffix": "_SAME"})
         tune.save_state(self.work, "ks_x", {"name_suffix": "_SAME"})
-        with self.assertRaisesRegex(ValueError, "^name suffix _SAME is already used by ax_x$"):
+        with self.assertRaisesRegex(ValueError, "^car name _SAME is already used by ax_x$"):
             self.apply(self.settings(), new_id="ax01")
-        with self.assertRaisesRegex(ValueError, "^name suffix _SAME is already used by ax01$"):
+        with self.assertRaisesRegex(ValueError, "^car name _SAME is already used by ax01$"):
             self.apply(self.settings())
         self.assertEqual(self.calls, [])
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_x", "build")))
@@ -3548,7 +3549,7 @@ class TestApply(CarCase):
     def test_the_default_suffix_of_a_tune_without_one_collides_too(self):
         self.modded({"limiter": 8000})
         tune.save_state(self.work, "ks_x", {})
-        with self.assertRaisesRegex(ValueError, "name suffix MY is already used by ax_x"):
+        with self.assertRaisesRegex(ValueError, "car name MY is already used by ax_x"):
             self.apply(self.settings(limiter()), new_id="ax01")
 
     def test_an_id_that_is_not_a_modded_car_is_refused_when_the_stock_car_has_modded_cars(self):
@@ -3594,8 +3595,9 @@ class TestApply(CarCase):
         self.assertEqual(compounds[1]["front_tyre_data_path"], GAME_SHARED + "tyres\\slick\\s.tyre")
         item = [a for a in res["applied"] if a["id"] == "dy"][0]
         self.assertEqual(item["files"], [own])
-        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-2])
-        self.assertIn("in 1 .car entry(ies) and 1 compatibletyres entry(ies)", res["notes"][-2])
+        self.assertIn("tyre front: own file content\\cars\\ax_x\\data\\tyres\\ax_x_front.tyre replaces", res["notes"][-3])
+        self.assertIn("in 1 .car entry(ies) and 1 compatibletyres entry(ies)", res["notes"][-3])
+        self.assertEqual(res["notes"][-1], "note: this car still has saved tyre values of the old Tyres section (1): convert them with tyres-convert")
 
     def test_a_tyre_file_inside_the_car_folder_is_refused_before_building(self):
         self.fc.add("data/tyres/own.tyre", {"modelData": {"Dy0": 1.0}})
@@ -3874,8 +3876,10 @@ RECORD_ROWS = [{"id": "name_suffix", "default": "MY"}, {"id": "limiter", "defaul
                {"id": "mode", "default": "a"}, {"id": "aids", "default": False}]
 KIT_A = {"donor": "ks_a", "label": "Single A", "kind": "single turbo", "boost": [0.8]}
 KIT_B = {"donor": "ks_b", "label": "Twin B", "kind": "twin turbo", "boost": [1.0, 1.2]}
-GARAGE_AB = {"keys": ["own:fast", "stock:a|b"], "start": "own:fast"}
-GARAGE_B = {"keys": ["stock:a|b"], "start": "stock:a|b"}
+GARAGE_AB = {"fronts": ["own:fast", "game:a"], "rears": ["game:b"], "start_front": "own:fast", "start_rear": "game:b",
+             "labels": {"own:fast": "Fast", "game:a": "A", "game:b": "B"}}
+GARAGE_B = {"fronts": ["game:a"], "rears": ["game:b"], "start_front": "game:a", "start_rear": "game:b", "labels": {"game:a": "A", "game:b": "B"}}
+TEXT_AB, TEXT_B = "front Fast, A; rear B; starts on Fast / B", "front A; rear B; starts on A / B"
 T_EVENT, T_RX7_EVENT, B_EVENT = "event:/parts/turbos/turbo_none", "event:/parts/turbos/turbo_rx7", "event:/parts/backfires/backfire_classic#8"
 
 
@@ -3900,7 +3904,7 @@ class TestBuildChanges(unittest.TestCase):
         self.assertEqual(res["since"], None)
         self.assertEqual(res["extras"], [
             {"kind": "turbo_kit", "from": None, "to": "Single A (single turbo, 0.8 bar)", "text": "Turbo kit: none -> Single A (single turbo, 0.8 bar)"},
-            {"kind": "garage", "from": None, "to": "own:fast, stock:a|b", "text": "Garage tyres: own:fast, stock:a|b; starts on own:fast"},
+            {"kind": "garage", "from": None, "to": TEXT_AB, "text": "Tyres: " + TEXT_AB},
             {"kind": "sound", "slot": "turbo", "from": None, "to": T_RX7_EVENT, "text": "Sound turbo: own sound -> turbo_rx7"},
             {"kind": "sound", "slot": "backfire", "from": None, "to": B_EVENT, "text": "Sound backfire: own sound -> backfire_classic#8"}])
 
@@ -3963,27 +3967,30 @@ class TestBuildChanges(unittest.TestCase):
         res = changes(record(), record(kit=dict(KIT_A, boost=[])))
         self.assertEqual(res["extras"][0]["text"], "Turbo kit: none -> Single A (single turbo)")
 
-    def test_garage_tyres_added_and_removed(self):
+    def test_tyres_added_and_removed(self):
         res = changes(record(garage=GARAGE_B), record(garage=GARAGE_AB))
-        self.assertEqual(res["extras"], [{"kind": "garage", "from": "stock:a|b", "to": "own:fast, stock:a|b",
-                                          "text": "Garage tyres: +own:fast; starts on own:fast"}])
+        self.assertEqual(res["extras"], [{"kind": "garage", "from": TEXT_B, "to": TEXT_AB, "text": "Tyres: " + TEXT_AB}])
         res = changes(record(garage=GARAGE_AB), record(garage=GARAGE_B))
-        self.assertEqual(res["extras"][0]["text"], "Garage tyres: -own:fast; starts on stock:a|b")
-        both = changes(record(garage={"keys": ["own:a", "stock:x"], "start": "own:a"}), record(garage={"keys": ["own:b", "stock:x"], "start": "own:b"}))
-        self.assertEqual(both["extras"][0]["text"], "Garage tyres: +own:b, -own:a; starts on own:b")
+        self.assertEqual(res["extras"][0]["text"], "Tyres: " + TEXT_B)
 
-    def test_garage_start_changes_alone_and_the_order_alone(self):
-        res = changes(record(garage={"keys": ["own:a", "own:b"], "start": "own:a"}), record(garage={"keys": ["own:b", "own:a"], "start": "own:b"}))
-        self.assertEqual(res["extras"][0]["text"], "Garage tyres: other order; starts on own:b")
-        res = changes(record(garage={"keys": ["own:a", "own:b"], "start": "own:a"}), record(garage={"keys": ["own:a", "own:b"], "start": "own:b"}))
-        self.assertEqual(res["extras"][0]["text"], "Garage tyres: other order; starts on own:b")
+    def test_the_start_tyre_alone_and_the_order_alone_are_changes(self):
+        two = dict(GARAGE_AB, rears=["game:b", "game:c"], labels=dict(GARAGE_AB["labels"], **{"game:c": "C"}))
+        res = changes(record(garage=two), record(garage=dict(two, start_rear="game:c")))
+        self.assertEqual(res["extras"][0]["text"], "Tyres: front Fast, A; rear B, C; starts on Fast / C")
+        res = changes(record(garage=two), record(garage=dict(two, fronts=["game:a", "own:fast"], start_front="game:a")))
+        self.assertEqual(res["extras"][0]["text"], "Tyres: front A, Fast; rear B, C; starts on A / B")
 
-    def test_a_garage_selection_that_is_gone_or_new(self):
+    def test_a_label_alone_is_a_change_and_the_same_choice_is_none(self):
+        renamed = dict(GARAGE_AB, labels=dict(GARAGE_AB["labels"], **{"own:fast": "Faster"}))
+        self.assertEqual(changes(record(garage=GARAGE_AB), record(garage=renamed))["extras"][0]["text"], "Tyres: front Faster, A; rear B; starts on Faster / B")
+        self.assertEqual(changes(record(garage=GARAGE_AB), record(garage=copy_of(GARAGE_AB)))["extras"], [])
+
+    def test_a_tyre_choice_that_is_gone_or_new(self):
         res = changes(record(garage=GARAGE_AB), record())
-        self.assertEqual(res["extras"], [{"kind": "garage", "from": "own:fast, stock:a|b", "to": None,
-                                          "text": "Garage tyres: stock compounds again (were own:fast, stock:a|b)"}])
+        self.assertEqual(res["extras"], [{"kind": "garage", "from": TEXT_AB, "to": None,
+                                          "text": "Tyres: the car's own tyres again (were %s)" % TEXT_AB}])
         res = changes(record(), record(garage=GARAGE_B))
-        self.assertEqual(res["extras"][0]["text"], "Garage tyres: stock:a|b; starts on stock:a|b")
+        self.assertEqual(res["extras"][0]["text"], "Tyres: " + TEXT_B)
 
     def test_a_sound_slot_changed_added_and_removed(self):
         res = changes(record(sounds={"turbo": T_EVENT, "backfire": B_EVENT}), record(sounds={"turbo": T_RX7_EVENT}))
@@ -4069,7 +4076,10 @@ class TestSnapshotFile(Base):
         bad += [json.dumps(dict(good, **change)).encode() for change in (
             {"version": 2}, {"version": "1"}, {"version": True}, {"settings": []}, {"settings": {"f": None}}, {"settings": {"f": [1]}}, {"settings": {"f": {"a": 1}}},
             {"kit": []}, {"kit": dict(KIT_A, donor=5)}, {"kit": dict(KIT_A, boost="1")}, {"kit": dict(KIT_A, boost=[None])}, {"kit": {"donor": "x"}},
-            {"garage": []}, {"garage": {"keys": "a", "start": "a"}}, {"garage": {"keys": [1], "start": "a"}}, {"garage": {"keys": ["a"]}},
+            {"garage": []}, {"garage": {"keys": ["a"], "start": "a"}}, dict(garage=dict(GARAGE_AB, fronts="a")), dict(garage=dict(GARAGE_AB, fronts=[1])),
+            dict(garage=dict(GARAGE_AB, fronts=[])), dict(garage=dict(GARAGE_AB, start_rear="game:zz")), dict(garage=dict(GARAGE_AB, start_front=None)),
+            dict(garage=dict(GARAGE_AB, labels={"own:fast": "Fast"})), dict(garage=dict(GARAGE_AB, labels=[])),
+            dict(garage={k: v for k, v in GARAGE_AB.items() if k != "labels"}),
             {"sounds": []}, {"sounds": {"turbo": 5}}, {"name": 5}, {"time": None})]
         bad += [json.dumps({k: v for k, v in good.items() if k != missing}).encode() for missing in good]
         for text in bad:
@@ -4111,7 +4121,7 @@ class TestMakeSnapshot(Base):
     def test_the_kit_garage_and_sounds(self):
         donors = [{"car": "ks_b", "label": "Twin B", "count": 2, "kind": "twin turbo", "boost": [1.0, 1.2]}]
         kit = {"donor": "ks_b", "kind": "twin turbo", "files": [], "fields": [], "inline_fields": [], "stamp": []}
-        garage = {"entries": [{"key": "own:fast", "label": "Fast"}, {"key": "stock:a|b", "label": "A"}]}
+        garage = dict(GARAGE_AB, files=[], start=(0, 0))
         sounds = [{"slot": "turbo", "option": {"key": T_RX7_EVENT}, "template": {}}, {"slot": "backfire", "option": {"key": B_EVENT}, "template": {}}]
         with mock.patch.object(tune, "turbo_donor", lambda work, car_id, names: donors[0] if car_id == "ks_b" else None):
             data = tune.make_snapshot(self.work, self.plan(kit, garage, sounds), [], "n")
@@ -4466,7 +4476,7 @@ class TestCommands(CarCase):
         self.main("set", "name_suffix", "_A")
         before = sorted(os.listdir(os.path.join(self.work, "ks_x")))
         for argv, message in ((("--tune", "ax09"), "error: ks_x has no tune ax09\n"), (("--tune", "draft"), "error: ks_x has no tune draft\n"),
-                              (("--suffix", "_A"), "error: name suffix already used by ax_x\n"), (("--new-id", "ax_x"), "error: ax_x is already a tune of ks_x\n"),
+                              (("--suffix", "_A"), "error: car name already used by ax_x\n"), (("--new-id", "ax_x"), "error: ax_x is already a tune of ks_x\n"),
                               (("--suffix", ""), "error: name_suffix expects 1 to 30 characters without control characters\n")):
             with self.subTest(argv):
                 self.assertEqual(self.main("duplicate", *argv), (1, "", message))
@@ -4617,8 +4627,8 @@ class TestUsageText(unittest.TestCase):
 
     def test_every_usage_line_is_a_command_main_dispatches(self):
         commands = [line.split()[2] for line in self.usage_lines()]
-        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "version-lock", "version-unlock", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-sources",
-                                    "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "garage", "garage-set", "garage-reset", "turbo-donors",
+        self.assertEqual(commands, ["cars", "init", "defaults", "variants", "versions", "version-add", "version-rename", "version-lock", "version-unlock", "set", "unset", "show", "apply", "duplicate", "tyres", "tyre-index",
+                                    "tyre-new", "tyre-show", "tyre-set", "tyre-unset", "tyre-delete", "tyres-convert", "garage", "garage-set", "garage-reset", "turbo-donors",
                                     "turbo-add", "turbo-remove", "turbo-kit", "sounds", "sound-set", "sound-reset", "ranges"])
         self.assertEqual(list(tune.COMMANDS), commands)
         for cmd in commands:
@@ -4722,6 +4732,493 @@ class TestCliRuntimeErrors(unittest.TestCase):
             self.assertEqual((code, out), (1, ""))
             self.assertTrue(err.startswith("error: cannot expand the work directory"), err)
             self.assertEqual(os.listdir(d), [])
+
+
+class TestBaseName(CarCase):
+    """The name of the base of a modded car in the game's menu (the variant_name setting): saved, else "Base" with a version, else the stock text."""
+    main = TestVersions.main
+
+    def setUp(self):
+        super().setUp()
+        self.cars(("ks_x", "Car X"))
+        self.stock_info(variant_name="Standard")
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        self.cat = mini_catalogue(*metas(), limiter())
+        self.patch(tune, "load_catalogue", lambda path=None: self.cat)
+        tune.save_state(self.work, "ks_x", {"limiter": 8000})
+        tune.save_state(self.work, "ks_x", {"limiter": 9000}, "ax01")
+
+    def state(self, tune_id=None):
+        return tune.load_state(self.work, "ks_x", tune_id)
+
+    def variant_row(self, tune_id=None):
+        return {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", self.cat, True, tune_id)}["variant_name"]
+
+    def test_the_stock_text_without_versions_then_base_with_a_version_then_the_saved_name(self):
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Standard")
+        self.assertEqual(tune.base_name(self.work, "ks_x", "ax01"), "Standard")
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Base")
+        self.assertEqual(tune.base_name(self.work, "ks_x", "ax_x"), "Base")
+        self.assertEqual(tune.base_name(self.work, "ks_x", "ax01"), "Standard")
+        tune.save_state(self.work, "ks_x", {"variant_name": "Daily"})
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Daily")
+
+    def test_a_saved_name_counts_without_versions_too(self):
+        tune.save_state(self.work, "ks_x", {"variant_name": "Daily"}, "ax01")
+        self.assertEqual(tune.base_name(self.work, "ks_x", "ax01"), "Daily")
+
+    def test_a_car_without_a_variant_line_has_no_base_name(self):
+        self.stock_info(variant_name="")
+        self.assertIsNone(tune.base_name(self.work, "ks_x"))
+        tune.add_version(self.work, "ks_x", "Base")
+        self.assertIsNone(tune.base_name(self.work, "ks_x"))
+        tune.save_state(self.work, "ks_x", {"variant_name": "Daily"})
+        self.assertIsNone(tune.base_name(self.work, "ks_x"))
+
+    def test_the_draft_has_none_and_a_car_without_stock_info_has_none(self):
+        self.assertIsNone(tune.base_name(self.work, "ks_x", tune.DRAFT))
+        os.remove(tune.stock_info_path(self.work, "ks_x"))
+        self.assertIsNone(tune.base_name(self.work, "ks_x"))
+
+    def test_the_row_of_variant_name_follows_it(self):
+        row = self.variant_row()
+        self.assertEqual((row["value"], row["default"], row["changed"]), ("Standard", "Standard", False))
+        tune.add_version(self.work, "ks_x", "Drift")
+        row = self.variant_row()
+        self.assertEqual((row["value"], row["default"], row["changed"]), ("Base", "Standard", True))
+        self.assertEqual(self.variant_row("ax01")["value"], "Standard")
+        tune.save_state(self.work, "ks_x", {"variant_name": "Daily"})
+        self.assertEqual((self.variant_row()["value"], self.variant_row()["changed"]), ("Daily", True))
+
+    def test_the_row_of_a_version_shows_the_name_of_the_base(self):
+        v = tune.add_version(self.work, "ks_x", "Drift")
+        rows = {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", self.cat, True, None, v)}
+        self.assertEqual(rows["variant_name"]["value"], "Base")
+        tune.rename_version(self.work, "ks_x", "base", "Daily")
+        rows = {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", self.cat, True, None, v)}
+        self.assertEqual(rows["variant_name"]["value"], "Daily")
+
+    def test_a_row_that_is_not_applicable_keeps_the_default_value(self):
+        self.stock_info(variant_name="")
+        tune.add_version(self.work, "ks_x", "Drift")
+        row = self.variant_row()
+        self.assertEqual((row["applicable"], row["value"]), (False, row["default"]))
+
+    def test_rename_base_saves_the_trimmed_name_in_the_state_and_keeps_the_rest(self):
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "base", "  Daily car  "), "Daily car")
+        self.assertEqual(self.state(), {"limiter": 8000, "variant_name": "Daily car"})
+        self.assertEqual(tune.read_json(tune.state_path(self.work, "ks_x")), {"limiter": 8000, "variant_name": "Daily car"})
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "base", "Other", "ax01"), "Other")
+        self.assertEqual(self.state("ax01"), {"limiter": 9000, "variant_name": "Other"})
+        self.assertEqual(self.state()["variant_name"], "Daily car")
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Daily car")
+
+    def test_set_and_unset_of_variant_name_still_work_on_the_base(self):
+        tune.set_value(self.work, "ks_x", "variant_name", "Daily", self.cat)
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Daily")
+        tune.unset_value(self.work, "ks_x", "variant_name", self.cat)
+        self.assertEqual(tune.base_name(self.work, "ks_x"), "Standard")
+
+    def test_the_name_rules_are_those_of_a_version_name(self):
+        for name in ("", "   ", "x" * 41, "a\nb", "a\x7fb", None, 5):
+            with self.subTest(name):
+                with self.assertRaisesRegex(ValueError, "^a version name must be 1 to 40 characters without control characters$"):
+                    tune.rename_version(self.work, "ks_x", "base", name)
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "base", "x" * 40), "x" * 40)
+        self.assertEqual(self.state(), {"limiter": 8000, "variant_name": "x" * 40})
+
+    def test_no_version_may_have_the_name_of_the_base_ignoring_case(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        with self.assertRaisesRegex(ValueError, "^base name drift is already used by version v01$"):
+            tune.rename_version(self.work, "ks_x", "base", "drift")
+        self.assertEqual(self.state(), {"limiter": 8000})
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "base", "Drift 2"), "Drift 2")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Grip", "ax01"), "v01")
+
+    def test_a_version_may_not_take_the_name_of_the_base_even_the_default_base(self):
+        with self.assertRaisesRegex(ValueError, "^version name base is already used by the base$"):
+            tune.add_version(self.work, "ks_x", "base")
+        self.assertEqual(tune.list_versions(self.work, "ks_x"), [])
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Standard"), "v01")
+        with self.assertRaisesRegex(ValueError, "^version name BASE is already used by the base$"):
+            tune.add_version(self.work, "ks_x", " BASE ")
+        with self.assertRaisesRegex(ValueError, "^version name Base is already used by the base$"):
+            tune.rename_version(self.work, "ks_x", "v01", "Base")
+        self.assertEqual([v["name"] for v in tune.list_versions(self.work, "ks_x")], ["Standard"])
+
+    def test_a_version_may_take_the_stock_text_once_the_base_is_named_otherwise(self):
+        tune.rename_version(self.work, "ks_x", "base", "Daily")
+        with self.assertRaisesRegex(ValueError, "^version name daily is already used by the base$"):
+            tune.add_version(self.work, "ks_x", "daily")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Base"), "v01")
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "v01", "Standard"), "Standard")
+
+    def test_a_version_may_rename_to_its_own_name_and_other_tunes_are_independent(self):
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "v01", "DRIFT"), "DRIFT")
+        tune.rename_version(self.work, "ks_x", "base", "Daily", "ax01")
+        self.assertEqual(tune.add_version(self.work, "ks_x", "Daily"), "v02")
+
+    keep, vpath, lock = TestVersions.keep, TestVersions.vpath, TestVersions.lock
+
+    def test_a_locked_version_does_not_matter_for_the_name_of_the_base(self):
+        self.lock("Drift")
+        self.assertEqual(tune.rename_version(self.work, "ks_x", "base", "Daily"), "Daily")
+        with self.assertRaisesRegex(ValueError, "base name drift is already used by version v01"):
+            tune.rename_version(self.work, "ks_x", "base", "drift")
+        self.assertTrue(tune.list_versions(self.work, "ks_x")[0]["locked"])
+
+    def test_a_car_without_a_variant_line_cannot_name_its_base_and_nothing_is_written(self):
+        self.stock_info(variant_name="")
+        with self.assertRaisesRegex(ValueError, "^the base of this car has no name in the game's menu$"):
+            tune.rename_version(self.work, "ks_x", "base", "Daily")
+        self.assertEqual(self.state(), {"limiter": 8000})
+
+    def test_an_unknown_tune_and_the_draft_are_errors_as_for_a_version(self):
+        with self.assertRaisesRegex(ValueError, "^ks_x has no tune ax99$"):
+            tune.rename_version(self.work, "ks_x", "base", "Daily", "ax99")
+        with self.assertRaisesRegex(ValueError, "^the draft has no versions$"):
+            tune.rename_version(self.work, "ks_x", "base", "Daily", tune.DRAFT)
+
+    def test_base_stays_invalid_as_a_version_id_elsewhere(self):
+        for call in (lambda: tune.read_version_state(self.work, "ks_x", "base"), lambda: tune.lock_version(self.work, "ks_x", "base"),
+                     lambda: tune.unlock_version(self.work, "ks_x", "base"), lambda: tune.add_version(self.work, "ks_x", "Copy", source="base"),
+                     lambda: tune.set_value(self.work, "ks_x", "limiter", "8000", self.cat, version="base"),
+                     lambda: tune.load_version_state(self.work, "ks_x", "base")):
+            with self.subTest(call):
+                with self.assertRaisesRegex(ValueError, "version id must be v01 .. v99"):
+                    call()
+
+    def test_the_versions_command_prints_the_name_of_the_base_first(self):
+        self.assertEqual(self.main("versions"), (0, "base: Standard\n", ""))
+        self.main("version-add", "Drift")
+        self.assertEqual(self.main("versions"), (0, "base: Base\nv01: Drift\n", ""))
+        self.assertEqual(self.main("version-rename", "base", " Daily "), (0, "base: Daily\n", ""))
+        self.assertEqual(self.main("versions"), (0, "base: Daily\nv01: Drift\n", ""))
+        self.assertEqual(self.main("versions", "--tune", "ax01"), (0, "base: Standard\n", ""))
+        self.assertEqual(self.main("version-rename", "base", "Own", "--tune", "ax01"), (0, "base: Own\n", ""))
+        self.assertEqual(self.state("ax01"), {"limiter": 9000, "variant_name": "Own"})
+
+    def test_the_versions_command_prints_just_base_for_a_car_without_a_variant_line(self):
+        self.stock_info(variant_name="")
+        tune.add_version(self.work, "ks_x", "Drift")
+        self.assertEqual(self.main("versions"), (0, "base\nv01: Drift\n", ""))
+
+    def test_the_version_commands_report_the_errors_of_the_base_name(self):
+        self.main("version-add", "Drift")
+        for argv, text in ((("version-rename", "base", "drift"), "error: base name drift is already used by version v01\n"),
+                           (("version-add", "BASE"), "error: version name BASE is already used by the base\n"),
+                           (("version-rename", "base", ""), "error: a version name must be 1 to 40 characters without control characters\n"),
+                           (("version-rename", "base", "A", "--tune", "ax99"), "error: ks_x has no tune ax99\n")):
+            with self.subTest(argv):
+                self.assertEqual(self.main(*argv), (1, "", text))
+        self.assertEqual(self.state(), {"limiter": 8000})
+
+    def test_the_usage_names_base(self):
+        code, out, err = self.run_main("version-rename")
+        self.assertEqual(code, 2)
+        self.assertIn("version-rename <id|base> <name>", out)
+
+
+class TestEngineFigures(unittest.TestCase):
+    """engine_figures: the peak power (HP) and torque (Nm) of a torque curve, evaluated at every whole rpm from 500 to the limiter."""
+    HP = 2 * math.pi / 60 / 745.699872
+
+    def test_the_curve_is_linear_between_its_points(self):
+        power, torque = tune.engine_figures([(1000, 100.0), (3000, 300.0)], 3000, 0)
+        self.assertEqual(torque, 300.0)
+        self.assertAlmostEqual(power, 300.0 * 3000 * self.HP)
+        self.assertEqual(tune.engine_figures([(1000, 100.0), (3000, 300.0)], 2000, 0)[1], 200.0)
+
+    def test_the_limiter_cuts_the_curve(self):
+        points = [(1000, 100.0), (5000, 300.0), (7000, 200.0)]
+        self.assertEqual(tune.engine_figures(points, 4000, 0)[1], 250.0)
+        self.assertAlmostEqual(tune.engine_figures(points, 4000, 0)[0], 250.0 * 4000 * self.HP)
+        self.assertEqual(tune.engine_figures(points, 4000.9, 0)[1], 250.0)
+        self.assertEqual(tune.engine_figures(points, 5000, 0)[1], 300.0)
+
+    def test_the_peak_may_lie_between_the_points_and_the_curve_is_zero_outside_them(self):
+        points = [(1000, 100.0), (5000, 300.0), (7000, 200.0)]
+        power, torque = tune.engine_figures(points, 9000, 0)
+        self.assertEqual(torque, 300.0)
+        self.assertAlmostEqual(power, 275.0 * 5500 * self.HP)
+        self.assertEqual(tune.engine_figures([(2000, 100.0), (3000, 200.0)], 9000, 0)[1], 200.0)
+        self.assertIsNone(tune.engine_figures([(600, 100.0), (900, 200.0)], 550, 0))
+        self.assertIsNone(tune.engine_figures([(0, 100.0), (400, 200.0)], 9000, 0))
+
+    def test_the_boost_multiplies_both_peaks(self):
+        plain = tune.engine_figures([(1000, 100.0), (5000, 300.0)], 5000, 0)
+        boosted = tune.engine_figures([(1000, 100.0), (5000, 300.0)], 5000, 0.75)
+        self.assertEqual(boosted, (plain[0] * 1.75, plain[1] * 1.75))
+
+    def test_a_limiter_below_500_and_a_curve_with_fewer_than_two_points_give_none(self):
+        self.assertIsNone(tune.engine_figures([(0, 100.0), (1000, 200.0)], 499, 0))
+        self.assertIsNotNone(tune.engine_figures([(0, 100.0), (1000, 200.0)], 500, 0))
+        self.assertIsNone(tune.engine_figures([(1000, 100.0)], 7000, 0))
+        self.assertIsNone(tune.engine_figures([], 7000, 0))
+
+    def test_a_peak_torque_of_zero_or_less_gives_none(self):
+        self.assertIsNone(tune.engine_figures([(1000, 0.0), (5000, 0.0)], 7000, 0))
+        self.assertIsNone(tune.engine_figures([(1000, -5.0), (5000, -1.0)], 7000, 0.5))
+
+    def test_the_boost_of_a_car_is_the_smaller_of_max_boost_and_wastegate_per_turbo(self):
+        self.assertEqual(tune.summed_boost([]), 0)
+        self.assertEqual(tune.summed_boost([[1.0, 0.5], [0.6, 0.0], [0.4, 0.9]]), 0.5 + 0.6 + 0.4)
+
+
+class Calculated(CarCase):
+    """A stub car with the power curve (1000 rpm 100 Nm, 5000 rpm 300 Nm, 7000 rpm 200 Nm), a limiter of 7000, a spec sheet of 400 PS and 500 Nm and a
+    catalogue with the two display settings, power_scale and the limiter."""
+    HP = 2 * math.pi / 60 / 745.699872
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(tune._resolved.clear)
+        self.addCleanup(tune._engine_inputs.clear)
+        self.cars(("ks_x", "Car X"))
+        self.stock_info()
+        self.patch(tune, "load_cars_index", lambda work, game=None: None)
+        self.fc.add("data/power.curve", {"points": [{"t": 1000.0, "value": 100.0}, {"t": 5000.0, "value": 300.0}, {"t": 7000.0, "value": 200.0}]})
+        self.fc.add("presets/p.mechanicalcarpreset", {"description": "Name Preset Base", "car_specs": {"items": [
+            {"key": "KEY_POWER", "value": 400.0}, {"key": "KEY_TORQUE", "value": 500.0}]}})
+        scale = mini_setting("power_scale", kind="curve_scale", default=1.0, curve_from={"file": "@engine", "path": "powerCurve"}, targets=[])
+        self.cat = mini_catalogue(*metas(), limiter(), scale,
+                                  mini_setting("display_power_ps", targets=[("@mech_preset", "car_specs.items[key=KEY_POWER].value")]),
+                                  mini_setting("display_torque_nm", targets=[("@mech_preset", "car_specs.items[key=KEY_TORQUE].value")]))
+        self.patch(tune, "load_catalogue", lambda path=None: self.cat)
+
+    def turbo(self, *files):
+        """Give the engine turbo files, each (max_boost, wastegate or None)."""
+        texts = []
+        for i, (boost, gate) in enumerate(files):
+            self.fc.add("data/t%d.turbo" % i, {"max_boost": boost} if gate is None else {"max_boost": boost, "wastegate": gate})
+            texts.append(self.fc.game_path("data/t%d.turbo" % i))
+        self.engine["turbos_to_load"] = texts
+
+    def rows(self, state=None, tune_id=None, version=None):
+        if state is not None:
+            tune.save_state(self.work, "ks_x", state, tune_id)
+        return {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", self.cat, True, tune_id, version)}
+
+    def shown(self, state=None, **kw):
+        rows = self.rows(state, **kw)
+        return [(rows[i]["value"], rows[i]["changed"], rows[i].get("calculated")) for i in ("display_power_ps", "display_torque_nm")]
+
+
+STOCK_SHEET = [(400.0, False, None), (500.0, False, None)]
+
+
+class TestEngineInputs(Calculated):
+    def read(self):
+        return tune.engine_inputs(self.work, "ks_x", tune.base_dir(self.work, "ks_x"))
+
+    def test_the_curve_the_limiter_and_the_turbo_files_are_read(self):
+        self.turbo((1.0, 0.5), (0.6, None))
+        self.assertEqual(self.read(), {"points": [(1000.0, 100.0), (5000.0, 300.0), (7000.0, 200.0)], "limiter": 7000.0,
+                                       "turbos": [[1.0, 0.5], [0.6, 0.0]]})
+
+    def test_a_point_without_t_is_at_rpm_0_and_the_points_are_sorted(self):
+        self.fc.add("data/power.curve", {"points": [{"t": 4000.0, "value": 300.0}, {"value": 50.0}, {"t": 2000.0, "value": 100.0}]})
+        self.assertEqual(self.read()["points"], [(0.0, 50.0), (2000.0, 100.0), (4000.0, 300.0)])
+
+    def test_without_turbo_files_the_inline_turbos_of_the_engine_count(self):
+        self.engine["turbos"] = [{"max_boost": 0.9, "wastegate": 0.7}, {"max_boost": 0.5}]
+        self.assertEqual(self.read()["turbos"], [[0.9, 0.7], [0.5, 0.0]])
+        self.turbo((1.2, None))
+        tune.forget_resolved(self.work, "ks_x")
+        self.assertEqual(self.read()["turbos"], [[1.2, 0.0]])
+
+    def test_what_cannot_be_read_gives_none_and_no_exception(self):
+        self.engine["turbos_to_load"] = [self.fc.game_path("data/nothere.turbo")]
+        self.assertIsNone(self.read())
+        self.engine["turbos_to_load"] = []
+        del self.engine["powerCurve"]
+        self.assertIsNone(self.read())
+        self.engine["powerCurve"] = self.fc.game_path("data/power.curve")
+        del self.engine["limiter"]
+        self.assertIsNone(self.read())
+
+    def test_the_result_is_cached_while_the_stamp_is_unchanged_and_the_caller_gets_a_copy(self):
+        first = self.read()
+        first["turbos"].append([9.0, 9.0])
+        self.engine["limiter"] = 9000.0
+        self.assertEqual(self.read()["limiter"], 7000.0)
+        self.assertEqual(self.read()["turbos"], [])
+        tune.forget_resolved(self.work, "ks_x")
+        self.assertEqual(self.read()["limiter"], 9000.0)
+
+
+class TestCalculatedDisplay(Calculated):
+    def test_the_stock_engine_offers_nothing(self):
+        self.assertEqual(self.shown({}), STOCK_SHEET)
+        self.assertNotIn("calculated", self.rows()["display_power_ps"])
+        self.assertEqual(self.shown({"power_scale": 1.0, "limiter": 7000}), STOCK_SHEET)
+
+    def test_the_stock_turbo_is_in_both_figures_so_it_changes_nothing(self):
+        self.turbo((1.0, 0.5))
+        self.assertEqual(self.shown({}), STOCK_SHEET)
+
+    def test_a_changed_power_scale_scales_both_numbers(self):
+        self.assertEqual(self.shown({"power_scale": 1.2}), [(480.0, True, True), (600.0, True, True)])
+        self.assertEqual(self.shown({"power_scale": 0.5}), [(200.0, True, True), (250.0, True, True)])
+
+    def test_the_numbers_are_rounded_half_up(self):
+        self.assertEqual(self.shown({"power_scale": 1.125}), [(450.0, True, True), (563.0, True, True)])
+        self.assertEqual(self.rows()["display_torque_nm"]["default"], 500.0)
+
+    def test_a_difference_below_one_is_not_offered_and_one_is(self):
+        self.assertEqual(self.shown({"power_scale": 1.0008}), STOCK_SHEET)
+        self.assertNotIn("calculated", self.rows()["display_power_ps"])
+        self.assertEqual(self.shown({"power_scale": 1.002}), [(401.0, True, True), (501.0, True, True)])
+        self.assertEqual(self.shown({"power_scale": 1.0024}), [(401.0, True, True), (501.0, True, True)])
+
+    def test_a_lower_limiter_cuts_the_peaks(self):
+        # torque peak 250 Nm at 4000 rpm; power peak 250 Nm x 4000 rpm against 275 Nm x 5500 rpm of the stock engine
+        self.assertEqual(math.floor(400.0 * (250.0 * 4000) / (275.0 * 5500) + 0.5), 264)
+        self.assertEqual(self.shown({"limiter": 4000}), [(264.0, True, True), (417.0, True, True)])
+        self.assertEqual(self.shown({"limiter": 9000}), STOCK_SHEET)
+
+    def test_a_changed_boost_or_wastegate_changes_the_boost_factor(self):
+        self.turbo((1.0, 0.5))
+        self.assertEqual(self.shown({"turbo_wastegate_1": 1.0}), [(533.0, True, True), (667.0, True, True)])
+        self.assertEqual(self.shown({"turbo_boost_1": 0.25}), [(333.0, True, True), (417.0, True, True)])
+        self.assertEqual(self.shown({"turbo_boost_1": 3.0}), STOCK_SHEET)
+        self.assertEqual(self.shown({"turbo_boost_1": 0.25, "turbo_wastegate_1": 0.0}), [(333.0, True, True), (417.0, True, True)])
+
+    def test_a_turbo_without_a_wastegate_counts_with_its_max_boost(self):
+        self.turbo((0.5, None))
+        self.assertEqual(self.shown({"turbo_boost_1": 1.0}), [(533.0, True, True), (667.0, True, True)])
+        self.assertEqual(self.shown({"turbo_boost_1": 1.0, "turbo_wastegate_1": 0.5}), STOCK_SHEET)
+
+    def test_the_turbos_count_together_and_the_further_ones_keep_their_values(self):
+        self.turbo((0.5, 0.4), (0.3, None), (0.2, None))
+        self.assertEqual(self.shown({}), STOCK_SHEET)
+        # boost 0.4 + 0.6 + 0.2 = 1.2 against 0.4 + 0.3 + 0.2 = 0.9
+        self.assertEqual(self.shown({"turbo_boost_2": 0.6}), [(463.0, True, True), (579.0, True, True)])
+        self.assertEqual(self.shown({"turbo_boost_3": 0.6}), STOCK_SHEET)
+
+    def test_a_setting_of_a_turbo_the_car_does_not_have_is_ignored(self):
+        self.turbo((1.0, 0.5))
+        self.assertEqual(self.shown({"turbo_boost_2": 2.0, "turbo_wastegate_2": 2.0}), STOCK_SHEET)
+
+    def test_max_turbo_boost_does_not_enter(self):
+        self.turbo((1.0, 0.5))
+        self.engine["max_turbo_boost"] = 0.5
+        self.assertEqual(self.shown({"max_turbo_boost": 3.0}), STOCK_SHEET)
+
+    def test_cars_that_cannot_be_calculated_keep_their_stock_numbers(self):
+        for field in ("powerCurve", "limiter"):
+            with self.subTest(field):
+                tune.forget_resolved(self.work, "ks_x")
+                saved = self.engine.pop(field)
+                self.assertEqual(self.shown({"power_scale": 1.2, "limiter": 4000}), STOCK_SHEET)
+                self.engine[field] = saved
+
+    def test_a_curve_with_one_point_a_limiter_below_500_and_an_unreadable_turbo_file_are_not_calculated(self):
+        self.assertEqual(self.shown({"limiter": 400}), STOCK_SHEET)
+        self.fc.add("data/power.curve", {"points": [{"t": 3000.0, "value": 100.0}]})
+        tune.forget_resolved(self.work, "ks_x")
+        self.assertEqual(self.shown({"power_scale": 1.2}), STOCK_SHEET)
+        self.fc.add("data/power.curve", {"points": [{"t": 1000.0, "value": 100.0}, {"t": 5000.0, "value": 300.0}]})
+        self.engine["turbos_to_load"] = [self.fc.game_path("data/nothere.turbo")]
+        tune.forget_resolved(self.work, "ks_x")
+        self.assertEqual(self.shown({"power_scale": 1.2}), STOCK_SHEET)
+
+    def test_a_saved_number_that_is_no_number_gives_no_calculation_and_no_exception(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": "x"})
+        row = tune.effective_row(self.work, "ks_x", "display_power_ps", self.cat)
+        self.assertEqual((row["value"], row["changed"], "calculated" in row), (400.0, False, False))
+
+    def test_a_saved_value_is_the_users_override_and_is_not_calculated(self):
+        rows = self.rows({"power_scale": 1.2, "display_power_ps": 450.0})
+        self.assertEqual((rows["display_power_ps"]["value"], rows["display_power_ps"]["changed"], "calculated" in rows["display_power_ps"]), (450.0, True, False))
+        self.assertEqual((rows["display_torque_nm"]["value"], rows["display_torque_nm"]["calculated"]), (600.0, True))
+        rows = self.rows({"power_scale": 1.2, "display_power_ps": 480.0})
+        self.assertEqual((rows["display_power_ps"]["value"], rows["display_power_ps"]["changed"], "calculated" in rows["display_power_ps"]), (480.0, True, False))
+        rows = self.rows({"power_scale": 1.2, "display_power_ps": 400.0, "display_torque_nm": 500.0})
+        self.assertEqual([(rows[i]["value"], rows[i]["changed"], "calculated" in rows[i]) for i in ("display_power_ps", "display_torque_nm")],
+                         [(400.0, False, False), (500.0, False, False)])
+
+    def test_set_stores_the_typed_value_and_unset_returns_to_the_calculated_one(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": 1.2})
+        self.assertEqual(tune.effective_row(self.work, "ks_x", "display_power_ps", self.cat)["value"], 480.0)
+        tune.set_value(self.work, "ks_x", "display_power_ps", "450", self.cat)
+        row = tune.effective_row(self.work, "ks_x", "display_power_ps", self.cat)
+        self.assertEqual((row["value"], row["changed"], "calculated" in row), (450.0, True, False))
+        self.assertEqual(tune.load_state(self.work, "ks_x"), {"power_scale": 1.2, "display_power_ps": 450.0})
+        self.assertEqual(tune.unset_value(self.work, "ks_x", "display_power_ps", self.cat), {"id": "display_power_ps", "removed": True})
+        row = tune.effective_row(self.work, "ks_x", "display_power_ps", self.cat)
+        self.assertEqual((row["value"], row["changed"], row["calculated"]), (480.0, True, True))
+        self.assertEqual(tune.load_state(self.work, "ks_x"), {"power_scale": 1.2})
+
+    def test_effective_row_of_one_setting_gives_the_same_row_as_all_rows(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": 1.2, "limiter": 6000})
+        every = self.rows()
+        for sid in ("display_power_ps", "display_torque_nm"):
+            one = tune.effective_row(self.work, "ks_x", sid, self.cat)
+            self.assertEqual((one["value"], one["changed"], one.get("calculated")), (every[sid]["value"], every[sid]["changed"], every[sid].get("calculated")))
+
+    def test_a_row_that_is_not_applicable_is_left_alone(self):
+        self.cat = mini_catalogue(*metas(), limiter(), mini_setting("display_power_ps", targets=[("@mech_preset", "car_specs.items[key=KEY_NOPE].value")]))
+        tune.save_state(self.work, "ks_x", {"limiter": 4000})
+        row = {r["id"]: r for r in tune.effective_rows(self.work, "ks_x", self.cat, True)}["display_power_ps"]
+        self.assertEqual((row["applicable"], row["changed"], "calculated" in row), (False, False, False))
+
+    def test_a_catalogue_without_display_settings_reads_no_engine(self):
+        self.cat = mini_catalogue(*metas(), limiter())
+        self.patch(tune, "engine_inputs", lambda *a: self.fail("engine_inputs"))
+        self.assertEqual(self.rows({"limiter": 4000})["limiter"]["value"], 4000)
+
+    def test_each_tune_and_the_draft_use_their_own_state(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": 1.2})
+        tune.save_state(self.work, "ks_x", {"limiter": 4000}, "ax01")
+        tune.save_state(self.work, "ks_x", {}, tune.DRAFT)
+        self.assertEqual([self.shown(tune_id=t)[0][0] for t in (None, "ax01", tune.DRAFT)], [480.0, 264.0, 400.0])
+
+    def test_the_engine_is_read_once_per_root_and_not_again(self):
+        reads = []
+        real = tune.read_engine_inputs
+        self.patch(tune, "read_engine_inputs", lambda root, car_id: reads.append(root) or real(root, car_id))
+        self.rows({"power_scale": 1.2})
+        self.rows({"power_scale": 1.5})
+        self.assertEqual(reads, [tune.base_dir(self.work, "ks_x")])
+
+
+class TestCalculatedVersions(Calculated):
+    def test_each_version_uses_its_own_state(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": 1.2})
+        tune.add_version(self.work, "ks_x", "Drift")
+        tune.add_version(self.work, "ks_x", "Grip")
+        tune.save_version_state(self.work, "ks_x", {"limiter": 4000}, "v01")
+        self.assertEqual(self.shown(version="v01"), [(264.0, True, True), (417.0, True, True)])
+        self.assertEqual(self.shown(version="v02"), [(480.0, True, True), (600.0, True, True)])
+        self.assertEqual(self.shown(), [(480.0, True, True), (600.0, True, True)])
+        tune.save_version_state(self.work, "ks_x", {"limiter": 4000, "display_power_ps": 300.0}, "v01")
+        self.assertEqual(self.shown(version="v01"), [(300.0, True, None), (417.0, True, True)])
+
+
+class TestShowCalculated(Calculated):
+    main = TestVersions.main
+
+    def test_show_marks_a_calculated_row_with_a_trailing_column_and_no_other_row(self):
+        tune.save_state(self.work, "ks_x", {"power_scale": 1.2, "display_torque_nm": 450.0})
+        code, out, err = self.main("show")
+        self.assertEqual((code, err), (0, ""))
+        lines = out.splitlines()
+        rows = {line.split("|")[1].strip(): [c.strip() for c in line.split("|")] for line in lines[2:]}
+        self.assertEqual(rows["display_power_ps"], ["*", "display_power_ps", "480.0", "400.0", "", "calculated"])
+        self.assertEqual(rows["display_torque_nm"], ["*", "display_torque_nm", "450.0", "500.0", ""])
+        self.assertEqual(rows["limiter"], ["", "limiter", "7000", "7000", ""])
+        self.assertEqual(lines[0].split("|")[1].strip(), "id")
+        self.assertEqual(len(lines[0].split("|")), 5)
+        self.assertEqual(len([line for line in lines if "calculated" in line]), 1)
+
+    def test_show_without_a_calculated_row_has_no_extra_column(self):
+        tune.save_state(self.work, "ks_x", {"limiter": 6500})
+        out = self.main("show")[1]
+        self.assertNotIn("calculated", out)
+        self.assertTrue(all(line.count("|") == 4 for line in out.splitlines() if line.strip() and not line.startswith("-")))
 
 
 if __name__ == "__main__":

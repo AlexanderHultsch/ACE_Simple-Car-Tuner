@@ -1,6 +1,6 @@
 {
   "groups": [
-    {"name": "Meta", "description": "Names shown in the game's car list. The name suffix tells your tuned car apart from the stock car."},
+    {"name": "Meta", "description": "Names shown in the game's car list. The car name tells your tuned car apart from the stock car."},
     {"name": "Display", "description": "Numbers shown on the car's spec sheet in the menus. They are text only and do not change how the car drives."},
     {"name": "Engine", "description": "Power, rev limit and throttle behaviour of the engine. The power scale multiplies the whole torque curve."},
     {"name": "Turbo", "description": "Boost pressure of the turbos. Only cars whose engine has a turbo show these. The boost of each turbo is the real cap; the engine-level maximum is only a reference."},
@@ -23,11 +23,11 @@
     {
       "id": "variant_name", "group": "Meta", "label": "Variant name", "kind": "meta", "type": "string", "unit": "",
       "description": "Name of the car's preset/variant (value of the line whose key ends with _preset_base in en.cars.loc written by the build). The default is the stock car's own text for that line, you can change it. Shown only for cars whose stock text has such a line (cars without one get no variant line). Where exactly the game shows it is not confirmed.",
-      "verified": false, "default_template": "{stock_variant_name}", "handler": "variant_name", "targets": []
+      "verified": false, "default_template": "{stock_variant_name}", "handler": "variant_name", "ui": "hidden", "targets": []
     },
     {
-      "id": "name_suffix", "group": "Meta", "label": "Name suffix", "kind": "meta", "type": "string", "unit": "",
-      "description": "Text added after the stock car's name, separated by a space, to form the name of the tuned car in the game's car list. The default MY sorts the tuned car next to the stock car. 1 to 30 characters.",
+      "id": "name_suffix", "group": "Meta", "label": "Car name", "kind": "meta", "type": "string", "unit": "",
+      "description": "Text added after the stock car's name, separated by a space, to form the name of the tuned car in the game's car list (the car name is the stock name plus this text). The default MY sorts the tuned car next to the stock car. 1 to 30 characters.",
       "verified": false, "default": "MY", "handler": "name_suffix", "ui": "header", "targets": []
     },
     {
@@ -1067,170 +1067,170 @@
       ]
     },
     {
-      "id": "tyre_grip_lateral_front", "group": "Tyres", "label": "Front tyre lateral grip", "kind": "value", "type": "float", "unit": "mu",
-      "description": "Peak lateral (sideways) friction coefficient of the front tyre (TyresCompoundData.modelData.Dy0, a unitless mu; for example the stock road tyres of the BMW have about 1.2, the supercar tyres about 1.27). Assumed from the field name: a higher value gives the front axle more sideways grip; the real grip also depends on load, temperature, pressure and wear. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0.5, "max": 2.5,
+      "id": "tyre_grip_lateral_front", "group": "Tyres", "tyre_group": "Grip", "label": "Front tyre lateral grip", "kind": "value", "type": "float", "unit": "mu",
+      "description": "Peak lateral (sideways) friction coefficient of the front tyre (TyresCompoundData.modelData.Dy0, a unitless mu; for example the stock road tyres of the BMW have about 1.2, the supercar tyres about 1.27). Assumed from the field name: a higher value gives the front axle more sideways grip; the real grip also depends on load, temperature, pressure and wear. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0.5, "max": 2.5,
       "targets": [
         {"file": "@tyre_front", "path": "modelData.Dy0"}
       ]
     },
     {
-      "id": "tyre_grip_longitudinal_front", "group": "Tyres", "label": "Front tyre longitudinal grip", "kind": "value", "type": "float", "unit": "mu",
-      "description": "Peak longitudinal friction coefficient of the front tyre (modelData.Dx0, a unitless mu). Assumed from the field name: a higher value gives the front axle more grip when accelerating and braking. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0.5, "max": 2.5,
+      "id": "tyre_grip_longitudinal_front", "group": "Tyres", "tyre_group": "Grip", "label": "Front tyre longitudinal grip", "kind": "value", "type": "float", "unit": "mu",
+      "description": "Peak longitudinal friction coefficient of the front tyre (modelData.Dx0, a unitless mu). Assumed from the field name: a higher value gives the front axle more grip when accelerating and braking. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0.5, "max": 2.5,
       "targets": [
         {"file": "@tyre_front", "path": "modelData.Dx0"}
       ]
     },
     {
-      "id": "tyre_peak_slip_angle_front", "group": "Tyres", "label": "Front tyre peak slip angle", "kind": "value", "type": "float", "unit": "deg",
-      "description": "Slip angle at which the front tyre reaches its friction limit (modelData.friction_limit_angle, degrees, for example about 8 on the stock tyres of the BMW). Assumed from the field name: a larger angle lets the front axle keep gripping at bigger slip angles, so a slide builds up more progressively. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 3, "max": 15,
+      "id": "tyre_peak_slip_angle_front", "group": "Tyres", "tyre_group": "Slip and falloff", "label": "Front tyre peak slip angle", "kind": "value", "type": "float", "unit": "deg",
+      "description": "Slip angle at which the front tyre reaches its friction limit (modelData.friction_limit_angle, degrees, for example about 8 on the stock tyres of the BMW). Assumed from the field name: a larger angle lets the front axle keep gripping at bigger slip angles, so a slide builds up more progressively. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 3, "max": 15,
       "targets": [
         {"file": "@tyre_front", "path": "modelData.friction_limit_angle"}
       ]
     },
     {
-      "id": "tyre_load_reference_front", "group": "Tyres", "label": "Front tyre load reference", "kind": "value", "type": "float", "unit": "N",
-      "description": "Reference vertical load of the front tyre model (modelData.Fz0, newtons; for example 3930 front and 4320 rear on the stock tyres of the BMW). Assumed from the field name: the grip coefficients are valid at this load and the grip changes with the load around it, so a different value moves the load at which the front tyre works best. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 1000, "max": 10000,
+      "id": "tyre_load_reference_front", "group": "Tyres", "tyre_group": "Grip", "label": "Front tyre load reference", "kind": "value", "type": "float", "unit": "N",
+      "description": "Reference vertical load of the front tyre model (modelData.Fz0, newtons; for example 3930 front and 4320 rear on the stock tyres of the BMW). Assumed from the field name: the grip coefficients are valid at this load and the grip changes with the load around it, so a different value moves the load at which the front tyre works best. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 1000, "max": 10000,
       "targets": [
         {"file": "@tyre_front", "path": "modelData.Fz0"}
       ]
     },
     {
-      "id": "tyre_pressure_ref_front", "group": "Tyres", "label": "Front tyre inflation pressure (tyre file)", "kind": "value", "type": "float", "unit": "psi",
-      "description": "Inflation pressure stored in the front tyre file (TyresCompoundData.pressure, for example 30 psi on the stock tyres of the BMW, between 23 and 30 on the other tested cars). The pressure you run is the setup value (tyre_pressure_front); how the two interact in the game is not confirmed. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 15, "max": 50,
+      "id": "tyre_pressure_ref_front", "group": "Tyres", "tyre_group": "Pressure", "label": "Front tyre inflation pressure (tyre file)", "kind": "value", "type": "float", "unit": "psi",
+      "description": "Inflation pressure stored in the front tyre file (TyresCompoundData.pressure, for example 30 psi on the stock tyres of the BMW, between 23 and 30 on the other tested cars). The pressure you run is the setup value (tyre_pressure_front / tyre_pressure_rear); how the two interact in the game is not confirmed. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 15, "max": 50,
       "targets": [
         {"file": "@tyre_front", "path": "pressure"}
       ]
     },
     {
-      "id": "tyre_flex_lateral_front", "group": "Tyres", "label": "Front tyre lateral flex stiffness", "kind": "value", "type": "float", "unit": "",
-      "description": "Lateral flex stiffness of the front tyre (tyreData.lateralFlexK; the unit is not known; for example the stock tyres of the BMW have 30000 road and 38000 supercar). Assumed from the field name: a higher value makes the sidewall stiffer sideways, so the front tyre gives less. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 5000, "max": 100000,
+      "id": "tyre_flex_lateral_front", "group": "Tyres", "tyre_group": "Stiffness and damping", "label": "Front tyre lateral flex stiffness", "kind": "value", "type": "float", "unit": "",
+      "description": "Lateral flex stiffness of the front tyre (tyreData.lateralFlexK; the unit is not known; for example the stock tyres of the BMW have 30000 road and 38000 supercar). Assumed from the field name: a higher value makes the sidewall stiffer sideways, so the front tyre gives less. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 5000, "max": 100000,
       "targets": [
         {"file": "@tyre_front", "path": "tyreData.lateralFlexK"}
       ]
     },
     {
-      "id": "tyre_flex_longitudinal_front", "group": "Tyres", "label": "Front tyre longitudinal flex stiffness", "kind": "value", "type": "float", "unit": "",
-      "description": "Longitudinal flex stiffness of the front tyre (tyreData.longitudinalFlexK; the unit is not known; for example the stock tyres of the BMW have 18000 road and 20000 supercar). Assumed from the field name: a higher value makes the tyre stiffer in the driving direction, so the front tyre gives less under power and braking. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 5000, "max": 100000,
+      "id": "tyre_flex_longitudinal_front", "group": "Tyres", "tyre_group": "Stiffness and damping", "label": "Front tyre longitudinal flex stiffness", "kind": "value", "type": "float", "unit": "",
+      "description": "Longitudinal flex stiffness of the front tyre (tyreData.longitudinalFlexK; the unit is not known; for example the stock tyres of the BMW have 18000 road and 20000 supercar). Assumed from the field name: a higher value makes the tyre stiffer in the driving direction, so the front tyre gives less under power and braking. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 5000, "max": 100000,
       "targets": [
         {"file": "@tyre_front", "path": "tyreData.longitudinalFlexK"}
       ]
     },
     {
-      "id": "tyre_stiffness_rate_front", "group": "Tyres", "label": "Front tyre vertical stiffness", "kind": "value", "type": "float", "unit": "N/m",
-      "description": "Vertical stiffness of the front tyre (tyreData.rate; the unit is assumed to be N/m; for example the stock road tyres of the BMW have 282100 front and 322400 rear). Assumed from the field name: a higher value is a stiffer tyre that compresses less under load, which also changes the ride of the front axle. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 100000, "max": 600000,
+      "id": "tyre_stiffness_rate_front", "group": "Tyres", "tyre_group": "Stiffness and damping", "label": "Front tyre vertical stiffness", "kind": "value", "type": "float", "unit": "N/m",
+      "description": "Vertical stiffness of the front tyre (tyreData.rate; the unit is assumed to be N/m; for example the stock road tyres of the BMW have 282100 front and 322400 rear). Assumed from the field name: a higher value is a stiffer tyre that compresses less under load, which also changes the ride of the front axle. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 100000, "max": 600000,
       "targets": [
         {"file": "@tyre_front", "path": "tyreData.rate"}
       ]
     },
     {
-      "id": "tyre_heat_partition_front", "group": "Tyres", "label": "Front tyre heat partition", "kind": "value", "type": "float", "unit": "",
-      "description": "Heat partition coefficient of the front tyre (thermalData.heat_partition_coeff; for example 0.7 on the stock road tyres and 0.9 on the supercar tyres of the BMW, 1.4 on the Porsche slicks, so it is not a plain fraction). Assumed from the field name: it sets how much of the friction heat goes into the tyre, so a higher value heats the front tyre faster when it slides. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "id": "tyre_heat_partition_front", "group": "Tyres", "tyre_group": "Temperature", "label": "Front tyre heat partition", "kind": "value", "type": "float", "unit": "",
+      "description": "Heat partition coefficient of the front tyre (thermalData.heat_partition_coeff; for example 0.7 on the stock road tyres and 0.9 on the supercar tyres of the BMW, 1.4 on the Porsche slicks, so it is not a plain fraction). Assumed from the field name: it sets how much of the friction heat goes into the tyre, so a higher value heats the front tyre faster when it slides. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_front", "path": "thermalData.heat_partition_coeff"}
       ]
     },
     {
-      "id": "tyre_grain_gain_front", "group": "Tyres", "label": "Front tyre graining gain", "kind": "value", "type": "float", "unit": "",
-      "description": "Strength of the graining (rubber balling on the surface) of the front tyre. Written to both thermalData.grainGain and thermalData.grainGamma, which are equal in every tyre of the game (for example 0.27 on the stock road tyres of the BMW, 0.47 on the supercar tyres). Assumed from the field names: a higher value makes the front tyre grain up more when it slides. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "id": "tyre_grain_gain_front", "group": "Tyres", "tyre_group": "Wear and graining", "label": "Front tyre graining gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Strength of the graining (rubber balling on the surface) of the front tyre. Written to both thermalData.grainGain and thermalData.grainGamma, which are equal in every tyre of the game (for example 0.27 on the stock road tyres of the BMW, 0.47 on the supercar tyres). Assumed from the field names: a higher value makes the front tyre grain up more when it slides. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_front", "path": "thermalData.grainGain"},
         {"file": "@tyre_front", "path": "thermalData.grainGamma"}
       ]
     },
     {
-      "id": "tyre_grain_slip_angle_gain_front", "group": "Tyres", "label": "Front tyre graining slip angle gain", "kind": "value", "type": "float", "unit": "",
-      "description": "Graining caused by slip angle on the front tyre (thermalData.grainSlipAngleGain, for example 0.265 on the stock road tyres of the BMW, 0.565 on the supercar tyres). Assumed from the field name: a higher value makes sliding sideways grain the front tyre more. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "id": "tyre_grain_slip_angle_gain_front", "group": "Tyres", "tyre_group": "Wear and graining", "label": "Front tyre graining slip angle gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Graining caused by slip angle on the front tyre (thermalData.grainSlipAngleGain, for example 0.265 on the stock road tyres of the BMW, 0.565 on the supercar tyres). Assumed from the field name: a higher value makes sliding sideways grain the front tyre more. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_front", "path": "thermalData.grainSlipAngleGain"}
       ]
     },
     {
       "id": "tyre_grip_lateral_rear", "group": "Tyres", "label": "Rear tyre lateral grip", "kind": "value", "type": "float", "unit": "mu",
-      "description": "Peak lateral (sideways) friction coefficient of the rear tyre (TyresCompoundData.modelData.Dy0, a unitless mu; for example the stock road tyres of the BMW have about 1.2, the supercar tyres about 1.27). Assumed from the field name: a higher value gives the rear axle more sideways grip; the real grip also depends on load, temperature, pressure and wear. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0.5, "max": 2.5,
+      "description": "Peak lateral (sideways) friction coefficient of the rear tyre (TyresCompoundData.modelData.Dy0, a unitless mu; for example the stock road tyres of the BMW have about 1.2, the supercar tyres about 1.27). Assumed from the field name: a higher value gives the rear axle more sideways grip; the real grip also depends on load, temperature, pressure and wear. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0.5, "max": 2.5,
       "targets": [
         {"file": "@tyre_rear", "path": "modelData.Dy0"}
       ]
     },
     {
       "id": "tyre_grip_longitudinal_rear", "group": "Tyres", "label": "Rear tyre longitudinal grip", "kind": "value", "type": "float", "unit": "mu",
-      "description": "Peak longitudinal friction coefficient of the rear tyre (modelData.Dx0, a unitless mu). Assumed from the field name: a higher value gives the rear axle more grip when accelerating and braking. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0.5, "max": 2.5,
+      "description": "Peak longitudinal friction coefficient of the rear tyre (modelData.Dx0, a unitless mu). Assumed from the field name: a higher value gives the rear axle more grip when accelerating and braking. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0.5, "max": 2.5,
       "targets": [
         {"file": "@tyre_rear", "path": "modelData.Dx0"}
       ]
     },
     {
       "id": "tyre_peak_slip_angle_rear", "group": "Tyres", "label": "Rear tyre peak slip angle", "kind": "value", "type": "float", "unit": "deg",
-      "description": "Slip angle at which the rear tyre reaches its friction limit (modelData.friction_limit_angle, degrees, for example about 8 on the stock tyres of the BMW). Assumed from the field name: a larger angle lets the rear axle keep gripping at bigger slip angles, so a slide builds up more progressively. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 3, "max": 15,
+      "description": "Slip angle at which the rear tyre reaches its friction limit (modelData.friction_limit_angle, degrees, for example about 8 on the stock tyres of the BMW). Assumed from the field name: a larger angle lets the rear axle keep gripping at bigger slip angles, so a slide builds up more progressively. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 3, "max": 15,
       "targets": [
         {"file": "@tyre_rear", "path": "modelData.friction_limit_angle"}
       ]
     },
     {
       "id": "tyre_load_reference_rear", "group": "Tyres", "label": "Rear tyre load reference", "kind": "value", "type": "float", "unit": "N",
-      "description": "Reference vertical load of the rear tyre model (modelData.Fz0, newtons; for example 3930 front and 4320 rear on the stock tyres of the BMW). Assumed from the field name: the grip coefficients are valid at this load and the grip changes with the load around it, so a different value moves the load at which the rear tyre works best. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 1000, "max": 10000,
+      "description": "Reference vertical load of the rear tyre model (modelData.Fz0, newtons; for example 3930 front and 4320 rear on the stock tyres of the BMW). Assumed from the field name: the grip coefficients are valid at this load and the grip changes with the load around it, so a different value moves the load at which the rear tyre works best. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 1000, "max": 10000,
       "targets": [
         {"file": "@tyre_rear", "path": "modelData.Fz0"}
       ]
     },
     {
       "id": "tyre_pressure_ref_rear", "group": "Tyres", "label": "Rear tyre inflation pressure (tyre file)", "kind": "value", "type": "float", "unit": "psi",
-      "description": "Inflation pressure stored in the rear tyre file (TyresCompoundData.pressure, for example 30 psi on the stock tyres of the BMW, between 23 and 30 on the other tested cars). The pressure you run is the setup value (tyre_pressure_rear); how the two interact in the game is not confirmed. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 15, "max": 50,
+      "description": "Inflation pressure stored in the rear tyre file (TyresCompoundData.pressure, for example 30 psi on the stock tyres of the BMW, between 23 and 30 on the other tested cars). The pressure you run is the setup value (tyre_pressure_front / tyre_pressure_rear); how the two interact in the game is not confirmed. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 15, "max": 50,
       "targets": [
         {"file": "@tyre_rear", "path": "pressure"}
       ]
     },
     {
       "id": "tyre_flex_lateral_rear", "group": "Tyres", "label": "Rear tyre lateral flex stiffness", "kind": "value", "type": "float", "unit": "",
-      "description": "Lateral flex stiffness of the rear tyre (tyreData.lateralFlexK; the unit is not known; for example the stock tyres of the BMW have 30000 road and 38000 supercar). Assumed from the field name: a higher value makes the sidewall stiffer sideways, so the rear tyre gives less. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 5000, "max": 100000,
+      "description": "Lateral flex stiffness of the rear tyre (tyreData.lateralFlexK; the unit is not known; for example the stock tyres of the BMW have 30000 road and 38000 supercar). Assumed from the field name: a higher value makes the sidewall stiffer sideways, so the rear tyre gives less. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 5000, "max": 100000,
       "targets": [
         {"file": "@tyre_rear", "path": "tyreData.lateralFlexK"}
       ]
     },
     {
       "id": "tyre_flex_longitudinal_rear", "group": "Tyres", "label": "Rear tyre longitudinal flex stiffness", "kind": "value", "type": "float", "unit": "",
-      "description": "Longitudinal flex stiffness of the rear tyre (tyreData.longitudinalFlexK; the unit is not known; for example the stock tyres of the BMW have 18000 road and 20000 supercar). Assumed from the field name: a higher value makes the tyre stiffer in the driving direction, so the rear tyre gives less under power and braking. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 5000, "max": 100000,
+      "description": "Longitudinal flex stiffness of the rear tyre (tyreData.longitudinalFlexK; the unit is not known; for example the stock tyres of the BMW have 18000 road and 20000 supercar). Assumed from the field name: a higher value makes the tyre stiffer in the driving direction, so the rear tyre gives less under power and braking. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 5000, "max": 100000,
       "targets": [
         {"file": "@tyre_rear", "path": "tyreData.longitudinalFlexK"}
       ]
     },
     {
       "id": "tyre_stiffness_rate_rear", "group": "Tyres", "label": "Rear tyre vertical stiffness", "kind": "value", "type": "float", "unit": "N/m",
-      "description": "Vertical stiffness of the rear tyre (tyreData.rate; the unit is assumed to be N/m; for example the stock road tyres of the BMW have 282100 front and 322400 rear). Assumed from the field name: a higher value is a stiffer tyre that compresses less under load, which also changes the ride of the rear axle. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 100000, "max": 600000,
+      "description": "Vertical stiffness of the rear tyre (tyreData.rate; the unit is assumed to be N/m; for example the stock road tyres of the BMW have 282100 front and 322400 rear). Assumed from the field name: a higher value is a stiffer tyre that compresses less under load, which also changes the ride of the rear axle. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 100000, "max": 600000,
       "targets": [
         {"file": "@tyre_rear", "path": "tyreData.rate"}
       ]
     },
     {
       "id": "tyre_heat_partition_rear", "group": "Tyres", "label": "Rear tyre heat partition", "kind": "value", "type": "float", "unit": "",
-      "description": "Heat partition coefficient of the rear tyre (thermalData.heat_partition_coeff; for example 0.7 on the stock road tyres and 0.9 on the supercar tyres of the BMW, 1.4 on the Porsche slicks, so it is not a plain fraction). Assumed from the field name: it sets how much of the friction heat goes into the tyre, so a higher value heats the rear tyre faster when it slides. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "description": "Heat partition coefficient of the rear tyre (thermalData.heat_partition_coeff; for example 0.7 on the stock road tyres and 0.9 on the supercar tyres of the BMW, 1.4 on the Porsche slicks, so it is not a plain fraction). Assumed from the field name: it sets how much of the friction heat goes into the tyre, so a higher value heats the rear tyre faster when it slides. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_rear", "path": "thermalData.heat_partition_coeff"}
       ]
     },
     {
       "id": "tyre_grain_gain_rear", "group": "Tyres", "label": "Rear tyre graining gain", "kind": "value", "type": "float", "unit": "",
-      "description": "Strength of the graining (rubber balling on the surface) of the rear tyre. Written to both thermalData.grainGain and thermalData.grainGamma, which are equal in every tyre of the game (for example 0.27 on the stock road tyres of the BMW, 0.47 on the supercar tyres). Assumed from the field names: a higher value makes the rear tyre grain up more when it slides. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "description": "Strength of the graining (rubber balling on the surface) of the rear tyre. Written to both thermalData.grainGain and thermalData.grainGamma, which are equal in every tyre of the game (for example 0.27 on the stock road tyres of the BMW, 0.47 on the supercar tyres). Assumed from the field names: a higher value makes the rear tyre grain up more when it slides. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_rear", "path": "thermalData.grainGain"},
         {"file": "@tyre_rear", "path": "thermalData.grainGamma"}
@@ -1238,16 +1238,16 @@
     },
     {
       "id": "tyre_grain_slip_angle_gain_rear", "group": "Tyres", "label": "Rear tyre graining slip angle gain", "kind": "value", "type": "float", "unit": "",
-      "description": "Graining caused by slip angle on the rear tyre (thermalData.grainSlipAngleGain, for example 0.265 on the stock road tyres of the BMW, 0.565 on the supercar tyres). Assumed from the field name: a higher value makes sliding sideways grain the rear tyre more. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "min": 0, "max": 2,
+      "description": "Graining caused by slip angle on the rear tyre (thermalData.grainSlipAngleGain, for example 0.265 on the stock road tyres of the BMW, 0.565 on the supercar tyres). Assumed from the field name: a higher value makes sliding sideways grain the rear tyre more. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "min": 0, "max": 2,
       "targets": [
         {"file": "@tyre_rear", "path": "thermalData.grainSlipAngleGain"}
       ]
     },
     {
-      "id": "tyre_thermal_curve_front", "group": "Tyres", "label": "Front tyre thermal curve", "kind": "value", "type": "enum", "unit": "",
-      "description": "Thermal performance curve family of the front tyre (thermalData.thermalPerformanceCurve): a curve of the grip multiplier against tyre temperature in degrees Celsius. Each choice is one of the game's shared curve files, named without tcurve_ and .curve (content\\cars\\common_phsx\\tyres\\<folder>\\tcurve_<choice>.curve); the build points the tyre at that file, no curve is copied. Read from the curve files: road holds full grip at about 32 to 70 degrees, supercar at about 60 to 95, slick at about 70 to 105; the other families have their own windows. A hotter window suits a tyre that is heated by sliding. Stored in the car's own copy of the front tyre file (data/tyres/<car id>_front.tyre), which the build makes only when a front tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "choices": ["road", "supercar", "hypercar", "slick", "gt3_wet", "eco", "vintage_racing", "f12004_dry", "f12004_wet", "f12025_hard", "f12025_inters", "f12025_med", "f12025_soft", "f12025_wet", "f12026_hard", "f12026_inters", "f12026_med", "f12026_soft", "f12026_wet"],
+      "id": "tyre_thermal_curve_front", "group": "Tyres", "tyre_group": "Temperature", "label": "Front tyre thermal curve", "kind": "value", "type": "enum", "unit": "",
+      "description": "Thermal performance curve family of the front tyre (thermalData.thermalPerformanceCurve): a curve of the grip multiplier against tyre temperature in degrees Celsius. Each choice is one of the game's shared curve files, named without tcurve_ and .curve (content\\cars\\common_phsx\\tyres\\<folder>\\tcurve_<choice>.curve); the build points the tyre at that file, no curve is copied. Read from the curve files: road holds full grip at about 32 to 70 degrees, supercar at about 60 to 95, slick at about 70 to 105; the other families have their own windows. A hotter window suits a tyre that is heated by sliding. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "choices": ["road", "supercar", "hypercar", "slick", "gt3_wet", "eco", "vintage_racing", "f12004_dry", "f12004_wet", "f12025_hard", "f12025_inters", "f12025_med", "f12025_soft", "f12025_wet", "f12026_hard", "f12026_inters", "f12026_med", "f12026_soft", "f12026_wet"],
       "choice_values": {
         "road": "content\\cars\\common_phsx\\tyres\\road\\tcurve_road.curve",
         "supercar": "content\\cars\\common_phsx\\tyres\\supercar\\tcurve_supercar.curve",
@@ -1275,8 +1275,8 @@
     },
     {
       "id": "tyre_thermal_curve_rear", "group": "Tyres", "label": "Rear tyre thermal curve", "kind": "value", "type": "enum", "unit": "",
-      "description": "Thermal performance curve family of the rear tyre (thermalData.thermalPerformanceCurve): a curve of the grip multiplier against tyre temperature in degrees Celsius. Each choice is one of the game's shared curve files, named without tcurve_ and .curve (content\\cars\\common_phsx\\tyres\\<folder>\\tcurve_<choice>.curve); the build points the tyre at that file, no curve is copied. Read from the curve files: road holds full grip at about 32 to 70 degrees, supercar at about 60 to 95, slick at about 70 to 105; the other families have their own windows. A hotter window suits a tyre that is heated by sliding. Stored in the car's own copy of the rear tyre file (data/tyres/<car id>_rear.tyre), which the build makes only when a rear tyre setting is changed. It changes the compound the car starts on; the other compounds in the game's tyre list stay stock. The effect on driving is not tested in the game.",
-      "verified": false, "choices": ["road", "supercar", "hypercar", "slick", "gt3_wet", "eco", "vintage_racing", "f12004_dry", "f12004_wet", "f12025_hard", "f12025_inters", "f12025_med", "f12025_soft", "f12025_wet", "f12026_hard", "f12026_inters", "f12026_med", "f12026_soft", "f12026_wet"],
+      "description": "Thermal performance curve family of the rear tyre (thermalData.thermalPerformanceCurve): a curve of the grip multiplier against tyre temperature in degrees Celsius. Each choice is one of the game's shared curve files, named without tcurve_ and .curve (content\\cars\\common_phsx\\tyres\\<folder>\\tcurve_<choice>.curve); the build points the tyre at that file, no curve is copied. Read from the curve files: road holds full grip at about 32 to 70 degrees, supercar at about 60 to 95, slick at about 70 to 105; the other families have their own windows. A hotter window suits a tyre that is heated by sliding. The effect on driving is not tested in the game.",
+      "verified": false, "ui": "hidden", "choices": ["road", "supercar", "hypercar", "slick", "gt3_wet", "eco", "vintage_racing", "f12004_dry", "f12004_wet", "f12025_hard", "f12025_inters", "f12025_med", "f12025_soft", "f12025_wet", "f12026_hard", "f12026_inters", "f12026_med", "f12026_soft", "f12026_wet"],
       "choice_values": {
         "road": "content\\cars\\common_phsx\\tyres\\road\\tcurve_road.curve",
         "supercar": "content\\cars\\common_phsx\\tyres\\supercar\\tcurve_supercar.curve",
@@ -1344,6 +1344,799 @@
         {"file": "@car", "path": "performance_modes[*].electronics_settings.esc", "optional": true},
         {"file": "@setup", "path": "electronics.tc1", "optional": true},
         {"file": "@setup", "path": "electronics.tc2", "optional": true}
+      ]
+    }
+  ],
+  "tyre_groups": [
+    {"name": "Grip", "description": "Peak grip of the tyre and how it changes with load. Change little and test."},
+    {"name": "Slip and falloff", "description": "Slip angle of the grip peak and what happens beyond it. The falloff and slip ratio limit fields are stored by the racing slicks only."},
+    {"name": "Steering feel", "description": "Self-aligning torque of the tyre, which the steering wheel force follows."},
+    {"name": "Stiffness and damping", "description": "Vertical stiffness, sidewall flex, damping, mass and size growth of the tyre."},
+    {"name": "Camber", "description": "How the tyre grip and height react to the camber angle."},
+    {"name": "Pressure", "description": "How the tyre pressure changes grip, stiffness, rolling resistance and heat."},
+    {"name": "Speed sensitivity", "description": "How the grip changes with speed and with temperature. The longitudinal fields are the same values for the grip when accelerating and braking."},
+    {"name": "Temperature", "description": "Heating and cooling of the tyre and its temperature limits."},
+    {"name": "Wear and graining", "description": "Wear of the tread, graining and flat spots."},
+    {"name": "Rolling resistance", "description": "The resistance that slows the car when the tyre rolls."},
+    {"name": "Wet grooves", "description": "The grooves of the tread that carry water away."}
+  ],
+  "tyre_settings": [
+    {
+      "id": "tyre_load_exponent_lateral", "group": "Grip", "label": "Lateral load exponent", "kind": "value", "type": "float", "unit": "",
+      "description": "Exponent of the load dependence of the lateral grip (modelData.lsExpY). Assumed from the field name: it sets how the sideways grip changes when the load on the tyre changes. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.lsExpY"}
+      ]
+    },
+    {
+      "id": "tyre_load_exponent_longitudinal", "group": "Grip", "label": "Longitudinal load exponent", "kind": "value", "type": "float", "unit": "",
+      "description": "Exponent of the load dependence of the longitudinal grip (modelData.lsExpX). Assumed from the field name: it sets how the grip when accelerating and braking changes when the load on the tyre changes. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.lsExpX"}
+      ]
+    },
+    {
+      "id": "tyre_brake_grip_mod", "group": "Grip", "label": "Braking grip modifier", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the longitudinal grip when braking (modelData.brakeDXMod). Assumed from the field name: a value above 0 gives more grip when braking, a value below 0 less. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.brakeDXMod"}
+      ]
+    },
+    {
+      "id": "tyre_slip_stiffness_mult", "group": "Grip", "label": "Slip stiffness multiplier", "kind": "value", "type": "float", "unit": "",
+      "description": "A multiplier called cfXmult (modelData.cfXmult). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.cfXmult"}
+      ]
+    },
+    {
+      "id": "tyre_combined_factor", "group": "Grip", "label": "Combined slip factor", "kind": "value", "type": "float", "unit": "",
+      "description": "Factor for the combined slip of cornering and braking or accelerating (modelData.combinedFactor). Assumed from the field name: it sets how much grip is left sideways while the tyre also brakes or accelerates. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.combinedFactor"}
+      ]
+    },
+    {
+      "id": "tyre_brush_exponent", "group": "Grip", "label": "Brush model exponent", "kind": "value", "type": "float", "unit": "",
+      "description": "Exponent of the brush model of the tyre (modelData.brushExponent). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.brushExponent"}
+      ]
+    },
+    {
+      "id": "tyre_relaxation_lateral", "group": "Grip", "label": "Lateral relaxation length", "kind": "value", "type": "float", "unit": "m",
+      "description": "Relaxation length of the lateral force, in metres (modelData.relaxationLengthY). Assumed from the field name: the distance the tyre needs to build up its sideways force after a change, so a larger value makes the tyre respond more slowly. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.relaxationLengthY"}
+      ]
+    },
+    {
+      "id": "tyre_relaxation_longitudinal", "group": "Grip", "label": "Longitudinal relaxation length", "kind": "value", "type": "float", "unit": "m",
+      "description": "Relaxation length of the longitudinal force, in metres (modelData.relaxationLengthX). Assumed from the field name: the distance the tyre needs to build up its force when accelerating or braking, so a larger value makes the tyre respond more slowly. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.relaxationLengthX"}
+      ]
+    },
+    {
+      "id": "tyre_peak_slip_angle_load_gain", "group": "Slip and falloff", "label": "Peak slip angle load gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the peak slip angle with the load (modelData.friction_limit_angle_load_gain). Assumed from the field name: it sets how much the slip angle of the grip peak moves when the load on the tyre changes. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.friction_limit_angle_load_gain"}
+      ]
+    },
+    {
+      "id": "tyre_grip_slip_factor", "group": "Slip and falloff", "label": "Grip slip factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A slip factor of the grip (modelData.gripSlipFactor). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.gripSlipFactor"}
+      ]
+    },
+    {
+      "id": "tyre_peak_angle_temp_ref", "group": "Slip and falloff", "label": "Peak slip angle reference temperature", "kind": "value", "type": "float", "unit": "degC",
+      "description": "Tyre temperature in degrees Celsius at which the peak slip angle applies (thermalData.TrefFrictionLimitAngle). Assumed from the field name: the peak slip angle changes with the distance of the tyre temperature from this one. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.TrefFrictionLimitAngle"}
+      ]
+    },
+    {
+      "id": "tyre_peak_angle_temp_sensitivity", "group": "Slip and falloff", "label": "Peak slip angle temperature sensitivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Sensitivity of the peak slip angle to the tyre temperature (thermalData.frictionLimitAngleTSensitivity). Assumed from the field name: a higher value moves the peak slip angle more when the tyre is hotter or colder than its reference temperature. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.frictionLimitAngleTSensitivity"}
+      ]
+    },
+    {
+      "id": "tyre_use_slip_falloff", "group": "Slip and falloff", "label": "Slip falloff on", "kind": "flag", "type": "bool", "unit": "",
+      "description": "Switch for the grip falloff beyond the peak (modelData.use_slip_falloff). Assumed from the field name: it turns the falloff fields on. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.use_slip_falloff"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_level", "group": "Slip and falloff", "label": "Falloff level", "kind": "value", "type": "float", "unit": "",
+      "description": "Level of the lateral grip falloff (modelData.falloff_level). Assumed from the field name: it sets how much sideways grip is left far beyond the peak. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_level"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_slope", "group": "Slip and falloff", "label": "Falloff slope", "kind": "value", "type": "float", "unit": "",
+      "description": "Slope of the lateral grip falloff (modelData.falloff_slope). Assumed from the field name: it sets how fast the sideways grip falls beyond the peak. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_slope"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_shape", "group": "Slip and falloff", "label": "Falloff shape", "kind": "value", "type": "float", "unit": "",
+      "description": "Shape of the lateral grip falloff (modelData.falloff_shape). Assumed from the field name: it sets the form of the curve of the sideways grip beyond the peak. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_shape"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_x_level", "group": "Slip and falloff", "label": "Longitudinal falloff level", "kind": "value", "type": "float", "unit": "",
+      "description": "Level of the longitudinal grip falloff (modelData.falloff_x_level). Assumed from the field name: the same as the falloff level, for the grip when accelerating and braking. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_x_level"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_x_slope", "group": "Slip and falloff", "label": "Longitudinal falloff slope", "kind": "value", "type": "float", "unit": "",
+      "description": "Slope of the longitudinal grip falloff (modelData.falloff_x_slope). Assumed from the field name: the same as the falloff slope, for the grip when accelerating and braking. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_x_slope"}
+      ]
+    },
+    {
+      "id": "tyre_falloff_x_shape", "group": "Slip and falloff", "label": "Longitudinal falloff shape", "kind": "value", "type": "float", "unit": "",
+      "description": "Shape of the longitudinal grip falloff (modelData.falloff_x_shape). Assumed from the field name: the same as the falloff shape, for the grip when accelerating and braking. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.falloff_x_shape"}
+      ]
+    },
+    {
+      "id": "tyre_use_slip_ratio_limit", "group": "Slip and falloff", "label": "Slip ratio limit on", "kind": "flag", "type": "bool", "unit": "",
+      "description": "Switch for the slip ratio limit (modelData.use_sr_limit). Assumed from the field name: it turns the slip ratio limit fields on. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.use_sr_limit"}
+      ]
+    },
+    {
+      "id": "tyre_slip_ratio_limit", "group": "Slip and falloff", "label": "Slip ratio limit", "kind": "value", "type": "float", "unit": "",
+      "description": "Limit of the slip ratio (modelData.slip_ratio_limit). Assumed from the field name: it caps the wheel slip ratio the tyre model works with. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.slip_ratio_limit"}
+      ]
+    },
+    {
+      "id": "tyre_slip_ratio_limit_load_gain", "group": "Slip and falloff", "label": "Slip ratio limit load gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the slip ratio limit with the load (modelData.slip_ratio_limit_load_gain). Assumed from the field name: it sets how much the slip ratio limit moves when the load on the tyre changes. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.slip_ratio_limit_load_gain"}
+      ]
+    },
+    {
+      "id": "tyre_new_combined", "group": "Slip and falloff", "label": "New combined slip model", "kind": "flag", "type": "bool", "unit": "",
+      "description": "Switch for another way to combine the sideways and the longitudinal force (modelData.new_combined). Assumed from the field name: it selects the newer combined slip calculation. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.new_combined"}
+      ]
+    },
+    {
+      "id": "tyre_fx_shift_sa", "group": "Slip and falloff", "label": "Longitudinal force shift with slip angle", "kind": "value", "type": "float", "unit": "",
+      "description": "A shift of the longitudinal force (Fx) depending on the slip angle (SA) (modelData.fx_shift_SA). Assumed from the field name: it shifts the longitudinal force when the tyre also slips sideways. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.fx_shift_SA"}
+      ]
+    },
+    {
+      "id": "tyre_fx_scale_sa", "group": "Slip and falloff", "label": "Longitudinal force scale with slip angle", "kind": "value", "type": "float", "unit": "",
+      "description": "A scale of the longitudinal force (Fx) depending on the slip angle (SA) (modelData.fx_scale_SA). Assumed from the field name: it scales the longitudinal force when the tyre also slips sideways. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.fx_scale_SA"}
+      ]
+    },
+    {
+      "id": "tyre_fy_shift_sr", "group": "Slip and falloff", "label": "Lateral force shift with slip ratio", "kind": "value", "type": "float", "unit": "",
+      "description": "A shift of the lateral force (Fy) depending on the slip ratio (SR) (modelData.fy_shift_SR). Assumed from the field name: it shifts the sideways force when the tyre also slips in the driving direction. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.fy_shift_SR"}
+      ]
+    },
+    {
+      "id": "tyre_fy_scale_sr", "group": "Slip and falloff", "label": "Lateral force scale with slip ratio", "kind": "value", "type": "float", "unit": "",
+      "description": "A scale of the lateral force (Fy) depending on the slip ratio (SR) (modelData.fy_scale_SR). Assumed from the field name: it scales the sideways force when the tyre also slips in the driving direction. Only some tyres (the racing slicks) store this field. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.fy_scale_SR"}
+      ]
+    },
+    {
+      "id": "tyre_mz_scale", "group": "Steering feel", "label": "Aligning torque scale", "kind": "value", "type": "float", "unit": "",
+      "description": "Scale of the self-aligning torque (Mz) (modelData.mzScale). Assumed from the field name: a higher value gives a stronger pull back to the centre in the steering wheel force. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.mzScale"}
+      ]
+    },
+    {
+      "id": "tyre_mz_tweak_mult", "group": "Steering feel", "label": "Aligning torque tweak multiplier", "kind": "value", "type": "float", "unit": "",
+      "description": "A multiplier on the self-aligning torque (Mz) (modelData.mzTweakMult). Assumed from the field name: it scales the self-aligning torque like the scale, as a second adjustment. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.mzTweakMult"}
+      ]
+    },
+    {
+      "id": "tyre_mz_trail_slip_reduction", "group": "Steering feel", "label": "Trail slip reduction", "kind": "value", "type": "float", "unit": "",
+      "description": "A reduction of the trail of the self-aligning torque with the slip (modelData.mzTrailNdSlipReduction). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.mzTrailNdSlipReduction"}
+      ]
+    },
+    {
+      "id": "tyre_mz_trail_remap", "group": "Steering feel", "label": "Trail remap", "kind": "value", "type": "float", "unit": "",
+      "description": "A remap of the trail of the self-aligning torque (modelData.mzTrailRemap). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.mzTrailRemap"}
+      ]
+    },
+    {
+      "id": "tyre_progressive_rate", "group": "Stiffness and damping", "label": "Progressive stiffness rate", "kind": "value", "type": "float", "unit": "",
+      "description": "A progressive part of the vertical stiffness (tyreData.progressive_rate). Assumed from the field name: the stiffness grows the more the tyre is compressed. Only some tyres store this field. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.progressive_rate"}
+      ]
+    },
+    {
+      "id": "tyre_flex_damping_lateral", "group": "Stiffness and damping", "label": "Lateral flex damping", "kind": "value", "type": "float", "unit": "",
+      "description": "Damping of the lateral flex of the tyre (tyreData.lateralFlexC). Assumed from the field name: the damping that goes with the lateral flex stiffness. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.lateralFlexC"}
+      ]
+    },
+    {
+      "id": "tyre_flex_damping_longitudinal", "group": "Stiffness and damping", "label": "Longitudinal flex damping", "kind": "value", "type": "float", "unit": "",
+      "description": "Damping of the longitudinal flex of the tyre (tyreData.longitudinalFlexC). Assumed from the field name: the damping that goes with the longitudinal flex stiffness. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.longitudinalFlexC"}
+      ]
+    },
+    {
+      "id": "tyre_damping", "group": "Stiffness and damping", "label": "Vertical damping", "kind": "value", "type": "float", "unit": "",
+      "description": "Damping of the tyre (tyreData.damping). Assumed from the field name: how strongly the tyre damps its up and down movement. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.damping"}
+      ]
+    },
+    {
+      "id": "tyre_damping_threshold_speed", "group": "Stiffness and damping", "label": "Damping threshold speed", "kind": "value", "type": "float", "unit": "m/s",
+      "description": "A speed threshold of the tyre damping, in metres per second (tyreData.dampingThresholdSpeedMs). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.dampingThresholdSpeedMs"}
+      ]
+    },
+    {
+      "id": "tyre_speed_damping_factor", "group": "Stiffness and damping", "label": "Speed damping factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the tyre damping that depends on speed (tyreData.speedDampingFactor). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.speedDampingFactor"}
+      ]
+    },
+    {
+      "id": "tyre_deflection_damping_factor", "group": "Stiffness and damping", "label": "Deflection damping factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the tyre damping that depends on the deflection of the tyre (tyreData.deflectionDampingFactor). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.deflectionDampingFactor"}
+      ]
+    },
+    {
+      "id": "tyre_radius_raise", "group": "Stiffness and damping", "label": "Radius raise", "kind": "value", "type": "float", "unit": "",
+      "description": "A coefficient for the growth of the tyre radius (tyreData.radiusRaiseK). Assumed from the field name: the tyre gets larger when it spins fast. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.radiusRaiseK"}
+      ]
+    },
+    {
+      "id": "tyre_mass", "group": "Stiffness and damping", "label": "Tyre mass", "kind": "value", "type": "float", "unit": "kg",
+      "description": "Mass of the tyre, in kilograms (tyreData.mass). Assumed from the field name: a heavier tyre adds unsprung mass and rotating mass. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.mass"}
+      ]
+    },
+    {
+      "id": "tyre_angular_inertia", "group": "Stiffness and damping", "label": "Angular inertia", "kind": "value", "type": "float", "unit": "",
+      "description": "Moment of inertia of the tyre around its axle (tyreData.angularInertia). Assumed from the field name: a higher value makes the wheel harder to spin up and to slow down. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.angularInertia"}
+      ]
+    },
+    {
+      "id": "tyre_camber_gain", "group": "Camber", "label": "Camber gain", "kind": "value", "type": "float", "unit": "",
+      "description": "A gain of the camber effect (camberData.camberGain). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.camberGain"}
+      ]
+    },
+    {
+      "id": "tyre_camber_vertical_range", "group": "Camber", "label": "Camber vertical range", "kind": "value", "type": "float", "unit": "deg",
+      "description": "Camber range in degrees over which the vertical stiffness changes (camberData.camberVerticalKRangeDeg). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.camberVerticalKRangeDeg"}
+      ]
+    },
+    {
+      "id": "tyre_camber_vertical_gain", "group": "Camber", "label": "Camber vertical gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the vertical stiffness with the camber (camberData.camberVerticalKGain). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.camberVerticalKGain"}
+      ]
+    },
+    {
+      "id": "tyre_camber_grip_0", "group": "Camber", "label": "Camber grip 0", "kind": "value", "type": "float", "unit": "",
+      "description": "First coefficient of the grip change with camber (camberData.dcamber0). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.dcamber0"}
+      ]
+    },
+    {
+      "id": "tyre_camber_grip_1", "group": "Camber", "label": "Camber grip 1", "kind": "value", "type": "float", "unit": "",
+      "description": "Second coefficient of the grip change with camber (camberData.dcamber1). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.dcamber1"}
+      ]
+    },
+    {
+      "id": "tyre_camber_grip_1_longitudinal", "group": "Camber", "label": "Camber grip 1 longitudinal", "kind": "value", "type": "float", "unit": "",
+      "description": "Second coefficient of the longitudinal grip change with camber (camberData.dcamber1_x). The exact meaning is not known. Only some tyres store this field. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "camberData.dcamber1_x"}
+      ]
+    },
+    {
+      "id": "tyre_ideal_pressure", "group": "Pressure", "label": "Ideal pressure", "kind": "value", "type": "float", "unit": "psi",
+      "description": "Pressure at which the tyre works best (pressureData.idealPressure). Assumed from the field name: the grip is highest at this pressure. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.idealPressure"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_reference", "group": "Pressure", "label": "Reference pressure", "kind": "value", "type": "float", "unit": "psi",
+      "description": "Reference pressure of the pressure effects (pressureData.pressureReference). Assumed from the field name: the pressure effects are measured from this pressure. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.pressureReference"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_spring_gain", "group": "Pressure", "label": "Pressure spring gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Gain of the vertical stiffness with the pressure (pressureData.pressureSpringGain). Assumed from the field name: a higher value makes the tyre stiffer when it has more pressure. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.pressureSpringGain"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_limit_angle_gain", "group": "Pressure", "label": "Pressure peak slip angle gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the peak slip angle with the pressure (pressureData.pressure_limit_angle_gain). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.pressure_limit_angle_gain"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_rolling_gain", "group": "Pressure", "label": "Pressure rolling resistance gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the rolling resistance with the pressure (pressureData.rollingResistanceGain). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.rollingResistanceGain"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_heat_gain", "group": "Pressure", "label": "Pressure rolling heat gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the rolling heat with the pressure (pressureData.rollingHeatGain). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.rollingHeatGain"}
+      ]
+    },
+    {
+      "id": "tyre_pressure_grip_gain", "group": "Pressure", "label": "Pressure grip gain", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the grip with the pressure (pressureData.gainD). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.gainD"}
+      ]
+    },
+    {
+      "id": "tyre_curb_pressure_loss_mult", "group": "Pressure", "label": "Curb pressure loss multiplier", "kind": "value", "type": "float", "unit": "",
+      "description": "A multiplier of the pressure the tyre loses on curbs (pressureData.curbPressureLossMult). Assumed from the field name: a higher value loses more pressure on curbs. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.curbPressureLossMult"}
+      ]
+    },
+    {
+      "id": "tyre_curb_pressure_loss_threshold", "group": "Pressure", "label": "Curb pressure loss threshold", "kind": "value", "type": "float", "unit": "",
+      "description": "A threshold for the pressure the tyre loses on curbs (pressureData.curbPressureLossThreshold). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "pressureData.curbPressureLossThreshold"}
+      ]
+    },
+    {
+      "id": "tyre_speed_mu0", "group": "Speed sensitivity", "label": "Speed grip base", "kind": "value", "type": "float", "unit": "",
+      "description": "Base value of the speed dependence of the grip (speedSensitivity.mu0T). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.mu0T"}
+      ]
+    },
+    {
+      "id": "tyre_speed_ref", "group": "Speed sensitivity", "label": "Speed reference", "kind": "value", "type": "float", "unit": "",
+      "description": "Reference speed of the speed dependence of the grip (speedSensitivity.ref_speed). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.ref_speed"}
+      ]
+    },
+    {
+      "id": "tyre_speed_sensitivity", "group": "Speed sensitivity", "label": "Speed sensitivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Sensitivity of the grip to the speed (speedSensitivity.muSpeedSensitivity). Assumed from the field name: a higher value changes the grip more with speed. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.muSpeedSensitivity"}
+      ]
+    },
+    {
+      "id": "tyre_speed_temp_sensitivity", "group": "Speed sensitivity", "label": "Speed temperature sensitivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Sensitivity of the grip to the tyre temperature (speedSensitivity.muTSensitivity). Assumed from the field name: a higher value changes the grip more with the temperature. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.muTSensitivity"}
+      ]
+    },
+    {
+      "id": "tyre_speed_temp_ref", "group": "Speed sensitivity", "label": "Speed temperature reference", "kind": "value", "type": "float", "unit": "degC",
+      "description": "Reference temperature in degrees Celsius of the temperature dependence of the grip (speedSensitivity.TrefMuT). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.TrefMuT"}
+      ]
+    },
+    {
+      "id": "tyre_speed_mu0_longitudinal", "group": "Speed sensitivity", "label": "Longitudinal speed grip base", "kind": "value", "type": "float", "unit": "",
+      "description": "Base value of the speed dependence of the longitudinal grip (speedSensitivity.mu0T_x). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.mu0T_x"}
+      ]
+    },
+    {
+      "id": "tyre_speed_ref_longitudinal", "group": "Speed sensitivity", "label": "Longitudinal speed reference", "kind": "value", "type": "float", "unit": "",
+      "description": "Reference speed of the speed dependence of the longitudinal grip (speedSensitivity.ref_speed_x). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.ref_speed_x"}
+      ]
+    },
+    {
+      "id": "tyre_speed_sensitivity_longitudinal", "group": "Speed sensitivity", "label": "Longitudinal speed sensitivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Sensitivity of the longitudinal grip to the speed (speedSensitivity.muSpeedSensitivity_x). Assumed from the field name: a higher value changes the longitudinal grip more with speed. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.muSpeedSensitivity_x"}
+      ]
+    },
+    {
+      "id": "tyre_speed_temp_sensitivity_longitudinal", "group": "Speed sensitivity", "label": "Longitudinal speed temperature sensitivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Sensitivity of the longitudinal grip to the tyre temperature (speedSensitivity.muTSensitivity_x). Assumed from the field name: a higher value changes the longitudinal grip more with the temperature. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.muTSensitivity_x"}
+      ]
+    },
+    {
+      "id": "tyre_speed_temp_ref_longitudinal", "group": "Speed sensitivity", "label": "Longitudinal speed temperature reference", "kind": "value", "type": "float", "unit": "degC",
+      "description": "Reference temperature in degrees Celsius of the temperature dependence of the longitudinal grip (speedSensitivity.TrefMuT_x). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "speedSensitivity.TrefMuT_x"}
+      ]
+    },
+    {
+      "id": "tyre_rolling_heat", "group": "Temperature", "label": "Rolling heat", "kind": "value", "type": "float", "unit": "",
+      "description": "Factor of the heat the tyre makes by rolling (thermalData.rolling_factor). Assumed from the field name: a higher value heats the tyre more while it rolls. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.rolling_factor"}
+      ]
+    },
+    {
+      "id": "tyre_cool_factor", "group": "Temperature", "label": "Cooling factor", "kind": "value", "type": "float", "unit": "",
+      "description": "Factor of the cooling of the tyre (thermalData.cool_factor). Assumed from the field name: a higher value cools the tyre faster. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.cool_factor"}
+      ]
+    },
+    {
+      "id": "tyre_cool_factor_rain", "group": "Temperature", "label": "Cooling factor in rain", "kind": "value", "type": "float", "unit": "",
+      "description": "Factor of the cooling of the tyre in rain (thermalData.cool_factor_rain). Assumed from the field name: a higher value cools the tyre faster when it rains. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.cool_factor_rain"}
+      ]
+    },
+    {
+      "id": "tyre_road_conduction", "group": "Temperature", "label": "Road conduction", "kind": "value", "type": "float", "unit": "",
+      "description": "Heat exchange between the tyre and the road (thermalData.road_conduction). Assumed from the field name: a higher value moves heat between road and tyre faster. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.road_conduction"}
+      ]
+    },
+    {
+      "id": "tyre_thermal_conductivity", "group": "Temperature", "label": "Thermal conductivity", "kind": "value", "type": "float", "unit": "",
+      "description": "Thermal conductivity of the tyre rubber (thermalData.thermal_conductivity). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.thermal_conductivity"}
+      ]
+    },
+    {
+      "id": "tyre_density", "group": "Temperature", "label": "Density", "kind": "value", "type": "float", "unit": "",
+      "description": "Density of the tyre rubber (thermalData.density). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.density"}
+      ]
+    },
+    {
+      "id": "tyre_specific_heat", "group": "Temperature", "label": "Specific heat", "kind": "value", "type": "float", "unit": "",
+      "description": "Specific heat of the tyre rubber (thermalData.specific_heat). Assumed from the field name: a higher value makes the tyre heat up and cool down more slowly. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.specific_heat"}
+      ]
+    },
+    {
+      "id": "tyre_surface_core_ratio", "group": "Temperature", "label": "Surface to core mass ratio", "kind": "value", "type": "float", "unit": "",
+      "description": "Ratio of the mass of the tyre surface to the mass of its core (thermalData.surface_core_mass_ratio). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.surface_core_mass_ratio"}
+      ]
+    },
+    {
+      "id": "tyre_practical_temp_source", "group": "Temperature", "label": "Practical temperature source", "kind": "value", "type": "float", "unit": "",
+      "description": "A weight for the temperature that counts for the grip (thermalData.practicalTempSource). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.practicalTempSource"}
+      ]
+    },
+    {
+      "id": "tyre_brake_transfer", "group": "Temperature", "label": "Brake heat transfer", "kind": "value", "type": "float", "unit": "",
+      "description": "Factor of the heat that moves from the brakes into the tyre (thermalData.brakeTransferFactor). Assumed from the field name: a higher value heats the tyre more when the brakes are hot. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.brakeTransferFactor"}
+      ]
+    },
+    {
+      "id": "tyre_blanket_temp", "group": "Temperature", "label": "Blanket temperature", "kind": "value", "type": "float", "unit": "degC",
+      "description": "Temperature of the tyre warmers, in degrees Celsius (tyreData.blanketTemperature). Assumed from the field name: the temperature the tyre starts at when it comes from the blanket. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.blanketTemperature"}
+      ]
+    },
+    {
+      "id": "tyre_explosion_temp", "group": "Temperature", "label": "Explosion temperature", "kind": "value", "type": "float", "unit": "degC",
+      "description": "Temperature in degrees Celsius at which the tyre is destroyed (tyreData.explosionTemperature). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.explosionTemperature"}
+      ]
+    },
+    {
+      "id": "tyre_patch_spring", "group": "Temperature", "label": "Contact patch spring", "kind": "value", "type": "float", "unit": "",
+      "description": "Spring rate of the contact patch (thermalData.verticalSpringK). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.verticalSpringK"}
+      ]
+    },
+    {
+      "id": "tyre_patch_damping", "group": "Temperature", "label": "Contact patch damping", "kind": "value", "type": "float", "unit": "",
+      "description": "Damping of the contact patch (thermalData.verticalDampK). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.verticalDampK"}
+      ]
+    },
+    {
+      "id": "tyre_contact_imo", "group": "Temperature", "label": "Contact IMO", "kind": "value", "type": "float", "unit": "",
+      "description": "A value called contactIMO of the contact patch (thermalData.contactIMO). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.contactIMO"}
+      ]
+    },
+    {
+      "id": "tyre_grain_slip_angle_gamma", "group": "Wear and graining", "label": "Graining slip angle gamma", "kind": "value", "type": "float", "unit": "",
+      "description": "Exponent of the graining caused by the slip angle (thermalData.grainSlipAngleGamma). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.grainSlipAngleGamma"}
+      ]
+    },
+    {
+      "id": "tyre_grain_slip_angle_threshold", "group": "Wear and graining", "label": "Graining slip angle threshold", "kind": "value", "type": "float", "unit": "",
+      "description": "Slip angle threshold of the graining (thermalData.grainSlipAngleThreshold). Assumed from the field name: the graining by the slip angle starts beyond this slip angle. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.grainSlipAngleThreshold"}
+      ]
+    },
+    {
+      "id": "tyre_grain_factor", "group": "Wear and graining", "label": "Graining factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the graining (modelData.grainFactor). Assumed from the field name: a higher value lets the tyre grain more. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.grainFactor"}
+      ]
+    },
+    {
+      "id": "tyre_contact_wear_imo", "group": "Wear and graining", "label": "Contact wear IMO", "kind": "value", "type": "float", "unit": "",
+      "description": "A value called contactWearIMO of the wear (modelData.contactWearIMO). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "modelData.contactWearIMO"}
+      ]
+    },
+    {
+      "id": "tyre_wear_mult", "group": "Wear and graining", "label": "Wear multiplier", "kind": "value", "type": "float", "unit": "",
+      "description": "A multiplier of the tyre wear (thermalData.wearMult). Assumed from the field name: a higher value wears the tyre faster. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "thermalData.wearMult"}
+      ]
+    },
+    {
+      "id": "tyre_wear_curve", "group": "Wear and graining", "label": "Wear curve", "kind": "value", "type": "enum", "unit": "",
+      "description": "Wear curve family of the tyre (modelData.wearCurve): a curve of the wear against the use of the tyre. Each choice is one of the game's shared curve files, named without wear_ and .curve (content\\cars\\common_phsx\\tyres\\<folder>\\wear_<choice>.curve); the tyre is pointed at that file, no curve is copied. Assumed from the field name: a different family wears the tyre faster or slower. Not tested in the game.",
+      "verified": false,
+      "choices": ["road", "supercar", "hypercar", "slick", "gt3_wet", "eco", "vintage_racing", "f12004_dry", "f12004_wet", "f12025_hard", "f12025_inters", "f12025_med", "f12025_soft", "f12025_wet"],
+      "choice_values": {"road": "content\\cars\\common_phsx\\tyres\\road\\wear_road.curve", "supercar": "content\\cars\\common_phsx\\tyres\\supercar\\wear_supercar.curve", "hypercar": "content\\cars\\common_phsx\\tyres\\hypercar\\wear_hypercar.curve", "slick": "content\\cars\\common_phsx\\tyres\\racing_slicks\\wear_slick.curve", "gt3_wet": "content\\cars\\common_phsx\\tyres\\racing_wet\\wear_gt3_wet.curve", "eco": "content\\cars\\common_phsx\\tyres\\eco\\wear_eco.curve", "vintage_racing": "content\\cars\\common_phsx\\tyres\\vintage\\wear_vintage_racing.curve", "f12004_dry": "content\\cars\\common_phsx\\tyres\\f1_2004\\wear_f12004_dry.curve", "f12004_wet": "content\\cars\\common_phsx\\tyres\\f1_2004\\wear_f12004_wet.curve", "f12025_hard": "content\\cars\\common_phsx\\tyres\\f1_2025\\wear_f12025_hard.curve", "f12025_inters": "content\\cars\\common_phsx\\tyres\\f1_2025\\wear_f12025_inters.curve", "f12025_med": "content\\cars\\common_phsx\\tyres\\f1_2025\\wear_f12025_med.curve", "f12025_soft": "content\\cars\\common_phsx\\tyres\\f1_2025\\wear_f12025_soft.curve", "f12025_wet": "content\\cars\\common_phsx\\tyres\\f1_2025\\wear_f12025_wet.curve"},
+      "targets": [
+        {"file": "@tyre", "path": "modelData.wearCurve"}
+      ]
+    },
+    {
+      "id": "tyre_tread_height", "group": "Wear and graining", "label": "Tread height", "kind": "value", "type": "float", "unit": "mm",
+      "description": "Height of the tread in millimetres (tyreData.treadHeightMM). Assumed from the field name: a higher tread lasts longer. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.treadHeightMM"}
+      ]
+    },
+    {
+      "id": "tyre_tread_consumption", "group": "Wear and graining", "label": "Tread consumption", "kind": "value", "type": "float", "unit": "",
+      "description": "A coefficient for how fast the tread is used up (tyreData.treadConsumptionK). Assumed from the field name: a higher value uses up the tread faster. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.treadConsumptionK"}
+      ]
+    },
+    {
+      "id": "tyre_flat_spot", "group": "Wear and graining", "label": "Flat spot", "kind": "value", "type": "float", "unit": "",
+      "description": "A coefficient for the flat spots made by locking a wheel (tyreData.FlatSpotK). Assumed from the field name: a higher value makes bigger flat spots. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "tyreData.FlatSpotK"}
+      ]
+    },
+    {
+      "id": "tyre_rr0", "group": "Rolling resistance", "label": "Rolling resistance 0", "kind": "value", "type": "float", "unit": "",
+      "description": "Constant part of the rolling resistance (rollingResistance.rr0). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "rollingResistance.rr0"}
+      ]
+    },
+    {
+      "id": "tyre_rr1", "group": "Rolling resistance", "label": "Rolling resistance 1", "kind": "value", "type": "float", "unit": "",
+      "description": "Part of the rolling resistance that grows with the speed (rollingResistance.rr1). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "rollingResistance.rr1"}
+      ]
+    },
+    {
+      "id": "tyre_rr_slip", "group": "Rolling resistance", "label": "Rolling resistance slip", "kind": "value", "type": "float", "unit": "",
+      "description": "Part of the rolling resistance that depends on the slip (rollingResistance.rr_slip). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "rollingResistance.rr_slip"}
+      ]
+    },
+    {
+      "id": "tyre_rr_wear_mult", "group": "Rolling resistance", "label": "Rolling resistance wear multiplier", "kind": "value", "type": "float", "unit": "",
+      "description": "Change of the rolling resistance with the wear (rollingResistance.rrWearMult). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "rollingResistance.rrWearMult"}
+      ]
+    },
+    {
+      "id": "tyre_groove_factor", "group": "Wet grooves", "label": "Groove factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the grooves of the tread (grooveData.grooveFactor). Assumed from the field name: a higher value gives more grip in the wet. Some tyres do not store it; then it counts as 0. Not tested in the game.",
+      "verified": false, "absent": 0,
+      "targets": [
+        {"file": "@tyre", "path": "grooveData.grooveFactor"}
+      ]
+    },
+    {
+      "id": "tyre_groove_slip_angle", "group": "Wet grooves", "label": "Groove slip angle factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the groove effect for the slip angle (grooveData.grooveSAFactor). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "grooveData.grooveSAFactor"}
+      ]
+    },
+    {
+      "id": "tyre_groove_slip_ratio", "group": "Wet grooves", "label": "Groove slip ratio factor", "kind": "value", "type": "float", "unit": "",
+      "description": "A factor of the groove effect for the slip ratio (grooveData.grooveSRFactor). The exact meaning is not known. Not tested in the game.",
+      "verified": false,
+      "targets": [
+        {"file": "@tyre", "path": "grooveData.grooveSRFactor"}
       ]
     }
   ]

@@ -22,7 +22,10 @@ ISO_OFFSET = re.compile(r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d[+-]\d\d:\d\d$")
 START = "2026-11-16T18:30:12+01:00"
 SNAPSHOT_TIME = "2026-11-15T10:00:00Z"
 KIT = {"donor": "ks_donor", "label": "Donor", "kind": "single turbo", "boost": [0.8]}
-GARAGE = {"keys": ["own:fast", "stock:a|b"], "start": "own:fast"}
+GARAGE = {"fronts": ["own:fast", "game:a"], "rears": ["game:b"], "start_front": "own:fast", "start_rear": "game:b",
+          "labels": {"own:fast": "Fast", "game:a": "A", "game:b": "B"}}
+CHOICE = {"sets": [{"front": "game:a", "rear": "game:b"}], "split": False, "start_front": "game:a", "start_rear": "game:b"}
+OLD_CHOICE_LIST = ["stock:a|b"]
 SOUNDS = {"turbo": "event:/parts/turbos/turbo_rx7"}
 CHANGES = {"since": None, "settings": [{"id": "limiter", "from": 7000, "to": 8000}], "extras": [], "total": 1}
 BUILD_KEYS = ["snapshot_time", "package_time", "settings", "kit", "garage", "sounds", "changes"]
@@ -161,7 +164,7 @@ class TestFindCar(FactsCase):
 
 class TestTunerFactsOfAModdedCar(FactsCase):
     def test_the_default_tune_with_everything_set(self):
-        state = {"name_suffix": "MY", "limiter": 8000, tune.TYRE_KEY: ["own:fast", "stock:a|b"], tune.TURBO_KEY: {"donor": "ks_donor"},
+        state = {"name_suffix": "MY", "limiter": 8000, tune.TYRE_KEY: CHOICE, tune.TURBO_KEY: {"donor": "ks_donor"},
                  tune.SOUND_KEY: SOUNDS}
         tune.save_state(self.work, "ks_alpha", state)
         tune.save_snapshot(self.work, "ks_alpha", "ax_alpha", snapshot())
@@ -172,7 +175,7 @@ class TestTunerFactsOfAModdedCar(FactsCase):
         self.assertEqual(got, {
             "matched": True, "modded": True, "stock_car": "ks_alpha", "tune_id": "ax_alpha", "default": True, "name_suffix": "MY",
             "values": {"name_suffix": {"value": "MY", "default": "MY"}, "limiter": {"value": 8000, "default": 7000.0}},
-            "garage": {"keys": ["own:fast", "stock:a|b"]}, "turbo_kit": {"donor": "ks_donor"}, "sounds": SOUNDS,
+            "garage": CHOICE, "turbo_kit": {"donor": "ks_donor"}, "sounds": SOUNDS,
             "build": {"snapshot_time": SNAPSHOT_TIME, "settings": {"limiter": 8000}, "kit": KIT, "garage": GARAGE, "sounds": SOUNDS,
                       "changes": CHANGES},
             "game_process_start": START, "rpm_max": None})
@@ -196,10 +199,10 @@ class TestTunerFactsOfAModdedCar(FactsCase):
         self.assertEqual((got["tune_id"], got["default"], got["name_suffix"]), ("ax_alp01", False, "Drift"))
 
     def test_the_second_tune_reads_its_own_state(self):
-        tune.save_state(self.work, "ks_alpha", {"name_suffix": "Drift", tune.TYRE_KEY: ["stock:a|b"], tune.TURBO_KEY: {"donor": "ks_d2"},
+        tune.save_state(self.work, "ks_alpha", {"name_suffix": "Drift", tune.TYRE_KEY: OLD_CHOICE_LIST, tune.TURBO_KEY: {"donor": "ks_d2"},
                                                 tune.SOUND_KEY: {"backfire": "event:/b"}}, "ax_alp01")
         got = self.facts("ax_alp01")
-        self.assertEqual((got["garage"], got["turbo_kit"], got["sounds"]), ({"keys": ["stock:a|b"]}, {"donor": "ks_d2"}, {"backfire": "event:/b"}))
+        self.assertEqual((got["garage"], got["turbo_kit"], got["sounds"]), (CHOICE, {"donor": "ks_d2"}, {"backfire": "event:/b"}))
         other = self.facts("ax_alpha")
         self.assertEqual((other["garage"], other["turbo_kit"], other["sounds"]), (None, None, {}))
 
@@ -208,12 +211,13 @@ class TestTunerFactsOfAModdedCar(FactsCase):
         self.assertEqual(self.facts("ax_alpha", START)["game_process_start"], START)
 
     def test_the_saved_values_are_not_shared_with_the_state(self):
-        tune.save_state(self.work, "ks_alpha", {tune.SOUND_KEY: dict(SOUNDS), tune.TYRE_KEY: ["stock:a|b"]})
+        tune.save_state(self.work, "ks_alpha", {tune.SOUND_KEY: dict(SOUNDS), tune.TYRE_KEY: json.loads(json.dumps(CHOICE))})
         got = self.facts("ax_alpha")
         got["sounds"]["turbo"] = "changed"
-        got["garage"]["keys"].append("own:x")
+        got["garage"]["sets"].append({"front": "own:x", "rear": "own:x"})
+        got["garage"]["sets"][0]["front"] = "own:y"
         state = tune.load_state(self.work, "ks_alpha")
-        self.assertEqual((state[tune.SOUND_KEY], state[tune.TYRE_KEY]), (SOUNDS, ["stock:a|b"]))
+        self.assertEqual((state[tune.SOUND_KEY], state[tune.TYRE_KEY]), (SOUNDS, CHOICE))
 
 
 class TestBuildFacts(FactsCase):
@@ -289,11 +293,11 @@ class TestBuildFacts(FactsCase):
                 self.assertEqual(self.build(), dict.fromkeys(BUILD_KEYS))
 
     def test_a_failing_build_part_is_an_error_and_the_rest_is_kept(self):
-        tune.save_state(self.work, "ks_alpha", {tune.TYRE_KEY: ["stock:a|b"]})
+        tune.save_state(self.work, "ks_alpha", {tune.TYRE_KEY: CHOICE})
         with mock.patch.object(tune, "load_snapshot", side_effect=OSError("disk gone")):
             got = self.facts("ax_alpha", START)
         self.assertEqual(got["build"], {"error": "disk gone"})
-        self.assertEqual((got["garage"], got["values"]["limiter"]["value"], got["game_process_start"]), ({"keys": ["stock:a|b"]}, 8000, START))
+        self.assertEqual((got["garage"], got["values"]["limiter"]["value"], got["game_process_start"]), (CHOICE, 8000, START))
         self.assertEqual(list(got), MODDED_KEYS)
 
 

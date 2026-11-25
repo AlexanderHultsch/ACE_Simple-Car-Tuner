@@ -23,7 +23,10 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         suffix); "installed" is the package of the selected modded car
   GET  /api/settings    every setting applicable to the car, with default, current value and changed flag
                         (copies_differ, plus copy_values when the copies of the value differ in the stock data;
-                        "ui": "header" on name_suffix: the page shows it under its title, not in the table;
+                        "ui": "header" on name_suffix: the page shows it under its title, not in the table; "ui": "hidden" on variant_name and on the 24 settings of the group Tyres: the page shows
+                        no row for them (the name of the base is set with /api/version_rename, version "base"; tyres are chosen and created in the Tyre Creator); "calculated": true (only
+                        then) on display_power_ps and display_torque_nm without a saved value whose value is calculated from the engine
+                        settings (tune.calculated_display; changed is true then);
                         "base_range": {"low", "high"}, the lowest and highest default of the setting over the installed
                         cars from <work>/ranges.json (written by tune.py ranges), only on the settings that have an entry
                         there: a soft border for the page, values outside it stay allowed; "min" and "max" are the
@@ -34,23 +37,27 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
   GET  /api/groups      the setting groups of the catalogue in display order ("groups": name, description); static data,
                         the same for every car and tune, needs no base car
   versions              GET /api/state of a modded car also answers "versions" ([{id, name}], empty for a stock car and the draft) and
+                        "base_name" (the name of the base in the game's menu, text; null for a stock car, the draft and a car whose base has no name) and
                         "mod_paths" ({package, versions_folder, state}: where the installed package, the folder of the versions and
                         the state file of the tune live; null for a stock car and the draft). The routes /api/settings, /api/set,
                         /api/unset, /api/reset_all, /api/garage, /api/garage_set, /api/garage_reset, /api/turbo, /api/turbo_set,
                         /api/turbo_reset, /api/sounds, /api/sound_set and /api/sound_reset take an optional "version" (an id of
                         "versions": query parameter for GET, body field or query parameter for POST; empty is the base) and then work on
                         that version's state; 400 for a version without a modded car, for an unknown version and for a meta or shared
-                        setting (name suffix, steer_rod_ratio, ff_mult, ...: "shared": true in its row, also on the base) of a version,
+                        setting (car name, steer_rod_ratio, ff_mult, ...: "shared": true in its row, also on the base) of a version,
                         which all versions share; POST /api/set and /api/unset of one answer 400 "<id> is shared by all versions, set it on the base". reset_all with a version clears only that version.
   POST /api/version_add {"tune": ..., "name": ..., "from": version id (optional, default the base)}   adds a version as a copy
                         of the base (or of version "from"); answers {"id"}
-  POST /api/version_rename {"tune": ..., "version": ..., "name": ...}   answers {"id", "name"}; there is no route that deletes a version
+  POST /api/version_rename {"tune": ..., "version": ..., "name": ...}   answers {"id", "name"}; version "base" names the base of the tune
+                        (its variant_name; 400 when a version has the name or the car's base has no name in the game's menu);
+                        there is no route that deletes a version
   POST /api/version_lock   {"tune": ..., "version": ...}   locks a version (its kept build must match its state: 400 "Apply first, then lock it"
                         otherwise); answers {"id", "name"}; a locked version refuses every write of its state with 400 "... is locked ..."
   POST /api/version_unlock {"tune": ..., "version": ...}   unlocks a version; answers {"id", "name"}
   POST /api/set        {"id": ..., "value": ...}          POST /api/unset  {"id": ...}
                         (value: text, number, or true/false for the settings of type bool, which are on/off switches
-                        and appear in the rows with type "bool" and true/false as default and value)
+                        and appear in the rows with type "bool" and true/false as default and value). /api/set of one of the 24 tyre settings
+                        answers 400 "tyre values are edited in the Tyre Creator: choose or create a tyre there"; /api/unset still removes a saved value
   POST /api/reset_all   clears every changed value         POST /api/init   extracts the stock car (background job)
   POST /api/duplicate   {"tune": source, "new_id": ..., "suffix": ...}   copies a modded car or the draft to a new modded
                         car (new_id and suffix are optional, automatic when left out); answers {"id", "stock", "name_suffix"}
@@ -62,24 +69,42 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         [{kind turbo_kit / garage / sound, slot, from, to, text}], "total"}: what differs from the last build
                         of that modded car, everything compared to the stock car on its first build, see tune.py apply); the
                         job log lists these changes (not every setting) and the notes of the build
-  GET  /api/tyres       the tyre library ("tyres": id, name, source {front, rear}, changed; {id, error} for a damaged file) and
-                        the tyre pairs the extracted cars offer ("sources": key, front, rear, label, cars)
+  GET  /api/tyre_index  the tyres a library tyre or a car can use (the game package when it can be read, else the extracted tyre
+                        files): "tyres" ([{path (game path), file, type (folder), type_label, label, width, aspect, rim}] in menu
+                        order; width, aspect and rim are null for a tyre whose name has no size), "types" ([{type, label, count}] of the
+                        types that have tyres, in the order of tyre_sets.TYPE_ORDER, unknown folders last) and "package" (whether the
+                        game package exists); needs no base car
+  GET  /api/tyres       the tyre library: "tyres" ([{id, name, short, source (game path), source_label, changed (number of changed
+                        values), error (null, else the text of a damaged file; then only id and error are set), users ([text, ...]: the
+                        saved states that choose the tyre, as "<car> / <tune>", "<car> / <tune> / <version>" or "<car> (draft)")}])
   GET  /api/tyre?id=<tyre id>
-                        one library tyre ("tyre": id, name, source, changed) and its settings ("rows": the tyre settings with
-                        axle, default, value, changed, applicable and reason); 400 for an unknown id
-  POST /api/tyre_new    {"name": ..., "source": key}      creates a library tyre; answers {"tyre": {id, name, source}}
-  POST /api/tyre_rename {"id": ..., "name": ...}          POST /api/tyre_source {"id": ..., "source": key}
-                        both answer {"tyre": {id, name, source, changed}}
+                        one library tyre: {id, name, short, source, source_label, groups, types, rows}: groups = the tyre groups of the
+                        catalogue ([{name, description}] in display order, [] when it has none), types = the types of the game tyres
+                        read ([{type, label, total}] in the order of tyre_sets.TYPE_ORDER, unknown ones last, [] when they cannot be
+                        computed), rows = the tyre fields in that order
+                        (id, label, group, unit, type, kind, description, verified, min, max, choices, default (read from the source
+                        tyre), value, changed, applicable, reason, type_ranges ({type: entry}: what the tyres of each type store, {low, high, count} for a
+                        float field and {values, count} for a bool or an enum field, see tune.py; {} when none); one tyre is used for 4 wheels
+                        or for one axle, so a row has no axle; a row in the answer of tyre_set and tyre_unset has type_ranges too);
+                        400 for an unknown id
+  POST /api/tyre_new    {"name": ..., "source": game path or file name, "short": optional, 1 to 3 characters A-Z 0-9; default made
+                        from the name}   creates a library tyre; answers {"id"}
+  POST /api/tyre_rename {"id": ..., "name": ..., "short": optional}   POST /api/tyre_source {"id": ..., "source": game path or file name}
+                        both answer {"tyre": {id, name, short, source, changed}}
   POST /api/tyre_set    {"id": ..., "setting": ..., "value": ...}   (value as for /api/set) answers {"row", "warnings"}
   POST /api/tyre_unset  {"id": ..., "setting": ...}       answers {"row"}
   POST /api/tyre_reset  {"id": ...}                       drops the changed values of the tyre; answers {"ok": true}
-  POST /api/tyre_delete {"id": ...}                       removes the tyre (409 while a modded car or the draft selects it);
-                        answers {"ok": true}
-  GET  /api/garage      the tyre selection of the car and the tune: "choices" (key, kind own or stock, label, ticked, start),
-                        "custom", "missing", "car" and "tune"; needs the base car
-  POST /api/garage_set  {"keys": [text, ...]}             ticks exactly these tyres (own:<tyre id>, stock:<front>|<rear>);
-                        answers {"result": {keys, start, maybe default}, "garage": the answer of GET /api/garage}
-  POST /api/garage_reset  {}                              removes the selection; answers {"removed", "garage"}
+  POST /api/tyre_delete {"id": ...}                       removes the tyre (409 while a saved state of a modded car, a version or the
+                        draft chooses it); answers {"ok": true}
+  GET  /api/garage      the tyre choice of the car in the state of the tune or version (tune.tyre_choices): "default" (no saved
+                        choice: the car keeps its original sets), "stock_sets" ([{front, rear, label}], the original sets of the car),
+                        "sets" ([{front, rear}] of the choice, empty when split), "split", "fronts", "rears" (tyre keys "game:<game path>"
+                        or "own:<tyre id>"), "start_front", "start_rear", "labels" ({key: label}), "car" and "tune", plus "own" ([{key,
+                        label, source_label}], the library tyres that can be chosen); needs the base car
+  POST /api/garage_set  {"choice": {...}}                 saves the tyre choice in the form of the state key (see tune.parse_choice:
+                        {"sets": [{"front", "rear"}], "split": false, "start_front", "start_rear"} or {"split": true, "fronts",
+                        "rears", "start_front", "start_rear"}); the original choice of the car removes the saved choice; answers {"ok": true}
+  POST /api/garage_reset  {}                              removes the saved choice; answers {"ok": true}
   GET  /api/turbo       the turbo kit of the car and the tune (the turbo setup of another installed car, the donor, built into
                         a modded car that has none): "donor" (saved donor car id or null), "available" (false when the car has a
                         turbo itself or no donor exists) with "reason", "donors" (car, label, count, kind "single turbo" / "twin
@@ -138,7 +163,7 @@ the server answers them at /ACESCT/api/... (for example GET /ACESCT/api/state). 
                         Set-Clipboard: pasting attaches the file); answers {"copied": true, "file": name, "how": "file"}; 403 for
                         a client that is not loopback (127.0.0.1 or ::1), 400 for a bad name or when the PC is not Windows, 404 for a
                         missing file, 500 with the PowerShell error text when the copy fails
-The tyre library is shared by all cars: its routes ignore the car and the tune and need no base car; so do /api/groups and the ten
+The tyre library is shared by all cars: its routes (and /api/tyre_index) ignore the car and the tune and need no base car; so do /api/groups and the ten
 log routes (the choice lives in the work folder, the sessions and the status in the logs folder); the two logger routes and the three
 file routes do not wait for and are not refused by a running job.
 Every route takes an optional car id of the game (the list is cached in <work>/cars_index.json, see tune.py; without it
@@ -148,7 +173,7 @@ Every route also takes an optional tune next to the car (?tune=<x> on GET, the f
 the default tune of the car (the modded car <new_id>), "draft" the draft of the base car (the values of the base car
 that are not saved as a modded car yet), any other value the id of a modded car of that car (400 otherwise).
 
-Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner, a client that is not loopback on /api/log_copy), 404 (unknown path, missing session file), 405 (PUT, DELETE, PATCH, OPTIONS and HEAD, with the header Allow: GET, POST; any other method name and any malformed request get the standard HTML error page of http.server: 501, 400, 414, 431), 413 (body over 65536 bytes, session file over 1 MB on /api/log_file), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, garage, turbo kit or sound edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
+Answers: JSON {"error": text} with 400 (bad input, unknown car or modded car, malformed JSON, new id or name suffix refused), 403 (client address that is not private, wrong Host, missing X-Tuner, a client that is not loopback on /api/log_copy), 404 (unknown path, missing session file), 405 (PUT, DELETE, PATCH, OPTIONS and HEAD, with the header Allow: GET, POST; any other method name and any malformed request get the standard HTML error page of http.server: 501, 400, 414, 431), 413 (body over 65536 bytes, session file over 1 MB on /api/log_file), 415 (Content-Type is not application/json), 409 (base car missing, another job running, edit or duplicate while a job runs, tyre library, tyre choice, turbo kit or sound edit while a job runs, tyre deleted while a modded car selects it, game running, mods folder not expandable), 500 (internal error); /api/init and /api/apply answer 202 {"job": "started"} and the page polls GET /api/state; every other route answers 200.
 
 The job state (GET /api/state "job") is global, there is one background job at a time for all cars. The state answer
 also lists the car ("car", "cars") and the installed package of the selected modded car; the old single-car layout of the work folder
@@ -191,6 +216,7 @@ import clone_car  # noqa: E402
 import kspkg  # noqa: E402
 import logconf  # noqa: E402
 import tune  # noqa: E402
+import tyre_sets  # noqa: E402
 
 INDEX = tune.REPO / "tuner" / "web" / "index.html"
 WEB = INDEX.parent
@@ -402,6 +428,8 @@ def row_json(row, setting, base_range=None):
     out.update({k: setting[k] for k in ("min", "max", "choices", "ui", "advanced", "shared") if k in setting})
     if row["copies_differ"]:
         out["copy_values"] = row["copy_values"]
+    if row.get("calculated"):
+        out["calculated"] = True
     if base_range:
         out["base_range"] = {"low": base_range["low"], "high": base_range["high"]}
     return out
@@ -496,15 +524,19 @@ def car_entry_json(work, c):
 
 
 def mod_info(work, car_id, tune_id):
-    """The versions of the selected modded car and where its files live: {"versions": [{id, name}], "mod_paths": {package,
+    """The versions of the selected modded car, the name of its base and where its files live: {"versions": [{id, name}], "base_name", "mod_paths": {package,
     versions_folder, state}}; empty versions and no paths for the base car and the draft."""
     if tune_id in (None, tune.DRAFT):
-        return {"versions": [], "mod_paths": None}
+        return {"versions": [], "base_name": None, "mod_paths": None}
     try:
         versions = tune.list_versions(work, car_id, tune_id)
     except (ValueError, OSError):
         versions = []
-    return {"versions": versions,
+    try:
+        base = tune.base_name(work, car_id, tune_id)
+    except (ValueError, OSError):
+        base = None
+    return {"versions": versions, "base_name": base,
             "mod_paths": {"package": os.path.join(mods_dir(), tune_id + ".kspkg"),
                           "versions_folder": tune.version_dir(work, car_id, tune_id),
                           "state": tune.state_path(work, car_id, tune_id)}}
@@ -678,7 +710,7 @@ def update_target(work, car_id, tune_id):
         suffix = tune.state_suffix(tune.load_state(work, car_id, tune_id), tune.name_suffix_setting())
         owner = tune.suffix_owner(work, car_id, suffix, exclude=tune_id)
     if owner:
-        raise ApiError(400, "name suffix %s is already used by %s" % (suffix, owner))
+        raise ApiError(400, "car name %s is already used by %s" % (suffix, owner))
     return tune_id
 
 
@@ -709,17 +741,56 @@ def api_apply(car_id, body):
 
 def tyre_json(work, tyre_id):
     t = tune.load_tyre(work, tyre_id)
-    return {"id": tyre_id, "name": t["name"], "source": {"front": t["source"]["front"], "rear": t["source"]["rear"]},
-            "changed": len(t["values"])}
+    return {"id": tyre_id, "name": t["name"], "short": t["short"], "source": t["source"], "changed": len(t["values"])}
+
+
+def source_label(work, source):
+    return tune.key_label(work, tune.GAME_KEY + source)
+
+
+def user_text(user):
+    if user["tune"] == tune.DRAFT:
+        return "%s (draft)" % user["car"]
+    return "%s / %s%s" % (user["car"], user["tune"], " / " + user["version"] if "version" in user else "")
 
 
 def tyre_row(work, tyre_id, cat, setting_id):
-    return next(r for r in tune.tyre_rows(work, tyre_id, cat) if r["id"] == setting_id)
+    return next(r for r in tune.tyre_rows(work, tyre_id, cat, CONFIG["game"]) if r["id"] == setting_id)
+
+
+def tyre_index_json(tyre):
+    size = tyre["size"] or {}
+    return {"path": tyre["path"], "file": tyre["file"], "type": tyre["type"], "type_label": tyre["type_label"], "label": tyre["label"],
+            "width": size.get("width"), "aspect": size.get("aspect"), "rim": size.get("rim")}
+
+
+def api_tyre_index(car_id, tune_id):
+    work = CONFIG["work"]
+    with STATE_LOCK, bad_input():
+        index = tune.available_tyres(work, CONFIG["game"])
+    counts, labels = {}, {}
+    for t in index:
+        counts[t["type"]] = counts.get(t["type"], 0) + 1
+        labels[t["type"]] = t["type_label"]
+    order = tyre_sets.TYPE_ORDER
+    kinds = sorted(counts, key=lambda k: order.index(k.lower()) if k.lower() in order else len(order))
+    return {"tyres": [tyre_index_json(t) for t in index],
+            "types": [{"type": k, "label": labels[k], "count": counts[k]} for k in kinds],
+            "package": os.path.isfile(CONFIG["game"])}
 
 
 def api_tyres(car_id, tune_id):
-    work = CONFIG["work"]
-    return {"tyres": tune.list_tyres(work), "sources": tune.list_source_tyres(work)}
+    work, out = CONFIG["work"], []
+    with STATE_LOCK, bad_input():
+        for t in tune.list_tyres(work):
+            if "error" in t:
+                out.append({"id": t["id"], "name": None, "short": None, "source": None, "source_label": None, "changed": None,
+                            "error": t["error"], "users": []})
+                continue
+            out.append({"id": t["id"], "name": t["name"], "short": t["short"], "source": t["source"],
+                        "source_label": source_label(work, t["source"]), "changed": t["changed"], "error": None,
+                        "users": [user_text(u) for u in tune.tyre_users(work, t["id"])]})
+    return {"tyres": out}
 
 
 def api_tyre(car_id, tune_id, query):
@@ -728,25 +799,33 @@ def api_tyre(car_id, tune_id, query):
     if tyre_id is None:
         raise ApiError(400, "need id (text)")
     with STATE_LOCK, bad_input():
-        return {"tyre": tyre_json(work, tyre_id), "rows": tune.tyre_rows(work, tyre_id, cat)}
+        t = tune.load_tyre(work, tyre_id)
+        return {"id": tyre_id, "name": t["name"], "short": t["short"], "source": t["source"],
+                "source_label": source_label(work, t["source"]), "groups": tune.tyre_group_list(cat),
+                "types": tune.tyre_type_list(work, cat, CONFIG["game"]),
+                "rows": tune.tyre_rows(work, tyre_id, cat, CONFIG["game"])}
 
 
 def api_tyre_new(car_id, body):
-    work, name, source = CONFIG["work"], body.get("name"), body.get("source")
+    work, name, source, short = CONFIG["work"], body.get("name"), body.get("source"), body.get("short")
     refuse_while_job_runs()
     if not isinstance(name, str) or not isinstance(source, str):
         raise ApiError(400, "need name (text) and source (text)")
+    if short is not None and not isinstance(short, str):
+        raise ApiError(400, "short must be text")
     with STATE_LOCK, bad_input():
-        return {"tyre": tune.create_tyre(work, name, source)}
+        return {"id": tune.create_tyre(work, name, source, short, CONFIG["game"])["id"]}
 
 
 def api_tyre_rename(car_id, body):
-    work, tyre_id, name = CONFIG["work"], body.get("id"), body.get("name")
+    work, tyre_id, name, short = CONFIG["work"], body.get("id"), body.get("name"), body.get("short")
     refuse_while_job_runs()
     if not isinstance(tyre_id, str) or not isinstance(name, str):
         raise ApiError(400, "need id (text) and name (text)")
+    if short is not None and not isinstance(short, str):
+        raise ApiError(400, "short must be text")
     with STATE_LOCK, bad_input():
-        tune.rename_tyre(work, tyre_id, name)
+        tune.rename_tyre(work, tyre_id, name, short)
         return {"tyre": tyre_json(work, tyre_id)}
 
 
@@ -756,7 +835,7 @@ def api_tyre_source(car_id, body):
     if not isinstance(tyre_id, str) or not isinstance(source, str):
         raise ApiError(400, "need id (text) and source (text)")
     with STATE_LOCK, bad_input():
-        tune.set_tyre_source(work, tyre_id, source)
+        tune.set_tyre_source(work, tyre_id, source, CONFIG["game"])
         return {"tyre": tyre_json(work, tyre_id)}
 
 
@@ -808,7 +887,9 @@ def api_tyre_delete(car_id, body):
 
 
 def garage_json(work, car_id, tune_id, version=None):
-    return dict(tune.garage_choices(work, car_id, tune_id, version), car=car_id, tune=tune_id)
+    own = [{"key": tune.OWN_KEY + t["id"], "label": t["name"], "source_label": source_label(work, t["source"])}
+           for t in tune.list_tyres(work) if "error" not in t]
+    return dict(tune.tyre_choices(work, car_id, tune_id, version), own=own)
 
 
 def api_garage(car_id, tune_id, version=None):
@@ -819,14 +900,14 @@ def api_garage(car_id, tune_id, version=None):
 
 
 def api_garage_set(car_id, body):
-    work, tune_id, version, keys = CONFIG["work"], body.get("tune"), body.get("version"), body.get("keys")
+    work, tune_id, version, choice = CONFIG["work"], body.get("tune"), body.get("version"), body.get("choice")
     refuse_while_job_runs()
-    if not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
-        raise ApiError(400, "need keys (a list of text)")
+    if not isinstance(choice, dict):
+        raise ApiError(400, "need choice (an object)")
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        result = tune.set_garage(work, car_id, keys, tune_id, version)
-        return {"result": result, "garage": garage_json(work, car_id, tune_id, version)}
+        tune.set_tyres(work, car_id, choice, tune_id, version, CONFIG["game"])
+    return {"ok": True}
 
 
 def api_garage_reset(car_id, body):
@@ -834,8 +915,8 @@ def api_garage_reset(car_id, body):
     refuse_while_job_runs()
     require_base(work, car_id)
     with STATE_LOCK, bad_input():
-        res = tune.reset_garage(work, car_id, tune_id, version)
-        return {"removed": res["removed"], "garage": garage_json(work, car_id, tune_id, version)}
+        tune.reset_tyres(work, car_id, tune_id, version)
+    return {"ok": True}
 
 
 def turbo_json(work, car_id, tune_id, version=None):
@@ -1066,8 +1147,8 @@ def request_version(value, query, car_id, tune_id):
     return value
 
 
-GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyres": api_tyres,
-              "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
+GET_ROUTES = {"/api/state": api_state, "/api/settings": api_settings, "/api/groups": api_groups, "/api/tyre_index": api_tyre_index,
+              "/api/tyres": api_tyres, "/api/tyre": api_tyre, "/api/garage": api_garage, "/api/turbo": api_turbo,
               "/api/sounds": api_sounds, "/api/log_config": api_log_config, "/api/log_sessions": api_log_sessions,
               "/api/log_status": api_log_status,
               "/api/log_ai_command": api_log_ai_command, "/api/log_file": api_log_file}

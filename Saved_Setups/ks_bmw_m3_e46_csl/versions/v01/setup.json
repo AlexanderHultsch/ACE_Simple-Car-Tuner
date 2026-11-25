@@ -1,5 +1,4 @@
 {
-  "display_torque_nm": 400.0,
   "power_scale": 0.5714,
   "engine_damage_rpm": 9000.0,
   "coast_scale": 1.0,
@@ -26,33 +25,9 @@
   "camber_rear": -0.5,
   "camber_min_front": -4.0,
   "camber_max_rear": 0.0,
-  "tyre_grip_lateral_front": 1.353434,
-  "tyre_grip_longitudinal_front": 1.326,
-  "tyre_peak_slip_angle_front": 8.418182,
-  "tyre_load_reference_front": 4320.0,
-  "tyre_pressure_ref_front": 28.0,
-  "tyre_flex_longitudinal_front": 20000.0,
-  "tyre_stiffness_rate_front": 312000.0,
-  "tyre_heat_partition_front": 0.9,
-  "tyre_grain_gain_front": 0.47,
-  "tyre_grain_slip_angle_gain_front": 0.565,
-  "tyre_grip_lateral_rear": 1.1993119,
-  "tyre_grip_longitudinal_rear": 1.265897,
-  "tyre_peak_slip_angle_rear": 8.35,
-  "tyre_load_reference_rear": 3720.0,
-  "tyre_pressure_ref_rear": 24.0,
-  "tyre_flex_lateral_rear": 38000.0,
-  "tyre_flex_longitudinal_rear": 20000.0,
-  "tyre_stiffness_rate_rear": 312000.0,
-  "tyre_heat_partition_rear": 0.85,
-  "tyre_grain_gain_rear": 0.47,
-  "tyre_grain_slip_angle_gain_rear": 0.565,
-  "tyre_thermal_curve_front": "supercar",
-  "tyre_thermal_curve_rear": "supercar",
   "fuel_start": 29.0,
   "tc_level": 0,
   "driver_aids_off": false,
-  "display_power_ps": 579.0,
   "nominal_rpm": 8600.0,
   "diff_type": "Spool",
   "limiter": 8800,
@@ -78,6 +53,24 @@
   "max_turbo_boost": 1.8,
   "collar_front": 97.12118,
   "collar_rear": 44.217757,
-  "tyre_flex_lateral_front": 38000.0,
-  "ff_mult": 2.1
+  "ff_mult": 2.1,
+  "_tyres": {
+    "sets": [
+      {
+        "front": "own:bmw_e46_drift_front",
+        "rear": "own:bmw_e46_drift_rear"
+      },
+      {
+        "front": "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_235_35_19.tyre",
+        "rear": "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_265_30_19.tyre"
+      },
+      {
+        "front": "game:content\\cars\\common_phsx\\tyres\\road\\road_235_35_19.tyre",
+        "rear": "game:content\\cars\\common_phsx\\tyres\\road\\road_265_30_19.tyre"
+      }
+    ],
+    "split": false,
+    "start_front": "own:bmw_e46_drift_front",
+    "start_rear": "own:bmw_e46_drift_rear"
+  }
 }

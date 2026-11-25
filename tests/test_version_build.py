@@ -1028,18 +1028,20 @@ class TestTheLocalizationLinesOfVersions(VisualWorld):
         self.assertEqual(self.loc(self.apply({})), b"ax_x_name=Car X MY\r\nax_x_name_preset_grip=Grip\r\n")
 
     def test_names_with_the_same_slug_or_the_name_base_get_distinct_keys(self):
+        tune.rename_version(self.work, "ks_x", "base", "Standard")
         self.version("Drift!", {})
         self.version("Drift?", {})
         self.version("Base", {})
-        res = self.apply({})
+        res = self.apply({"variant_name": "Standard"})
         self.assertEqual(self.loc(res), self.BASE_LOC + b"ax_x_name_preset_drift_=Drift!\r\nax_x_name_preset_drift_v02=Drift?\r\nax_x_name_preset_base_v03=Base\r\n")
         self.assertEqual([self.built(res, "presets/p_%s.mechanicalcarpreset" % v)["description"] for v in ("v01", "v02", "v03")],
                          ["Name Preset Drift!", "Name Preset Drift? v02", "Name Preset Base v03"])
         self.assertEqual([self.built(res, "presets/p_%s.mechanicalcarpreset" % v)["note"] for v in ("v01", "v02", "v03")], ["Drift!", "Drift?", "Base"])
 
     def test_the_text_of_the_base_preset_is_not_taken_by_a_version_either(self):
+        tune.rename_version(self.work, "ks_x", "base", "Standard")
         self.version("Base", {})
-        res = self.apply({})
+        res = self.apply({"variant_name": "Standard"})
         self.assertEqual(self.built(res, "presets/p_v01.mechanicalcarpreset")["description"], "Name Preset Base v01")
         self.assertEqual(self.loc(res).count(b"ax_x_name_preset_base="), 1)
 
@@ -1809,6 +1811,61 @@ class TestAVersionThatWouldCrashTheGameByItsParts(FullCar, VisualWorld):
         shared = "content\\cars\\common_phsx\\data\\gone.gearbox"
         self.before_names(lambda root: self.entry(root, "data/parts/ax_x_v01_gearbox.tuningpart")["gearbox"].update({"path": shared}))
         self.assertEqual(self.apply({})["versions"][0]["id"], "v01")
+
+
+class TestTheNameOfTheBaseInTheBuiltLocalization(VisualWorld):
+    """The line of en.cars.loc that ends with _preset_base, written by clone_car.write_localization from the stock lines, in the three cases of
+    tune.base_name and for a car without such a line."""
+    STOCK = b"ks_x_name=Car X\r\nks_x_preset_base=Standard\r\nks_x_other=Z\r\n"
+
+    def setUp(self):
+        super().setUp()
+        self.variants = []
+        self.stock_loc = self.write(os.path.join(self.work, "stock_loc.txt"), self.STOCK, binary=True)
+        self.write(tune.stock_info_path(self.work, "ks_x"), {"car_id": "ks_x", "display_name": "Car X", "brand": "Brand", "year": 1999,
+                                                              "property_1": "P1", "property_2": "P2", "property_3": "P3", "variant_name": "Standard"})
+
+    def build(self, car_dir, new_id, out_dir, name, year, brand, variant, stock_loc, props, pack=True):
+        self.calls.append(("build", os.path.basename(out_dir)))
+        self.variants.append(variant)
+        root = self.x.clone_into(out_dir, new_id)
+        clone_car.write_localization(root, "ks_x", new_id, self.stock_loc, variant)
+        return []
+
+    def base_line(self, res):
+        return [line for line in self.loc(res).split(b"\r\n") if b"_preset_base" in line]
+
+    def test_a_saved_name_is_written(self):
+        self.version("Grip", {})
+        res = self.apply({"variant_name": "Daily"})
+        self.assertEqual(self.base_line(res), [b"ax_x_preset_base=Daily"])
+        self.assertEqual(self.variants, ["Daily", "Daily"])
+
+    def test_without_a_saved_name_a_tune_with_versions_gets_base(self):
+        self.version("Grip", {})
+        res = self.apply({})
+        self.assertEqual(self.base_line(res), [b"ax_x_preset_base=Base"])
+        self.assertEqual(self.variants, ["Base", "Base"])
+
+    def test_without_a_saved_name_and_versions_the_stock_text_stays(self):
+        res = self.apply({})
+        self.assertEqual(self.base_line(res), [b"ax_x_preset_base=Standard"])
+        self.assertEqual(self.variants, ["Standard"])
+
+    def test_a_car_without_a_variant_line_gets_none(self):
+        self.stock_loc = self.write(os.path.join(self.work, "stock_loc.txt"), b"ks_x_name=Car X\r\nks_x_other=Z\r\n", binary=True)
+        self.write(tune.stock_info_path(self.work, "ks_x"), {"car_id": "ks_x", "display_name": "Car X", "brand": "Brand", "year": 1999,
+                                                              "property_1": "P1", "property_2": "P2", "property_3": "P3", "variant_name": ""})
+        self.version("Grip", {})
+        res = self.apply({})
+        self.assertEqual(self.base_line(res), [])
+        self.assertEqual(self.loc(res).split(b"\r\n")[:2], [b"ax_x_name=Car X", b"ax_x_other=Z"])
+
+    def test_the_name_of_the_base_and_of_a_version_are_both_in_the_file(self):
+        tune.rename_version(self.work, "ks_x", "base", "Daily")
+        self.version("Grip", {})
+        res = self.apply({"variant_name": "Daily"})
+        self.assertEqual(self.loc(res), b"ax_x_name=Car X\r\nax_x_preset_base=Daily\r\nax_x_other=Z\r\nax_x_name_preset_grip=Grip\r\n")
 
 
 if __name__ == "__main__":

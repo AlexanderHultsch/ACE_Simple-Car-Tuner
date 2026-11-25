@@ -35,6 +35,10 @@ def function_body(name):
     return CODE[m.end():i - 1]
 
 
+# the two functions that keep the shown tyre types in localStorage; the tests of the other things the page stores count the rest
+TYRE_TYPES_STORAGE = function_body("storedTyreTypes") + function_body("storeTyreTypes")
+
+
 def dom_ids():
     return re.findall(r'\bid="([^"]+)"', MARKUP)
 
@@ -257,7 +261,7 @@ class TestApiContract(unittest.TestCase):
 
     def test_every_api_call_of_the_page_passes_the_selection_which_carries_the_tune(self):
         calls = re.findall(r"await api\((.*)\);$", CODE, re.M)
-        self.assertEqual(len(calls), 40, calls)
+        self.assertEqual(len(calls), 41, calls)
         for call in calls:
             with self.subTest(call):
                 self.assertRegex(call, r", (?:want|target|r\.target|selection)$")
@@ -278,6 +282,37 @@ class TestApiContract(unittest.TestCase):
         self.assertIn('const newId = $("dialog-id").value.trim() || undefined;', body)
         self.assertIn('const suffix = $("dialog-suffix").value || undefined;', body)
 
+    TYRE_AND_GARAGE_POSTS = {
+        "/api/tyre_new": r'api\("/api/tyre_new", (\{[^}]*\}), selection\)', "/api/tyre_rename": r'api\("/api/tyre_rename", (\{[^}]*\}), selection\)',
+        "/api/tyre_source": r'api\("/api/tyre_source", (\{[^}]*\}), selection\)', "/api/tyre_set": r'api\("/api/tyre_set", (\{[^}]*\}), selection\)',
+        "/api/tyre_unset": r'api\("/api/tyre_unset", (\{[^}]*\}), selection\)', "/api/tyre_reset": r'writeTyre\("/api/tyre_reset", (\{[^}]*\})\)',
+        "/api/tyre_delete": r'api\("/api/tyre_delete", (\{[^}]*\}), selection\)', "/api/garage_set": r'api\("/api/garage_set", (\{[^}]*\}), target\)',
+        "/api/garage_reset": r'api\("/api/garage_reset", (\{[^}]*\}), target\)'}
+
+    def test_every_tyre_and_garage_route_is_called_once_with_the_fields_its_handler_reads(self):
+        for route, pattern in self.TYRE_AND_GARAGE_POSTS.items():
+            with self.subTest(route):
+                self.assertIn(route, ts.POST_ROUTES)
+                found = re.findall(pattern, CODE)
+                self.assertEqual(len(found), 1)
+                fields = set(re.findall(r"\b(\w+):", found[0]))
+                handler = inspect.getsource(ts.POST_ROUTES[route])
+                read = set(re.findall(r'body\.get\("(\w+)"\)', handler)) - {"tune", "version"}
+                self.assertEqual(fields, read)
+
+    def test_every_tyre_and_garage_get_route_is_called_without_a_body_and_with_the_query_the_server_reads(self):
+        for route in ("/api/tyre_index", "/api/tyres", "/api/garage"):
+            with self.subTest(route):
+                self.assertIn(route, ts.GET_ROUTES)
+                self.assertRegex(CODE, r'api\("%s", undefined, (?:selection|target)\)' % route)
+        self.assertIn("/api/tyre", ts.QUERY_ROUTES)
+        self.assertIn('parse_qs(query).get("id")', inspect.getsource(ts.api_tyre))
+        self.assertEqual(QUERY_PARAMS["/api/tyre"], "id")
+        for route in ("/api/garage", "/api/garage_set", "/api/garage_reset"):
+            self.assertIn(route, ts.VERSION_GET_ROUTES + ts.VERSION_POST_ROUTES)
+            self.assertIn('"%s"' % route, re.search(r"const VERSION_PATHS = \[(.*?)\];", CODE, re.S).group(0))
+        self.assertNotIn("/api/tyre_index", ts.VERSION_GET_ROUTES)
+
     def test_the_routes_of_the_page_are_the_routes_of_the_server(self):
         self.assertEqual(called_paths(), set(self.ROUTES))
 
@@ -292,9 +327,10 @@ class TestApiContract(unittest.TestCase):
         # the rows of the tyre editor come from tune.tyre_rows: its quoted keys and its keyword arguments
         sent = quoted_words(ts.row_json, ts.tune.tyre_rows) | set(re.findall(r"\b(\w+)=", inspect.getsource(ts.tune.tyre_rows)))
         read = set(re.findall(r"\b(?:data|d)\.(\w+)", CODE)) - {"error"}
-        self.assertTrue({"id", "label", "type", "value", "default", "changed", "choices", "ui", "copy_values", "axle", "applicable",
+        self.assertTrue({"id", "label", "type", "value", "default", "changed", "choices", "ui", "copy_values", "applicable",
                          "reason"} <= read, sorted(read))
         self.assertEqual(sorted(read - sent), [])
+        self.assertNotIn("axle", read)
 
     def test_the_page_polls_in_the_documented_rhythm(self):
         consts = dict(re.findall(r"^const (\w+_MS) = (\d+);", CODE, re.M))
@@ -411,13 +447,14 @@ class TestTexts(unittest.TestCase):
                 self.assertIn(">%s</button>" % label, MARKUP)
         self.assertIn("changed only", MARKUP)
         self.assertIn('el("button", "small", "reset")', CODE)
-        for label in ("Install car (pull game files)", "Tyre Creator", "Garage tyres", "Expand all", "changed only",
+        for label in ("Install car (pull game files)", "Tyre Creator", "Expand all", "changed only",
                       "show advanced settings", "reset", "Reset all", "Create modded car", "Duplicate"):
             self.assertIn(label, USER_GUIDE)
 
     def test_the_tables_have_the_documented_columns_in_order(self):
         heads = [h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', MARKUP)]
         self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description",
+                                 "Tyre", "Short", "Source", "Changed values", "Used by",
                                  "Variable name", "Value", "Default (source tyre)", "Description",
                                  "File", "Car", "Track", "Duration", "Samples", "Size", "Modified", "Copy for AI"])
 
@@ -433,15 +470,16 @@ class TestTexts(unittest.TestCase):
 
     def test_the_header_label_and_the_stock_name_end_in_a_space_that_is_not_collapsed(self):
         body = function_body("buildHeaderRow")
-        self.assertIn('el("span", "label", "Name in the game\'s car list: ")', body)
-        self.assertIn('el("span", "stockname", carName() + " ")', body)
+        self.assertIn('el("span", "label", "Original car: ")', body)
+        self.assertIn('el("span", "stockname", carName())', body)
+        self.assertIn('el("span", "label", "Car name: ")', body)
         self.assertRegex(STYLE, r"\.namerow \.label \{[^}]*white-space: pre;")
         self.assertRegex(STYLE, r"\.stockname \{[^}]*white-space: pre;")
 
     def test_the_dialog_says_the_game_shows_the_stock_name_a_space_and_the_suffix(self):
         panel = re.search(r'<section id="dialog".*?</section>', MARKUP, re.S).group(0)
-        self.assertIn('<p class="hint">The game shows the stock car\'s name, a space and the name suffix.</p>', panel)
-        self.assertLess(panel.index('id="dialog-suffix"'), panel.index("a space and the name suffix"))
+        self.assertIn('<p class="hint">The game shows the stock car\'s name, a space and the car name.</p>', panel)
+        self.assertLess(panel.index('id="dialog-suffix"'), panel.index("a space and the car name"))
 
     def test_the_page_never_mentions_the_old_default_and_never_joins_a_name_and_a_suffix_itself(self):
         self.assertNotIn("_MY", HTML)
@@ -761,10 +799,17 @@ class TestBaseRangeColumn(unittest.TestCase):
         self.assertEqual(heads, ["Variable name", "Value", "Default (for the selected car)", "Range for base cars", "Description"])
         self.assertNotIn("Range for base cars", self.TYRE_TABLE)
 
-    def test_the_colgroup_has_the_range_column_between_default_and_description(self):
+    def test_the_tyre_table_has_no_range_header_and_no_range_column(self):
+        heads = re.findall(r'<th scope="col">(.*?)</th>', self.TYRE_TABLE)
+        self.assertEqual(heads, ["Variable name", "Value", "Default<br>(source tyre)", "Description"])
+        self.assertNotIn("c-range", self.TYRE_TABLE)
+        self.assertNotIn("Range in", HTML)
+        self.assertNotIn("game min", HTML)
+
+    def test_the_colgroup_has_the_range_column_between_default_and_description_in_the_car_table_only(self):
         self.assertIn('<colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-range"><col class="c-desc"></colgroup>',
                       self.CAR_TABLE)
-        self.assertNotIn("c-range", self.TYRE_TABLE)
+        self.assertIn('<colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>', self.TYRE_TABLE)
         self.assertRegex(STYLE, r"col\.c-range \{ width: \d+%; \}")
 
     def test_the_widths_of_the_car_table_add_up_to_100_and_the_tyre_table_keeps_its_own(self):
@@ -775,18 +820,23 @@ class TestBaseRangeColumn(unittest.TestCase):
         tyre = [int(w) for w in re.findall(r"^col\.c-(?:name|value|default|desc) \{ width: (\d+)%; \}", STYLE, re.M)]
         self.assertEqual((len(tyre), sum(tyre)), (4, 100))
 
+    def test_the_tyre_table_uses_the_global_widths_and_has_none_of_its_own(self):
+        self.assertNotIn("#panel-tyres col", STYLE)
+        self.assertEqual({m[0]: int(m[1]) for m in re.findall(r"^col\.(c-(?:name|value|default|desc)) \{ width: (\d+)%; \}", STYLE, re.M)},
+                         {"c-name": 22, "c-value": 23, "c-default": 17, "c-desc": 38})
+
     def test_the_group_rows_span_the_columns_of_their_table(self):
         self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
         self.assertIn("th.colSpan = 4;", function_body("buildTyreGroup"))
 
-    def test_the_cell_is_added_by_the_car_table_only(self):
+    def test_the_cell_is_added_by_the_car_table_and_not_by_the_tyre_table(self):
         self.assertIn("function buildRow(data, target, withRange) {", CODE)
         body = function_body("buildRow")
         self.assertIn("r.tr.append(nameCell, valueCell, defCell);", body)
         self.assertIn("if (withRange) r.tr.appendChild(buildRangeCell(data));", body)
         self.assertLess(body.index("buildRangeCell(data)"), body.index("r.tr.appendChild(descCell);"))
         self.assertIn("buildRow(data, target, true)", function_body("buildTable"))
-        self.assertIn("buildRow(item, null);", function_body("buildTyreRows"))
+        self.assertIn("buildRow(item, {}, false);", function_body("buildTyreRows"))
         self.assertEqual(len(re.findall(r"\bbuildRow\(", CODE)), 3)
 
     def test_the_formatter_joins_low_and_high_with_an_en_dash_and_spaces(self):
@@ -806,16 +856,313 @@ class TestBaseRangeColumn(unittest.TestCase):
         self.assertIn('none.setAttribute("aria-label", "no range");', body)
         self.assertIn(".range-none { color: var(--color-text-muted); }", STYLE)
 
-    def test_the_cell_is_plain_text_without_tooltip_or_behaviour(self):
+    def test_the_cell_is_plain_text_without_behaviour_title_or_tyre_branch(self):
         body = function_body("buildRangeCell")
-        for word in ("title", "addEventListener", "badge", "changed", "min", "max", "aria-description"):
+        for word in ("addEventListener", "badge", "changed", "min", "max", "title", "total", "count", "toPrecision", "tyre", "aria-description"):
             with self.subTest(word):
                 self.assertNotIn(word, body)
         self.assertEqual(len(re.findall(r"\bbase_range\b", CODE)), 1)
 
+    def test_no_tyre_row_and_no_page_text_has_the_removed_column(self):
+        self.assertNotIn("base_range", inspect.getsource(ts.tune.tyre_rows))
+        self.assertNotIn('"ranges"', inspect.getsource(ts.tune.read_tyre_ranges))
+        self.assertNotIn("base_range", inspect.getsource(ts.api_tyre) + inspect.getsource(ts.api_tyre_set) + inspect.getsource(ts.api_tyre_unset))
+        self.assertNotIn("game min", inspect.getsource(ts.tune.cmd_tyre_show))
+        for text in ("Range in", "range column"):
+            self.assertNotIn(text, MARKUP + CODE)
+
     def test_the_server_sends_the_field_the_page_reads(self):
         self.assertIn('"base_range"', inspect.getsource(ts.row_json))
 
+
+class TestTyreTypeColumns(unittest.TestCase):
+    PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]
+    EDITOR = re.search(r'<section id="tyre-editor".*?</section>', PANEL, re.S).group(0)
+    MINUS = "\\u2212"
+    TYPED = re.compile(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}")
+
+    def test_the_line_with_the_toggle_buttons_sits_below_the_search_and_above_the_table_and_is_hidden_until_there_are_types(self):
+        self.assertIn('<div id="tyre-types" class="typebar" hidden>', self.EDITOR)
+        self.assertIn('<span class="tunenote">Values by tyre type:</span>', self.EDITOR)
+        self.assertIn('<span id="tyre-type-buttons" class="typebuttons" role="group" aria-label="Values by tyre type"></span>', self.EDITOR)
+        self.assertLess(self.EDITOR.index('id="tyre-search"'), self.EDITOR.index('id="tyre-types"'))
+        self.assertLess(self.EDITOR.index('id="tyre-types"'), self.EDITOR.index('id="tyre-table-wrap"'))
+        self.assertLess(self.EDITOR.index('id="tyre-table-wrap"'), self.EDITOR.index("<table>"))
+        self.assertIn('<div id="tyre-table-wrap" class="tablewrap">', self.EDITOR)
+        for ident in ("tyre-types", "tyre-type-buttons", "tyre-table-wrap"):
+            self.assertEqual(len(re.findall(r'\bid="%s"' % ident, MARKUP)), 1)
+
+    def test_the_static_table_has_no_type_column_they_are_added_by_the_script(self):
+        table = self.EDITOR[self.EDITOR.index("<table>"):]
+        self.assertEqual(len(re.findall(r'<th scope="col">', table)), 4)
+        self.assertEqual(table.count("<col "), 4)
+        body = function_body("buildTyreTypes")
+        self.assertIn('$("tyre-rows").closest("table")', body)
+        self.assertIn("cols.insertBefore(t.col, cols.lastElementChild);", body)
+        self.assertIn("head.insertBefore(t.th, head.lastElementChild);", body)
+        self.assertIn('el("col", "c-type")', body)
+
+    def test_a_button_per_type_says_plus_or_minus_the_label_and_what_it_shows_or_hides(self):
+        body = function_body("applyTyreTypes")
+        self.assertIn('t.btn.textContent = (on ? "%s " : "+ ") + t.label;' % self.MINUS, body)
+        self.assertIn('t.btn.setAttribute("aria-pressed", on ? "true" : "false");', body)
+        self.assertIn('t.btn.title = (on ? "Hide" : "Show") + " the values of the " + t.total + " " + t.label + " tyres";', body)
+        self.assertIn('t.btn.addEventListener("click", () => toggleTyreType(t, false));', function_body("buildTyreTypes"))
+        self.assertIn('$("tyre-types").hidden = tyreTypes.length === 0;', function_body("buildTyreTypes"))
+        self.assertIn("flex-wrap: wrap", re.search(r"\.typebar \{([^}]*)\}", STYLE).group(1))
+        self.assertIn("flex-wrap: wrap", re.search(r"\.typebuttons \{([^}]*)\}", STYLE).group(1))
+
+    def test_the_header_of_a_column_has_the_label_the_number_of_tyres_and_a_button_that_hides_it(self):
+        body = function_body("buildTyreTypeHead")
+        self.assertIn('el("button", "small", "%s")' % self.MINUS, body)
+        self.assertIn('hide.setAttribute("aria-label", "Hide " + t.label);', body)
+        self.assertIn('hide.addEventListener("click", () => toggleTyreType(t, true));', body)
+        self.assertIn('el("div", "tcount", t.total + (t.total === 1 ? " tyre" : " tyres"))', body)
+        self.assertIn('th.scope = "col";', body)
+        self.assertIn(".tcount { font-size: 12px; font-weight: normal; color: var(--color-text-muted); }", STYLE)
+
+    def test_the_cells_are_built_with_the_rows_between_the_range_and_the_description_in_the_order_of_the_types(self):
+        body = function_body("addTyreTypeCells")
+        self.assertIn("for (const t of tyreTypes) {", body)
+        self.assertIn("r.tr.insertBefore(cell, r.tr.lastElementChild);", body)
+        self.assertIn("cell.hidden = true;", body)
+        self.assertIn("r.typeCells[t.type] = cell;", body)
+        rows = function_body("buildTyreRows")
+        self.assertLess(rows.index("buildRow(item, {}, false);"), rows.index("addTyreTypeCells(r, item);"))
+        self.assertLess(rows.index("applyTyreFilter();"), rows.index("applyTyreTypes();"))
+        self.assertIn("buildRow(data, target, true)", function_body("buildTable"))
+        self.assertNotIn("Type", function_body("buildRow"))
+        self.assertNotIn("type_ranges", function_body("buildRow") + function_body("buildRangeCell"))
+
+    def test_a_float_cell_is_low_to_high_with_five_digits_the_unit_and_the_exact_values_in_the_title(self):
+        body = function_body("buildTyreTypeCell")
+        self.assertIn("const e = data.type_ranges && data.type_ranges[t.type];", body)
+        self.assertIn("fmtVal(data.type, Number(e.low.toPrecision(5)))", body)
+        self.assertIn("fmtVal(data.type, Number(e.high.toPrecision(5)))", body)
+        self.assertIn('text = (e.low === e.high ? low : low + " \\u2013 " + high) + (data.unit ? " " + data.unit : "");', body)
+        self.assertIn('const exact = e.low === e.high ? fmtVal(data.type, e.low) : fmtVal(data.type, e.low) + " \\u2013 " + fmtVal(data.type, e.high);', body)
+        self.assertIn('e.count < t.total ? "Stored in " + where + "; the others count as 0"', body)
+        self.assertIn('const where = e.count + " of " + t.total + " " + t.label + " tyres";', body)
+        self.assertIn('"Lowest and highest value of all " + t.total + " " + t.label + " tyres"', body)
+        self.assertIn('cell.setAttribute("aria-description", tip);', body)
+
+    def test_a_bool_cell_says_off_on_or_off_slash_on_and_an_enum_cell_joins_the_names(self):
+        body = function_body("buildTyreTypeCell")
+        self.assertIn('e.values.map((v) => fmtVal("bool", v)).join(" / ")', body)
+        self.assertIn('e.values.join(", ")', body)
+        self.assertIn('data.type === "bool"', body)
+        self.assertEqual(function_body("fmtVal").count('"on" : "off"'), 1)
+
+    def test_a_type_without_a_value_is_a_muted_dash_that_says_the_field_counts_as_0(self):
+        body = function_body("buildTyreTypeCell")
+        self.assertIn('const none = el("td", "default mono", "\\u2013");', body)
+        self.assertIn('none.classList.add("range-none");', body)
+        self.assertIn('none.title = "No " + t.label + " tyre stores this value; it counts as 0";', body)
+
+    def test_showing_and_hiding_changes_only_hidden_flags_and_the_layout_and_loads_and_rebuilds_nothing(self):
+        for name in ("applyTyreTypes", "toggleTyreType"):
+            with self.subTest(name):
+                body = function_body(name)
+                for word in ("api(", "load", "buildTyre", "buildRow", "replaceChildren", "scroll", "createElement", "el("):
+                    self.assertNotIn(word, body)
+        body = function_body("applyTyreTypes")
+        for part in ("t.col.hidden = !on;", "t.th.hidden = !on;", "r.typeCells[t.type].hidden = !on;", "g.th.colSpan = 4 + shown;",
+                     'wrap.classList.toggle("typed", shown > 0);', 'wrap.style.setProperty("--tyre-types", String(shown));'):
+            self.assertIn(part, body)
+        body = function_body("toggleTyreType")
+        self.assertIn("if (!tyreShownTypes.delete(t.type)) tyreShownTypes.add(t.type);", body)
+        self.assertLess(body.index("storeTyreTypes();"), body.index("applyTyreTypes();"))
+        self.assertIn("t.btn.focus({ preventScroll: true });", body)
+
+    def test_the_group_rows_of_the_tyre_table_start_at_4_columns_and_cover_the_shown_columns(self):
+        self.assertIn("th.colSpan = 4;", function_body("buildTyreGroup"))
+        self.assertIn("g.th = th;", function_body("buildTyreGroup"))
+        self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
+        self.assertNotIn("tyreShownTypes", function_body("buildGroup"))
+
+    def test_the_types_come_with_a_loaded_tyre_before_its_rows_and_the_columns_stay_for_the_next_one(self):
+        body = function_body("loadTyre")
+        self.assertLess(body.index("buildTyreTypes(res.types || []);"), body.index("buildTyreRows(res.rows, id, res.groups);"))
+        body = function_body("buildTyreTypes")
+        self.assertIn("if (same) return;", body)
+        self.assertNotIn("tyreShownTypes", body)
+        self.assertNotIn("tyreShownTypes", function_body("clearTyreRows"))
+        self.assertIn("let tyreShownTypes = new Set(storedTyreTypes());", CODE)
+
+    def test_the_shown_types_are_remembered_in_the_browser_like_the_selection_and_unknown_ones_are_ignored(self):
+        self.assertIn('const TYRE_TYPES_KEY = "tuner.tyre_types";', CODE)
+        read = function_body("storedTyreTypes")
+        self.assertIn("window.localStorage.getItem(TYRE_TYPES_KEY)", read)
+        self.assertIn("try {", read)
+        self.assertIn("} catch (e) {", read)
+        self.assertIn('Array.isArray(list) ? list.filter((t) => typeof t === "string") : []', read)
+        self.assertIn("return [];", read)
+        write = function_body("storeTyreTypes")
+        self.assertIn("window.localStorage.setItem(TYRE_TYPES_KEY, JSON.stringify(tyreTypes.map((t) => t.type).filter((t) => tyreShownTypes.has(t))));", write)
+        self.assertIn("} catch (e) {", write)
+        self.assertLess(write.index("setItem"), write.index("catch"))
+        self.assertIn("for (const t of tyreTypes) {\n    const on = tyreShownTypes.has(t.type);", function_body("applyTyreTypes"))
+
+    def test_a_shown_column_is_120px_wide_the_wrapper_scrolls_and_the_page_does_not(self):
+        self.assertIn("col.c-type { width: 120px; }", STYLE)
+        self.assertIn("#tyre-table-wrap.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }", STYLE)
+        table = re.search(r"#tyre-table-wrap\.typed table \{([^}]*)\}", STYLE).group(1)
+        floors = {"name": 190, "value": 190, "default": 130}
+        panel = {k: int(v) for k, v in re.findall(r"^col\.c-(name|value|default|desc) \{ width: (\d+)%; \}", STYLE, re.M)}
+        for k, floor in floors.items():
+            self.assertIn("--w-%s: max(%dpx, %dcqw);" % (k, floor, panel[k]), table)
+            self.assertIn("#tyre-table-wrap.typed col.c-%s { width: var(--w-%s); }" % (k, k), STYLE)
+        self.assertIn("width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--tyre-types, 0) * 120px));", table)
+        self.assertIn("#tyre-table-wrap.typed col.c-desc { width: auto; }", STYLE)
+        self.assertNotIn("--w-range", STYLE)
+        self.assertEqual(sorted(panel), ["default", "desc", "name", "value"])
+        self.assertNotIn("cqw", re.sub(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", "", STYLE))
+        self.assertNotRegex(STYLE, r"\.page[^{}]*\{[^}]*overflow")
+        self.assertNotRegex(STYLE, r"body[^{}]*\{[^}]*overflow")
+
+    def test_the_header_keeps_sticking_inside_the_scrolling_wrapper_and_the_first_column_stays_from_700px(self):
+        self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
+        media = re.search(r"@media \(min-width: 700px\) \{(.*?)\n\}", STYLE, re.S).group(1)
+        self.assertRegex(media, r"#tyre-table-wrap\.typed thead th:first-child \{ left: 0; z-index: 3; \}")
+        cell = re.search(r"#tyre-table-wrap\.typed td\.name \{([^}]*)\}", media).group(1)
+        for part in ("position: sticky;", "left: 0;", "background: var(--color-bg-alt);"):
+            self.assertIn(part, cell)
+        self.assertIn("box-shadow: inset 0 0 0 999px var(--color-accent-tint)", re.search(r"#tyre-table-wrap\.typed tr\.changed td\.name \{([^}]*)\}", media).group(1))
+        self.assertIn("#tyre-table-wrap.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }", media)
+        self.assertIn("#tyre-table-wrap.typed tr.group th > .gdesc { position: sticky; left: 0; }", media)
+
+    def test_everything_new_in_the_style_is_below_the_tyre_wrapper_and_uses_the_colour_tokens(self):
+        rules = self.TYPED.findall(STYLE)
+        self.assertGreaterEqual(len(rules), 6)
+        for rule in re.findall(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", STYLE):
+            self.assertNotRegex(rule, r"#[0-9a-fA-F]{3,8}\b|rgba?\(")
+        self.assertNotIn("#panel-car", "".join(rules))
+
+    def test_the_server_sends_the_types_and_the_values_by_type_the_page_reads(self):
+        self.assertIn('"types": tune.tyre_type_list(work, cat, CONFIG["game"])', inspect.getsource(ts.api_tyre))
+        self.assertIn('"type_ranges"', inspect.getsource(ts.tune.tyre_rows))
+        self.assertEqual(set(re.findall(r"\be\.(\w+)", function_body("buildTyreTypeCell"))), {"values", "count", "low", "high"})
+        self.assertEqual(set(re.findall(r"\bt\.(\w+)", function_body("buildTyreTypeCell"))), {"type", "label", "total"})
+
+
+class TestTyreGroups(unittest.TestCase):
+    PANEL = MARKUP[MARKUP.index('id="panel-tyres"'):MARKUP.index('id="panel-logging"')]
+    EDITOR = re.search(r'<section id="tyre-editor".*?</section>', PANEL, re.S).group(0)
+    FUNCTIONS = ("buildTyreGroup", "toggleTyreGroup", "setAllTyreGroups", "revealTyreGroup", "applyTyreFilter", "buildTyreRows")
+
+    def test_the_editor_has_the_two_buttons_next_to_reset_all_values_and_a_search_field(self):
+        self.assertRegex(self.EDITOR, r'<button id="btn-tyre-reset" type="button">Reset all values</button>\s*'
+                                      r'<button id="btn-tyre-expand-all" type="button">Expand all</button>\s*'
+                                      r'<button id="btn-tyre-collapse-all" type="button">Collapse all</button>')
+        self.assertIn('<input id="tyre-search" type="search" placeholder="Search id, name or description" aria-label="Search tyre settings">', self.EDITOR)
+        self.assertIn('<div id="tyre-empty" class="empty" hidden>No settings match.</div>', self.EDITOR)
+        self.assertLess(self.EDITOR.index('id="tyre-search"'), self.EDITOR.index("<table>"))
+        self.assertLess(self.EDITOR.index('id="tyre-empty"'), self.EDITOR.index("</section>"))
+        self.assertEqual(len(re.findall(r'\bid="tyre-search"', MARKUP)), 1)
+
+    def test_the_buttons_and_the_search_are_wired_to_the_tyre_functions(self):
+        self.assertIn('$("btn-tyre-expand-all").addEventListener("click", () => setAllTyreGroups(true));', CODE)
+        self.assertIn('$("btn-tyre-collapse-all").addEventListener("click", () => setAllTyreGroups(false));', CODE)
+        self.assertIn('$("tyre-search").addEventListener("input", applyTyreFilter);', CODE)
+
+    def test_a_group_header_is_built_like_the_one_of_the_car_table_with_ids_of_its_own(self):
+        body = function_body("buildTyreGroup")
+        self.assertIn('th.scope = "rowgroup";', body)
+        self.assertIn('el("button", "grouptoggle")', body)
+        self.assertIn('g.btn.setAttribute("aria-expanded", "false");', body)
+        self.assertIn('g.btn.addEventListener("click", () => toggleTyreGroup(g));', body)
+        self.assertIn('el("span", "gname", name)', body)
+        self.assertIn('chev.setAttribute("aria-hidden", "true");', body)
+        self.assertIn("const known = tyreGroupList.find((x) => x.name === name);", body)
+        self.assertIn('g.desc = el("div", "gdesc", known.description);', body)
+        self.assertIn('g.desc.id = "tdesc-" + tyreGroups.length;', body)
+        self.assertIn('g.btn.setAttribute("aria-describedby", g.desc.id);', body)
+        self.assertNotIn("innerHTML", body)
+        self.assertNotIn('"gdesc-"', body)
+        self.assertNotIn("tdesc-", function_body("buildGroup"))
+        self.assertIn('g.btn.setAttribute("aria-controls", g.rows.map((r) => r.tr.id).join(" "));', function_body("buildTyreRows"))
+        self.assertIn('r.tr.id = "tyre-row-" + tyreRows.length;', function_body("buildTyreRows"))
+
+    def test_the_tyre_groups_have_a_state_of_their_own_that_starts_collapsed_and_is_kept(self):
+        self.assertRegex(CODE, r"(?m)^const tyreExpanded = new Set\(\);")
+        self.assertRegex(CODE, r"(?m)^const expanded = new Set\(\);")
+        self.assertEqual(len(re.findall(r"tyreExpanded\.clear\(\)", CODE)), 1)
+        self.assertIn("tyreExpanded.clear();", function_body("setAllTyreGroups"))
+        self.assertIn("for (const g of tyreGroups) tyreExpanded.add(g.name);", function_body("setAllTyreGroups"))
+        self.assertIn("if (!tyreExpanded.delete(g.name)) tyreExpanded.add(g.name);", function_body("toggleTyreGroup"))
+        for name in ("loadTyre", "loadTyres", "selectTyre", "clearTyreRows", "buildTyreRows", "sendTyreSet", "sendTyreUnset", "renderTyres", "syncTyres"):
+            with self.subTest(name):
+                self.assertNotIn("tyreExpanded", function_body(name))
+                self.assertNotIn("new Set", function_body(name))
+        for name in self.FUNCTIONS:
+            with self.subTest(name):
+                self.assertNotRegex(function_body(name), r"(?<![\w-])expanded\.")
+                self.assertNotIn("aria-live", function_body(name))
+        for name in ("buildGroup", "toggleGroup", "setAllGroups", "applyFilter", "switchCar"):
+            with self.subTest(name):
+                self.assertNotIn("tyreExpanded", function_body(name))
+                self.assertNotIn("tyreGroups", function_body(name))
+
+    def test_the_search_opens_the_groups_with_matches_without_touching_the_remembered_state(self):
+        body = function_body("applyTyreFilter")
+        self.assertIn('const q = $("tyre-search").value.trim().toLowerCase();', body)
+        self.assertIn("r.match = !q || r.hay.includes(q);", body)
+        self.assertIn('const open = q !== "" ? any : tyreExpanded.has(g.name);', body)
+        self.assertIn("for (const r of g.rows) r.tr.hidden = !(open && r.match);", body)
+        self.assertIn("g.tr.hidden = !any;", body)
+        self.assertIn('g.btn.setAttribute("aria-expanded", open ? "true" : "false");', body)
+        self.assertIn("if (g.desc) g.desc.hidden = !open;", body)
+        self.assertNotIn("tyreExpanded.add", body)
+        self.assertNotIn("tyreExpanded.delete", body)
+        self.assertNotIn("tyreExpanded.clear", body)
+        self.assertNotIn("remove(", body)
+
+    def test_the_heading_shows_the_number_of_settings_and_of_changed_ones_like_the_car_table(self):
+        body = function_body("applyTyreFilter")
+        self.assertIn('"(" + g.rows.length + (g.rows.length === 1 ? " setting, " : " settings, ") + changed + " changed)"', body)
+        self.assertIn("if (r.data.changed) changed += 1;", body)
+        self.assertIn("applyTyreFilter();", function_body("sendTyreSet"))
+        self.assertIn("applyTyreFilter();", function_body("sendTyreUnset"))
+        self.assertLess(function_body("sendTyreSet").index("showRow(r, res.row, false);"), function_body("sendTyreSet").index("applyTyreFilter();"))
+        self.assertIn("applyTyreFilter();", function_body("buildTyreRows"))
+
+    def test_rows_without_a_listed_group_are_shown_flat_below_the_groups_and_only_filtered(self):
+        body = function_body("buildTyreRows")
+        self.assertIn("tyreGroupList = groupList || [];", body)
+        self.assertIn("tyreGroupList.some((x) => x.name === item.group)", body)
+        self.assertIn("body.append(...tyreRows.filter((r) => !r.group).map((r) => r.tr));", body)
+        self.assertLess(body.index("body.append(g.tr, ...g.rows.map((r) => r.tr));"), body.index("body.append(...tyreRows.filter("))
+        self.assertIn("tyreGroups.sort((a, b) => listed.indexOf(a.name) - listed.indexOf(b.name));", body)
+        flat = function_body("applyTyreFilter")
+        self.assertIn("if (r.group) continue;", flat)
+        self.assertIn("r.tr.hidden = !r.match;", flat)
+        self.assertIn('$("tyre-empty").hidden = visible > 0 || tyreRows.length === 0;', flat)
+        self.assertIn("tyreGroups = [];", function_body("clearTyreRows"))
+
+    def test_a_message_in_a_row_of_the_tyre_table_opens_its_group_and_the_car_table_keeps_its_own_reveal(self):
+        self.assertIn("if (text) revealGroup(r);", function_body("setMsg"))
+        body = function_body("revealGroup")
+        self.assertIn("if (r.tyre) {", body)
+        self.assertIn("revealTyreGroup(r);", body)
+        self.assertIn("expanded.add(r.group.name);", body)
+        reveal = function_body("revealTyreGroup")
+        self.assertIn("tyreGroups.includes(r.group)", reveal)
+        self.assertIn("tyreExpanded.add(r.group.name);", reveal)
+        self.assertIn("applyTyreFilter();", reveal)
+        self.assertIn("r.group = g;", function_body("buildTyreRows"))
+
+    def test_the_rows_of_the_server_carry_the_group_and_the_type_ranges_the_page_reads(self):
+        self.assertIn('"groups"', inspect.getsource(ts.api_tyre))
+        self.assertIn("res.groups", function_body("loadTyre"))
+        self.assertIn('"group"', inspect.getsource(ts.tune.tyre_rows))
+        self.assertIn('"type_ranges"', inspect.getsource(ts.tune.tyre_rows))
+        group = set(re.findall(r"\bknown\.(\w+)", function_body("buildTyreGroup")))
+        sent = quoted_words(ts.tune.tyre_group_list)
+        self.assertEqual(sorted(group - sent), [])
+        self.assertEqual(set(re.findall(r"\bbr\.(\w+)", function_body("buildRangeCell"))), {"low", "high"})
+        self.assertIn("tyre_rows(", inspect.getsource(ts.tyre_row))
+        self.assertIn("tyre_row(", inspect.getsource(ts.api_tyre_set))
+        self.assertIn("tyre_row(", inspect.getsource(ts.api_tyre_unset))
 
 class TestPolling(unittest.TestCase):
     def test_a_hidden_tab_polls_slowly_and_refreshes_at_once_when_shown(self):
@@ -843,8 +1190,8 @@ class TestPanelLoads(unittest.TestCase):
                 self.assertIn("%s = running;" % flag, body)
         self.assertRegex(body, r"loadGarage\(\);\s*loadTurbo\(\);\s*loadSounds\(\);")
         self.assertLess(body.index("soundsJobRunning = running;"), body.index("loadGarage();"))
-        # besides the helper only the job-end hook and the failed write read one panel alone
-        self.assertEqual(len(re.findall(r"\bloadGarage\(\);", CODE)), 3)
+        # besides the helper: the job-end hook, the failed write, and the two writes that read the choice again after they are saved
+        self.assertEqual(len(re.findall(r"\bloadGarage\(\);", CODE)), 5)
         self.assertEqual(len(re.findall(r"\bloadTurbo\(\);", CODE)), 3)
         self.assertEqual(len(re.findall(r"\bloadSounds\(\);", CODE)), 3)
 
@@ -1329,7 +1676,8 @@ class TestVersions(unittest.TestCase):
         self.assertLess(MARKUP.index('id="car-select"'), MARKUP.index('id="version-select"'))
         self.assertIn('<label id="version-field" class="selectrow" hidden>Version', MARKUP)
         body = function_body("renderCars")
-        self.assertIn('[["", "Base"]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))', body)
+        self.assertIn('[["", baseName]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))', body)
+        self.assertIn('serverState.base_name ? serverState.base_name : "Base"', body)
         self.assertIn("o.value = id;", body)
         self.assertIn('versionSelect.value = selection.version || "";', body)
         self.assertIn('$("version-field").hidden = !moddedEntry();', body)
@@ -1363,7 +1711,7 @@ class TestVersions(unittest.TestCase):
         self.assertIn("versioned ? { version: target.version } : {}", body)
 
     def test_every_route_with_a_version_on_the_server_reads_it_from_the_request(self):
-        for route in ts.VERSION_POST_ROUTES:
+        for route in set(ts.VERSION_POST_ROUTES) - {"/api/garage_set", "/api/garage_reset"}:
             self.assertIn('body.get("version")', inspect.getsource(ts.POST_ROUTES[route]), route)
         for route in ts.VERSION_GET_ROUTES:
             self.assertIn("version", inspect.signature(ts.GET_ROUTES[route]).parameters, route)
@@ -1377,17 +1725,18 @@ class TestVersions(unittest.TestCase):
         self.assertNotIn("window.prompt", CODE)
         body = function_body("submitVersionDialog")
         self.assertIn('await api("/api/version_add", { name: name, from: target.version }, target);', body)
-        self.assertIn('await api("/api/version_rename", { name: name, version: target.version }, target);', body)
+        self.assertIn('await api("/api/version_rename", { name: name, version: target.version || "base" }, target);', body)
         self.assertIn("switchCar({ car: target.car, tune: target.tune, version: res.id });", body)
         self.assertIn("showVersionDialogError(e.message);", body)
         self.assertIn("The new version starts as a copy of ", function_body("openVersionDialog"))
-        self.assertIn("if (!add && !current) return;", function_body("openVersionDialog"))
+        self.assertIn("if (!add && !current && baseNameShown() === null) return;", function_body("openVersionDialog"))
 
     def test_the_rename_button_is_for_a_version_only_and_both_follow_the_modded_car_and_the_job(self):
         body = function_body("renderButtons")
         self.assertIn('$("btn-version-add").hidden = !moddedSelected;', body)
         self.assertIn('$("btn-version-rename").hidden = !moddedSelected;', body)
-        self.assertIn('(selection.version ? "" : "select a version to rename it, the base has no version name")', body)
+        self.assertIn('const whyLock = whyVersion || (selection.version ? "" : "select a version to rename it, the base has no version name");', body)
+        self.assertIn('(selection.version || baseNameShown() !== null ? "" : "the base of this car has no name in the game\'s menu")', body)
         self.assertIn('whyVersion = "a job is running";', body)
 
     def test_the_meta_and_shared_rows_of_a_version_are_read_only_with_a_note(self):
@@ -1429,7 +1778,7 @@ class TestVersions(unittest.TestCase):
         body = function_body("renderButtons")
         self.assertIn('$("btn-version-lock").textContent = lockedNow ? "Unlock version" : "Lock version";', body)
         self.assertIn('$("btn-version-lock").hidden = !moddedSelected;', body)
-        self.assertIn('$("btn-version-lock").disabled = whyRename !== "";', body)
+        self.assertIn('$("btn-version-lock").disabled = whyLock !== "";', body)
 
     def test_the_lock_button_posts_the_lock_or_unlock_route_for_the_selected_version_and_shows_an_error_as_a_local_error(self):
         body = function_body("toggleVersionLock")
@@ -1555,7 +1904,9 @@ class TestTabs(unittest.TestCase):
     def test_the_tyre_panel_keeps_its_heading_and_its_first_paragraph(self):
         self.assertIn("<h2>Tyre Creator</h2>", self.TYRES_PANEL)
         self.assertEqual(re.findall(r"<p\b[^>]*>(.*?)</p>", self.TYRES_PANEL)[0],
-                         "Tyres you create here are saved once and can be ticked in the garage list of any modded car in the Car Tuner tab.")
+                         "Tyres you create here are saved once and can be chosen for any modded car in the Car Tuner tab, in the panel Tyres offered in the game. "
+                         "A tyre is used as 4x the same tyre, or 2x on the front or the rear only; you choose that in the Car Tuner. "
+                         "The + buttons above the table show the lowest and highest value of each tyre type, as a guide how far to go.")
         self.assertTrue(self.TYRES_PANEL.split("<section", 1)[1].startswith(' class="panel">\n      <h2>Tyre Creator</h2>'))
 
     def test_the_header_holds_the_title_only_and_the_tab_strip_follows_it(self):
@@ -1592,7 +1943,7 @@ class TestTabs(unittest.TestCase):
         self.assertIn("if (ev.altKey || ev.ctrlKey || ev.metaKey) return;", body)
 
     def test_the_active_tab_lives_in_a_variable_only_and_changes_nothing_of_the_car_tuner(self):
-        self.assertEqual(CODE.count("localStorage"), 2)
+        self.assertEqual(CODE.count("localStorage") - TYRE_TYPES_STORAGE.count("localStorage"), 2)
         self.assertNotIn("activeTab", function_body("storeSelection") + function_body("storedSelection"))
         for name in ("refresh", "switchCar", "applyFilter", "renderButtons", "toggleGroup", "closeDialog", "openDialog"):
             with self.subTest(name):
@@ -1629,17 +1980,35 @@ class TestTyreCreator(unittest.TestCase):
     def tag(ident):
         return re.search(r'<[a-z]+\b[^>]*\bid="%s"[^>]*>' % ident, MARKUP).group(0)
 
-    def test_the_toolbar_has_the_selector_and_the_three_buttons(self):
+    def test_the_toolbar_has_the_four_buttons_and_no_selector(self):
         bar = re.search(r'<div class="toolbar">.*?</div>', self.PANEL, re.S).group(0)
-        self.assertIn('<select id="tyre-select" aria-label="Tyre"', bar)
-        self.assertIn('<button id="btn-tyre-new" class="primary" type="button" disabled>New tyre&hellip;</button>', bar)
+        self.assertNotIn("<select", bar)
+        self.assertNotIn('id="tyre-select"', MARKUP)
+        self.assertIn('<button id="btn-tyre-new" class="primary" type="button" disabled>Create tyre&hellip;</button>', bar)
         self.assertIn('<button id="btn-tyre-rename" type="button" disabled>Rename&hellip;</button>', bar)
+        self.assertIn('<button id="btn-tyre-source" type="button" disabled>Change source&hellip;</button>', bar)
         self.assertIn('<button id="btn-tyre-delete" type="button" disabled>Delete</button>', bar)
-        self.assertLess(bar.index("tyre-select"), bar.index("btn-tyre-new"))
-        self.assertLess(bar.index("btn-tyre-new"), bar.index("btn-tyre-rename"))
-        self.assertLess(bar.index("btn-tyre-rename"), bar.index("btn-tyre-delete"))
+        for a, b in (("btn-tyre-new", "btn-tyre-rename"), ("btn-tyre-rename", "btn-tyre-source"), ("btn-tyre-source", "btn-tyre-delete")):
+            self.assertLess(bar.index(a), bar.index(b))
 
-    def test_the_dialog_is_a_hidden_labelled_group_with_a_name_a_source_an_alert_and_two_buttons(self):
+    def test_the_list_of_own_tyres_has_the_name_the_short_name_the_source_the_changed_values_and_the_users(self):
+        wrap = re.search(r'<div id="tyre-list-wrap" class="tablewrap" hidden>.*?</table>', self.PANEL, re.S).group(0)
+        self.assertEqual(re.findall(r'<th scope="col">(.*?)</th>', wrap), ["Tyre", "Short", "Source", "Changed values", "Used by"])
+        self.assertIn('<caption class="sr-only">Your tyres</caption>', wrap)
+        self.assertIn('<tbody id="tyre-list-rows"></tbody>', wrap)
+        self.assertLess(self.PANEL.index('id="tyre-notes"'), self.PANEL.index('id="tyre-list-wrap"'))
+        self.assertLess(self.PANEL.index('id="tyre-list-wrap"'), self.PANEL.index('id="tyre-editor"'))
+        row = function_body("buildTyreListRow")
+        self.assertIn('tr.append(name, el("td", "mono", t.short), el("td", "", t.source_label), el("td", "", String(t.changed)), el("td", "", tyreUsersText(t)));', row)
+        self.assertIn('pick.addEventListener("click", () => selectTyre(t.id));', row)
+        self.assertIn('pick.setAttribute("aria-pressed", t.id === tyreId ? "true" : "false");', row)
+        self.assertIn('el("td", "", t.id + " (damaged): " + t.error)', row)
+        self.assertIn('t.users.length ? t.users.join(", ") : "not used"', function_body("tyreUsersText"))
+        body = function_body("renderTyres")
+        self.assertIn("for (const t of tyres) body.appendChild(buildTyreListRow(t));", body)
+        self.assertIn('$("tyre-list-wrap").hidden = tyres.length === 0;', body)
+
+    def test_the_dialog_is_a_hidden_labelled_group_with_a_name_a_short_name_the_source_picker_an_alert_and_two_buttons(self):
         panel = re.search(r'<section id="tyre-dialog".*?</section>', self.PANEL, re.S).group(0)
         first = panel.split("\n")[0]
         for part in ('class="panel dialog"', 'role="group"', 'aria-labelledby="tyre-dialog-title"'):
@@ -1647,35 +2016,58 @@ class TestTyreCreator(unittest.TestCase):
         self.assertTrue(first.endswith("hidden>"), first)
         self.assertIn('<h2 id="tyre-dialog-title"></h2>', panel)
         self.assertRegex(panel, r'<label for="tyre-dialog-name">Name</label>\s*<input id="tyre-dialog-name"[^>]*type="text"')
-        self.assertRegex(panel, r'<label for="tyre-dialog-source">Source tyre \(from your installed cars\)</label>\s*<select id="tyre-dialog-source">')
+        self.assertRegex(panel, r'<label for="tyre-dialog-short">Short name \(optional\)</label>\s*<input id="tyre-dialog-short"[^>]*maxlength="3"')
+        self.assertIn('<p class="hint">1 to 3 letters or digits; without one it is made from the name.</p>', panel)
+        self.assertRegex(panel, r'<label for="tyre-dialog-type">Source tyre: type</label>\s*<select id="tyre-dialog-type"></select>')
+        self.assertRegex(panel, r'<label for="tyre-dialog-filter">Size or name</label>\s*<input id="tyre-dialog-filter" type="search"')
+        self.assertRegex(panel, r'<label for="tyre-dialog-source">Source tyre</label>\s*<select id="tyre-dialog-source"></select>')
+        self.assertLess(panel.index("tyre-dialog-type"), panel.index("tyre-dialog-filter"))
+        self.assertLess(panel.index("tyre-dialog-filter"), panel.index('id="tyre-dialog-source"'))
+        self.assertIn('<p id="tyre-dialog-none" class="hint" hidden>No game tyre matches.</p>', panel)
         self.assertIn('<p id="tyre-dialog-error" class="msg err" role="alert" hidden></p>', panel)
         self.assertIn('<button id="tyre-dialog-ok" class="primary" type="button">OK</button>', panel)
         self.assertIn('<button id="tyre-dialog-cancel" type="button">Cancel</button>', panel)
         self.assertIn('<p id="tyre-dialog-text" hidden></p>', panel)
 
-    def test_the_editor_is_hidden_until_a_tyre_is_selected_and_has_the_source_the_reset_button_and_its_own_table(self):
+    def test_the_editor_is_hidden_until_a_tyre_is_selected_and_shows_the_short_name_the_source_the_reset_button_and_its_own_table(self):
         self.assertRegex(self.tag("tyre-editor"), r"\bhidden>$")
         editor = re.search(r'<section id="tyre-editor".*?</section>', self.PANEL, re.S).group(0)
-        self.assertRegex(editor, r'<label class="selectrow">Source:\s*<select id="tyre-source" aria-label="Source tyre"></select>')
+        self.assertIn('<span class="label">Short name: </span><span id="tyre-short-text" class="stockname mono"></span>', editor)
+        self.assertIn('<span class="label">Source: </span><span id="tyre-source-text" class="stockname"></span>', editor)
         self.assertIn('<button id="btn-tyre-reset" type="button">Reset all values</button>', editor)
         self.assertIn('<tbody id="tyre-rows"></tbody>', editor)
         self.assertIn('<caption class="sr-only">Settings of the selected tyre</caption>', editor)
         self.assertEqual([h.replace("<br>", " ") for h in re.findall(r'<th scope="col">(.*?)</th>', editor)],
                          ["Variable name", "Value", "Default (source tyre)", "Description"])
         self.assertNotIn('id="rows"', self.PANEL)
+        body = function_body("renderTyres")
+        self.assertIn('$("tyre-editor").hidden = entry === null;', body)
+        self.assertIn('$("tyre-source-text").textContent = entry.source_label;', body)
+        self.assertIn('$("tyre-short-text").textContent = entry.short;', body)
+
+    def test_the_wording_says_one_tyre_for_four_wheels_or_one_axle_and_never_front_and_rear_values(self):
+        intro = re.findall(r"<p\b[^>]*>(.*?)</p>", self.PANEL)[0]
+        self.assertIn("A tyre is used as 4x the same tyre, or 2x on the front or the rear only; you choose that in the Car Tuner.", intro)
+        self.assertIn("panel Tyres offered in the game", intro)
+        self.assertTrue(intro.endswith("The + buttons above the table show the lowest and highest value of each tyre type, as a guide how far to go."))
+        self.assertNotRegex(self.PANEL, r"\b12\b")
+        self.assertNotIn("garage", self.PANEL.lower())
+        self.assertNotIn("Front tyre", self.PANEL)
+        self.assertNotIn("Rear tyre", self.PANEL)
+        self.assertNotIn("axle", function_body("buildTyreRows"))
 
     def test_the_error_line_is_a_visible_alert_of_the_panel_outside_the_dialog(self):
         self.assertIn('<p id="tyre-error" class="msg err" role="alert" hidden></p>', self.PANEL)
         self.assertLess(self.PANEL.index('id="tyre-dialog"'), self.PANEL.index('id="tyre-error"'))
         body = function_body("renderTyres")
-        self.assertIn('showText("tyre-error", tyreError);', body)
+        self.assertIn('showText("tyre-error", tyreError || tyreIndexError);', body)
         self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
 
     def test_every_tyre_route_is_called_with_the_fields_of_the_server(self):
         calls = {
-            "/api/tyre_new": r'api\("/api/tyre_new", \{ name: name, source: source \}, selection\)',
-            "/api/tyre_rename": r'api\("/api/tyre_rename", \{ id: mine\.id, name: name \}, selection\)',
-            "/api/tyre_source": r'writeTyre\("/api/tyre_source", \{ id: entry\.id, source: key \}\)',
+            "/api/tyre_new": r'api\("/api/tyre_new", \{ name: name, short: short, source: source \}, selection\)',
+            "/api/tyre_rename": r'api\("/api/tyre_rename", \{ id: mine\.id, name: name, short: short \}, selection\)',
+            "/api/tyre_source": r'api\("/api/tyre_source", \{ id: mine\.id, source: source \}, selection\)',
             "/api/tyre_set": r'api\("/api/tyre_set", \{ id: r\.tyre, setting: r\.data\.id, value: text \}, selection\)',
             "/api/tyre_unset": r'api\("/api/tyre_unset", \{ id: r\.tyre, setting: r\.data\.id \}, selection\)',
             "/api/tyre_reset": r'writeTyre\("/api/tyre_reset", \{ id: entry\.id \}\)',
@@ -1687,11 +2079,34 @@ class TestTyreCreator(unittest.TestCase):
                 self.assertEqual(len(re.findall(call, CODE)), 1)
                 fields = set(re.findall(r'\b(\w+):', re.search(r'(?:api|writeTyre)\("%s", (\{[^}]*\})' % route, CODE).group(1)))
                 handler = inspect.getsource(ts.POST_ROUTES[route])
-                self.assertEqual(fields, set(re.findall(r'body\.get\("(\w+)"\)', handler)))
+                sent = set(re.findall(r'body\.get\("(\w+)"\)', handler))
+                self.assertEqual(fields, sent)
         self.assertEqual(len(re.findall(r'api\("/api/tyres", undefined, selection\)', CODE)), 1)
         self.assertEqual(len(re.findall(r'api\("/api/tyre\?id=" \+ encodeURIComponent\(id\), undefined, selection\)', CODE)), 1)
+        self.assertEqual(len(re.findall(r'api\("/api/tyre_index", undefined, selection\)', CODE)), 1)
         self.assertEqual(ts.QUERY_ROUTES, ("/api/tyre", "/api/log_file"))
         self.assertIn("(path.includes(\"?\") ? \"&\" : \"?\")", function_body("api"))
+
+    def test_the_answers_of_the_tyre_routes_carry_the_fields_the_page_reads(self):
+        self.assertIn("tyreId = res.id;", function_body("submitTyreDialog"))
+        read = set(re.findall(r"\bt\.(\w+)", function_body("buildTyreListRow") + function_body("tyreUsersText") + function_body("syncTyres")))
+        sent = quoted_words(ts.api_tyres)
+        self.assertTrue({"id", "name", "short", "source_label", "changed", "users", "error"} <= read, sorted(read))
+        self.assertEqual(sorted(read - sent), [])
+        entry = set(re.findall(r"\bentry\.(\w+)", function_body("renderTyres")))
+        self.assertEqual(sorted(entry - sent), [])
+        self.assertIn('"rows"', inspect.getsource(ts.api_tyre))
+        self.assertIn("res.rows", function_body("loadTyre"))
+        self.assertIn("res.warnings", function_body("sendTyreSet"))
+        self.assertIn("res.row", function_body("sendTyreSet"))
+        index = set(re.findall(r"\b(?:t|type|res)\.(\w+)", function_body("loadTyreIndex") + function_body("tyreSizeText") + function_body("tyreOptionText") +
+                               function_body("matchingTyres") + function_body("fillTyreTypes") + function_body("fillTyrePicker")))
+        sent_index = quoted_words(ts.api_tyre_index, ts.tyre_index_json)
+        self.assertTrue({"width", "aspect", "rim", "label", "file", "type", "type_label", "count", "path"} <= index, sorted(index))
+        self.assertIn("tyreIndex.types", function_body("fillTyreTypes"))
+        self.assertIn("res.tyres.map(", function_body("loadTyreIndex"))
+        self.assertEqual({"tyres", "types", "package"} - sent_index, set())
+        self.assertEqual(sorted(index - sent_index - {"package", "length", "map"}), [])
 
     def test_the_selected_tyre_is_remembered_in_a_variable_and_falls_back_to_the_first_valid_one(self):
         self.assertRegex(CODE, r"(?m)^let tyreId = null;")
@@ -1706,78 +2121,71 @@ class TestTyreCreator(unittest.TestCase):
 
     def test_the_library_is_loaded_when_the_tab_is_shown_after_every_write_and_when_a_job_ends(self):
         self.assertIn('if (tabs[i] === $("tab-tyres")) loadTyres(true);', function_body("selectTab"))
-        self.assertNotIn("loadTyres(", function_body("sendTyreSet"))
-        self.assertNotIn("loadTyres(", function_body("sendTyreUnset"))
+        for name in ("sendTyreSet", "sendTyreUnset"):
+            with self.subTest(name):
+                self.assertNotIn("loadTyres(true)", function_body(name))
+                self.assertNotIn("loadTyre(", function_body(name))
+                self.assertIn("loadTyres(false);", function_body(name))
+                self.assertLess(function_body(name).index("showRow(r, res.row, false);"), function_body(name).index("loadTyres(false);"))
         self.assertIn("await loadTyres(true);", function_body("writeTyre"))
-        self.assertIn('writeTyre("/api/tyre_source", { id: entry.id, source: key });', function_body("changeTyreSource"))
         self.assertIn('writeTyre("/api/tyre_reset", { id: entry.id });', function_body("resetTyre"))
         self.assertIn("await loadTyres(mine.kind !== \"rename\");", function_body("submitTyreDialog"))
         body = function_body("syncTyres")
-        self.assertIn('if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);', body)
+        self.assertIn("if (tyreJobRunning && !running) {", body)
+        self.assertIn('if (!$("panel-tyres").hidden) loadTyres(true);', body)
+        self.assertIn("forgetTyreIndex();", body)
         self.assertIn("syncTyres();", function_body("renderButtons"))
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Tt]yre", CODE), [])
         self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
 
-    def test_the_rows_are_loaded_when_a_tyre_is_selected_and_after_a_source_change_or_a_reset(self):
-        self.assertIn('$("tyre-select").addEventListener("change", selectTyre);', CODE)
+    def test_the_rows_are_loaded_when_a_tyre_is_picked_in_the_list_and_after_a_source_change_or_a_reset(self):
         body = function_body("selectTyre")
+        self.assertIn("if (id === tyreId) return;", body)
         self.assertIn("tyreId = id;", body)
         self.assertIn("loadTyre();", body)
-        self.assertIn('$("tyre-source").addEventListener("change", changeTyreSource);', CODE)
         self.assertIn('$("btn-tyre-reset").addEventListener("click", resetTyre);', CODE)
-        self.assertIn("buildTyreRows(res.rows, id);", function_body("loadTyre"))
+        self.assertIn("buildTyreRows(res.rows, id, res.groups);", function_body("loadTyre"))
+        self.assertIn("await loadTyres(mine.kind !== \"rename\");", function_body("submitTyreDialog"))
 
     def test_the_empty_states_are_text_lines_not_hidden_controls(self):
         body = function_body("renderTyres")
-        self.assertIn('if (tyreLoaded && tyres.length === 0) addLine(notes, "No tyres yet. Press New tyre to create one.", "empty");', body)
+        self.assertIn('if (tyreLoaded && tyres.length === 0) addLine(notes, "No tyres yet. Press Create tyre to make one.", "empty");', body)
         self.assertIn('"No game tyres found: install a car in the Car Tuner tab first, its tyres become the sources."', body)
-        self.assertIn("if (tyreLoaded && tyreSources.length === 0) {", body)
+        self.assertIn("if (tyreLoaded && tyreIndex && tyreIndex.tyres.length === 0) {", body)
         self.assertNotRegex(body, r'btn-tyre-new"\)\.hidden')
         self.assertRegex(MARKUP, r'<div id="tyre-notes"></div>')
 
-    def test_new_is_off_without_a_source_or_while_a_job_runs_and_rename_and_delete_without_a_tyre_or_while_a_job_runs(self):
+    def test_the_buttons_are_off_while_a_job_runs_without_game_tyres_or_without_a_selected_tyre(self):
         body = function_body("syncTyres")
         self.assertIn("const running = jobRunning();", body)
         self.assertIn('if (running) whyNew = "a job is running";', body)
-        self.assertIn('else if (tyreSources.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";', body)
+        self.assertIn('else if (!tyreIndex) whyNew = tyreIndexError || "the game tyres are not loaded yet";', body)
+        self.assertIn('else if (tyreIndex.tyres.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";', body)
         self.assertIn('if (running) whyEdit = "a job is running";', body)
         self.assertIn('else if (tyreEntry() === null) whyEdit = "select a tyre first";', body)
         self.assertIn('$("btn-tyre-new").disabled = whyNew !== "";', body)
-        self.assertIn('$("btn-tyre-new").title = whyNew;', body)
+        self.assertIn('$("btn-tyre-source").disabled = whyEdit !== "" || !tyreIndex || tyreIndex.tyres.length === 0;', body)
         self.assertIn('for (const id of ["btn-tyre-rename", "btn-tyre-delete"]) {', body)
         self.assertIn('$(id).disabled = whyEdit !== "";', body)
-        self.assertIn('$("tyre-source").disabled = running;', body)
         self.assertIn('$("btn-tyre-reset").disabled = running;', body)
-        self.assertIn('for (const id of ["tyre-dialog-name", "tyre-dialog-source", "tyre-dialog-ok"]) $(id).disabled = locked;', body)
         self.assertIn("r.field.disabled = running || r.data.applicable === false;", body)
         self.assertIn("r.reset.disabled = running;", body)
+        for ident in ("tyre-dialog-name", "tyre-dialog-short", "tyre-dialog-type", "tyre-dialog-filter", "tyre-dialog-source", "tyre-dialog-ok"):
+            self.assertIn('"%s"' % ident, body)
 
-    def test_the_options_are_the_names_the_damaged_files_are_not_selectable_and_the_sources_are_labelled(self):
-        body = function_body("renderTyres")
-        self.assertIn('el("option", "", t.error ? t.id + " (damaged)" : t.name)', body)
-        self.assertIn("o.disabled = true;", body)
-        self.assertIn('el("option", "", s.label)', body)
-        self.assertIn('sourceText(entry.source) + " (not offered by any installed car)"', body)
-        self.assertIn("gone.disabled = true;", body)
-        self.assertIn("box.value = key;", body)
-        self.assertIn('$("tyre-editor").hidden = entry === null;', body)
-        self.assertIn('tyres.filter((t) => !t.error)', function_body("neighbourOf"))
-
-    def test_the_rows_get_a_group_row_per_axle_in_the_order_of_the_server(self):
+    def test_the_rows_are_the_values_of_one_tyre_in_the_order_of_the_server_under_the_group_rows_of_the_tyre_table(self):
         body = function_body("buildTyreRows")
-        self.assertIn('for (const axle of ["front", "rear"]) {', body)
-        self.assertIn('buildTyreGroup(axle === "front" ? "Front tyre" : "Rear tyre")', body)
-        self.assertIn("list.filter((data) => data.axle === axle)", body)
-        self.assertIn("buildRow(item, null)", body)
+        self.assertIn("for (const item of list) {", body)
+        self.assertIn("buildRow(item, {}, false)", body)
         self.assertIn("r.save = sendTyreSet;", body)
         self.assertIn("r.clear = sendTyreUnset;", body)
         self.assertIn("r.tyre = id;", body)
-        group = function_body("buildTyreGroup")
-        self.assertNotIn("button", group)
-        self.assertNotIn("expanded", group)
-        self.assertIn('el("tr", "group")', group)
-        self.assertIn('th.scope = "rowgroup";', group)
-        self.assertIn("tr.group th.plain", STYLE)
+        self.assertIn("buildTyreGroup(item.group)", body)
+        self.assertNotIn("buildGroup", body)
+        self.assertIn("th.colSpan = 5;", function_body("buildGroup"))
+        fields = tune_catalogue_tyre_fields()
+        self.assertEqual(len([f for f in fields if "front_id" in f]), 12)
+        self.assertEqual(len(fields), 12 + len(ts.tune.load_catalogue()["tyre_settings"]))
 
     def test_the_tyre_rows_share_the_builders_of_the_car_table(self):
         self.assertIn("r.save(r, text)", function_body("commit"))
@@ -1785,6 +2193,7 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("r.clear(r)", function_body("buildReset"))
         self.assertIn("save: sendSet, clear: sendUnset", function_body("newRow"))
         self.assertIn("Array.isArray(d.choices) && d.choices.length", function_body("buildField"))
+        self.assertIn('f.type = "number";', function_body("buildField"))
         row = function_body("buildRow")
         self.assertIn('el("span", "badge", "unverified")', row)
         self.assertIn("if (!data.verified) {", row)
@@ -1794,23 +2203,78 @@ class TestTyreCreator(unittest.TestCase):
         self.assertIn("showRow(r, res.row, false);", function_body("sendTyreUnset"))
         self.assertNotIn("applyFilter", function_body("buildTyreRows"))
 
-    def test_a_row_shows_the_server_text_of_a_refused_value_and_the_warnings(self):
+    def test_a_row_shows_the_server_text_of_a_refused_value_and_the_range_warnings(self):
         body = function_body("sendTyreSet")
         self.assertIn('setMsg(r, res.warnings.join(" "), "warn");', body)
         self.assertIn("setField(r);", body)
         self.assertIn('setMsg(r, e.message, "err");', body)
         self.assertIn('setMsg(r, e.message, "err");', function_body("sendTyreUnset"))
         self.assertIn('setMsg(r, "", "");', function_body("sendTyreUnset"))
+        self.assertIn('f.title = "Suggested range: "', function_body("buildField"))
 
-    def test_the_dialog_serves_new_rename_and_delete_with_its_confirm_text(self):
+    def test_the_source_picker_is_a_type_select_a_filter_field_and_a_select_of_the_matching_tyres(self):
+        types = function_body("fillTyreTypes")
+        self.assertIn('const all = el("option", "", "All types");', types)
+        self.assertLess(types.index('"All types"'), types.index("tyreIndex.types"))
+        self.assertIn('t.label + " (" + t.count + ")"', types)
+        picker = function_body("fillTyrePicker")
+        self.assertIn('matchingTyres(tyreIndex ? tyreIndex.tyres : [], $("tyre-dialog-type").value, $("tyre-dialog-filter").value)', picker)
+        self.assertIn("el(\"option\", \"\", tyreOptionText(t))", picker)
+        self.assertIn("o.value = t.path;", picker)
+        self.assertIn('$("tyre-dialog-none").hidden = box.options.length > 0;', picker)
+        self.assertIn("const before = box.value;", picker)
+        self.assertIn('$("tyre-dialog-type").addEventListener("change", fillTyrePicker);', CODE)
+        self.assertIn('$("tyre-dialog-filter").addEventListener("input", fillTyrePicker);', CODE)
+        self.assertIn('t.width === null ? t.file : t.label', function_body("tyreOptionText"))
+        self.assertIn("(type === \"\" || t.type === type) && textMatches(", function_body("matchingTyres"))
+        self.assertIn('t.width === null ? "" : t.width + "/" + t.aspect + " R" + t.rim', function_body("tyreSizeText"))
+
+    def test_the_picker_text_matching_and_sorting_are_pure_helpers(self):
+        text = function_body("textMatches")
+        self.assertIn("toLowerCase()", text)
+        self.assertIn('split(/\\s+/).filter(Boolean).every((w) => hay.includes(w))', text)
+        sort = function_body("sortTyres")
+        self.assertIn("list.slice().sort(", sort)
+        self.assertIn("part(a.width) - part(b.width) || part(a.aspect) - part(b.aspect) || part(a.rim) - part(b.rim)", sort)
+        self.assertIn("v === null ? Infinity : v", sort)
+
+    def test_the_game_tyres_are_read_once_when_the_creator_or_the_tyre_panel_needs_them_and_never_with_the_first_paint(self):
+        body = function_body("loadTyreIndex")
+        self.assertIn("if (tyreIndexLoading === null) {", body)
+        self.assertIn('api("/api/tyre_index", undefined, selection)', body)
+        self.assertIn("tyreIndex = res;", body)
+        self.assertIn("tyreIndexError = e.message;", body)
+        self.assertIn("tyreIndexLoading = null;", body)
+        self.assertIn("return tyreIndexLoading;", body)
+        self.assertEqual(len(re.findall(r'"/api/tyre_index"', CODE)), 1)
+        callers = [n for n in re.findall(r"^(?:async )?function (\w+)", CODE, re.M) if re.search(r"\bloadTyreIndex\(\)", function_body(n))]
+        self.assertEqual(sorted(callers), ["loadGarage", "loadTyres", "toggleGarage"])
+        self.assertIn("if (garageOpen) loadTyreIndex();", function_body("loadGarage"))
+        self.assertIn("if (garageOpen) loadTyreIndex();", function_body("toggleGarage"))
+        self.assertNotIn("loadTyreIndex", function_body("refresh") + function_body("loadSettings") + function_body("loadCarPanels"))
+        self.assertRegex(CODE, r"(?m)^let tyreIndex = null;")
+        self.assertIn("if (tyreIndex && !tyreIndex.package) {", function_body("forgetTyreIndex"))
+
+    def test_the_dialog_serves_create_rename_change_source_and_delete_with_its_confirm_text(self):
         body = function_body("openTyreDialog")
-        self.assertIn('"New tyre" : remove ? "Delete tyre" : "Rename tyre"', body)
+        self.assertIn('"Create tyre" : remove ? "Delete tyre" : rename ? "Rename tyre" : "Change source of " + entry.name', body)
         self.assertIn('"Delete tyre " + entry.name + "? This cannot be undone."', body)
         self.assertIn('$("tyre-dialog-ok").textContent = remove ? "Delete" : "OK";', body)
-        self.assertIn('$("tyre-dialog-name-field").hidden = remove;', body)
-        self.assertIn('$("tyre-dialog-source-field").hidden = !create;', body)
-        self.assertIn('s.label + " \\u2014 " + s.cars.join(", ")', body)
-        self.assertIn("if (create ? tyreSources.length === 0 : entry === null) return;", body)
+        self.assertIn('$("tyre-dialog-name-field").hidden = remove || source;', body)
+        self.assertIn('$("tyre-dialog-short-field").hidden = !create && !rename;', body)
+        self.assertIn('$("tyre-dialog-short").value = rename ? entry.short : "";', body)
+        self.assertIn('$("tyre-dialog-source-field").hidden = !create && !source;', body)
+        self.assertIn('if (source) $("tyre-dialog-source").value = entry.source;', body)
+        self.assertIn("if (create ? !tyreIndex || tyreIndex.tyres.length === 0 : entry === null) return;", body)
+        self.assertIn('$("btn-tyre-source").addEventListener("click", () => openTyreDialog("source"));', CODE)
+
+    def test_the_dialog_sends_the_short_name_only_when_there_is_one_and_in_capitals(self):
+        body = function_body("submitTyreDialog")
+        self.assertIn('const short = $("tyre-dialog-short").value.trim().toUpperCase() || undefined;', body)
+        self.assertIn('await api("/api/tyre_new", { name: name, short: short, source: source }, selection);', body)
+        self.assertIn('await api("/api/tyre_rename", { id: mine.id, name: name, short: short }, selection);', body)
+        self.assertIn('await api("/api/tyre_source", { id: mine.id, source: source }, selection);', body)
+        self.assertIn("1 to 3 letters or digits", MARKUP)
 
     def test_the_dialog_stays_open_with_the_message_of_the_server_when_a_write_is_refused(self):
         body = function_body("submitTyreDialog")
@@ -1819,7 +2283,7 @@ class TestTyreCreator(unittest.TestCase):
         self.assertNotIn("closeTyreDialog", failure)
         self.assertIn("mine.busy = false;", failure)
         self.assertIn("return;", failure)
-        self.assertIn("tyreId = res.tyre.id;", body)
+        self.assertIn("tyreId = res.id;", body)
         self.assertIn("tyreId = neighbourOf(mine.id);", body)
         self.assertIn("if (tyreDialog === mine) closeTyreDialog(true);", body)
         self.assertIn('showText("tyre-dialog-error", text);', function_body("showTyreDialogError"))
@@ -1829,44 +2293,52 @@ class TestTyreCreator(unittest.TestCase):
         key = function_body("tyreDialogKey")
         self.assertIn('ev.key === "Escape"', key)
         self.assertIn("if (!tyreDialog.busy) closeTyreDialog(true);", key)
-        self.assertIn('ev.key === "Enter" && ev.target.tagName === "INPUT"', key)
+        self.assertIn('ev.key === "Enter" && ev.target.tagName === "INPUT" && ev.target.id !== "tyre-dialog-filter"', key)
         self.assertIn("submitTyreDialog();", key)
         self.assertIn('$("tyre-dialog").addEventListener("keydown", tyreDialogKey);', CODE)
         opening = function_body("openTyreDialog")
         self.assertIn('$("tyre-dialog-name").focus();', opening)
         self.assertIn('$("tyre-dialog-cancel").focus();', opening)
+        self.assertIn('$("tyre-dialog-filter").focus();', opening)
         self.assertIn("const opener = tyreDialog ? tyreDialog.opener : document.activeElement;", opening)
         closing = function_body("closeTyreDialog")
         self.assertIn("if (restoreFocus) {", closing)
-        self.assertIn('[opener, $("tyre-select"), $("btn-tyre-new")].find((n) => n && document.contains(n) && !n.disabled);', closing)
+        self.assertIn('[opener, $("btn-tyre-new")].find((n) => n && document.contains(n) && !n.disabled);', closing)
         self.assertIn('(back || $("tab-tyres")).focus();', closing)
 
-    def test_the_new_buttons_are_wired_and_reset_all_asks_first(self):
-        for kind, button in (("new", "btn-tyre-new"), ("rename", "btn-tyre-rename"), ("delete", "btn-tyre-delete")):
+    def test_the_buttons_are_wired_and_reset_all_asks_first(self):
+        for kind, button in (("new", "btn-tyre-new"), ("rename", "btn-tyre-rename"), ("source", "btn-tyre-source"), ("delete", "btn-tyre-delete")):
             with self.subTest(kind):
                 self.assertIn('$("%s").addEventListener("click", () => openTyreDialog("%s"));' % (button, kind), CODE)
         self.assertIn('$("tyre-dialog-ok").addEventListener("click", submitTyreDialog);', CODE)
         self.assertIn('$("tyre-dialog-cancel").addEventListener("click", () => closeTyreDialog(true));', CODE)
         self.assertIn("window.confirm(", function_body("resetTyre"))
 
-    def test_writes_to_the_library_go_through_the_one_queue_of_the_edits(self):
+    def test_writes_to_the_library_go_through_the_one_queue_of_the_edits_where_they_are_not_a_dialog(self):
         self.assertIn("queue = queue.then(async () => {", function_body("writeTyre"))
         self.assertIn("await api(route, body, selection);", function_body("writeTyre"))
-        for name in ("changeTyreSource", "resetTyre"):
-            with self.subTest(name):
-                self.assertIn("writeTyre(", function_body(name))
-                self.assertNotIn("queue", function_body(name))
+        self.assertIn("writeTyre(", function_body("resetTyre"))
+        self.assertNotIn("queue", function_body("resetTyre"))
 
     def test_the_tab_neither_polls_nor_adds_a_second_fetch(self):
         self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
 
     def test_the_tyre_name_and_the_source_text_enter_the_page_as_text(self):
-        for name in ("renderTyres", "openTyreDialog", "buildTyreGroup"):
+        for name in ("renderTyres", "openTyreDialog", "buildTyreListRow", "fillTyrePicker", "fillTyreTypes"):
             with self.subTest(name):
                 body = function_body(name)
-                self.assertIn("textContent" if name == "openTyreDialog" else "el(", body)
+                self.assertTrue("textContent" in body or "el(" in body, name)
                 self.assertNotRegex(body, r"\.html\b|innerHTML")
+
+    def test_the_list_styles_use_tokens_and_the_picked_row_is_not_a_tab_class(self):
+        self.assertIn("tr.picked td { background: var(--color-accent-tint); }", STYLE)
+        self.assertIn("#tyre-list-wrap table { table-layout: auto; }", STYLE)
+        self.assertNotRegex(STYLE, r"\.(?:selected|active|current)\b")
+
+
+def tune_catalogue_tyre_fields():
+    return ts.tune.tyre_fields(ts.tune.load_catalogue())
 
 
 class TestGarage(unittest.TestCase):
@@ -1891,45 +2363,46 @@ class TestGarage(unittest.TestCase):
         self.assertLess(tuner.index('id="empty"'), tuner.index('id="garage"'))
         self.assertEqual(tuner.count('id="garage"'), 1)
 
-    def test_the_header_is_a_collapsed_toggle_button_with_a_chevron_the_name_and_the_summary(self):
+    def test_the_header_is_a_collapsed_toggle_button_with_the_new_name_and_the_summary(self):
         button = re.search(r'<button id="garage-toggle".*?</button>', self.PANEL, re.S).group(0)
         for part in ('class="grouptoggle"', 'type="button"', 'aria-expanded="false"', 'aria-controls="garage-body"'):
             self.assertIn(part, button)
         self.assertIn('<span class="chev" aria-hidden="true"></span>', button)
-        self.assertIn('<span class="gname">Garage tyres</span>', button)
+        self.assertIn('<span class="gname">Tyres offered in the game</span>', button)
         self.assertIn('<span id="garage-count" class="gcount"></span>', button)
         self.assertIn("garage-body", dom_ids())
+        self.assertNotIn("Garage tyres", HTML)
+        self.assertNotRegex(MARKUP, r"(?i)garage tyres|in the garage|garage list")
 
-    def test_the_body_is_hidden_by_default_and_holds_the_help_the_list_the_reset_button_and_the_lines(self):
+    def test_the_help_of_the_tyre_panel_says_what_was_checked_in_the_game(self):
+        body = self.PANEL[self.PANEL.index('id="garage-body"'):]
+        self.assertIn("Your own tyres (from the Tyre Creator tab) are listed first. Checked in the game: a car can offer more tyres than its "
+                      "original ones, tyres of other sizes and your own tyres.</p>", body)
+        self.assertNotIn("Unverified: whether the game accepts extra or removed tyres", HTML)
+        self.assertEqual(HTML.count("Checked in the game:"), 1)
+
+    def test_the_body_holds_the_help_the_split_box_the_search_the_lists_the_start_selects_the_reset_button_and_the_lines(self):
         self.assertRegex(self.tag("garage-body"), r"\bhidden>$")
         body = self.PANEL[self.PANEL.index('id="garage-body"'):]
-        for text in ("Tick the tyres this car offers in the garage.", "The first ticked tyre in the list is the one the car starts on.",
-                     "Own tyres (from the Tyre Creator tab) are listed first.",
-                     "Unverified: whether the game accepts extra or removed tyres is not tested yet."):
-            self.assertIn(text, body)
-        self.assertRegex(body, r'<fieldset>\s*<legend class="sr-only">Tyres offered in the garage</legend>\s*<div id="garage-rows"></div>\s*</fieldset>')
-        self.assertIn('<button id="btn-garage-reset" type="button" disabled>Reset to stock tyres</button>', body)
+        self.assertIn("The game offers the front and rear tyres separately. The start tyre is what the car begins with; you can switch in the game under Fuel &amp; strategy.", body)
+        self.assertIn("Your own tyres (from the Tyre Creator tab) are listed first.", body)
+        self.assertRegex(body, r'<label><input id="split-tyres" type="checkbox"[^>]*><span>Different front and rear tyres</span></label>')
+        self.assertRegex(body, r'<label for="garage-search">Search</label>\s*<input id="garage-search" class="garage-search" type="search"')
+        self.assertIn('<div id="garage-rows" class="garage-lists"></div>', body)
+        self.assertRegex(body, r'<label for="garage-start">Starts on</label>\s*<select id="garage-start"')
+        self.assertRegex(body, r'<label for="garage-start-front">Front starts on</label>\s*<select id="garage-start-front"')
+        self.assertRegex(body, r'<label for="garage-start-rear">Rear starts on</label>\s*<select id="garage-start-rear"')
+        self.assertIn('<button id="btn-garage-reset" type="button" disabled>Reset to the original tyres</button>', body)
         self.assertIn('<p id="garage-error" class="msg err" role="alert" hidden></p>', body)
-        self.assertIn('<p id="garage-missing" class="msg warn" hidden></p>', body)
-        self.assertLess(body.index("<fieldset>"), body.index("btn-garage-reset"))
-        self.assertLess(body.index("btn-garage-reset"), body.index('id="garage-error"'))
+        self.assertIn('<p id="garage-note" class="garage-help" hidden></p>', body)
+        order = ["split-tyres", "garage-search", "garage-rows", 'id="garage-start"', "garage-start-front", "garage-start-rear", "btn-garage-reset", 'id="garage-error"']
+        self.assertEqual([body.index(o) for o in order], sorted(body.index(o) for o in order))
+        self.assertNotIn("garage-missing", HTML)
 
-    def test_a_row_is_a_checkbox_in_a_label_with_the_name_and_muted_texts_for_the_kind_and_the_start(self):
-        body = function_body("renderGarage")
-        self.assertIn('input.type = "checkbox";', body)
-        self.assertIn("input.checked = c.ticked;", body)
-        self.assertIn('label.append(input, el("span", "", c.label));', body)
-        self.assertIn('c.kind === "own" ? "own tyre" : "stock tyre"', body)
-        self.assertIn('if (c.start) row.appendChild(el("span", "unit", "starts on this"));', body)
-        self.assertIn('el("div", "garage-row")', body)
-        self.assertIn("garageRows.push({ key: c.key, input: input });", body)
-        self.assertNotRegex(body, r"innerHTML|\.html\b")
-
-    def test_the_summary_counts_the_ticked_tyres_and_names_the_start(self):
+    def test_the_summary_counts_the_ticked_tyres_of_each_axle_or_says_default(self):
         body = function_body("garageSummary")
-        self.assertIn('"(" + garage.choices.filter((c) => c.ticked).length + " of " + garage.choices.length + " ticked"', body)
-        self.assertIn('(start ? ", starts on " + start.label : "") + ")"', body)
-        self.assertIn("garage.choices.find((c) => c.start)", body)
+        self.assertIn('if (garage.default) return "(default)";', body)
+        self.assertIn('"(" + garage.fronts.length + " front, " + garage.rears.length + " rear)"', body)
         self.assertIn('$("garage-count").textContent = garageSummary();', function_body("renderGarageToggle"))
 
     def test_the_panel_is_collapsed_by_default_and_the_toggle_flips_a_separate_variable(self):
@@ -1938,13 +2411,15 @@ class TestGarage(unittest.TestCase):
         body = function_body("toggleGarage")
         self.assertIn("garageOpen = !garageOpen;", body)
         self.assertNotIn("expanded", body)
+        self.assertIn("renderGarage();", body)
         toggle = function_body("renderGarageToggle")
         self.assertIn('$("garage-toggle").setAttribute("aria-expanded", garageOpen ? "true" : "false");', toggle)
         self.assertIn('$("garage-body").hidden = !garageOpen;', toggle)
-        self.assertNotIn("remove(", toggle)
         self.assertIn('$("garage-toggle").addEventListener("click", toggleGarage);', CODE)
+        # a closed panel builds no list, so reading the car does not build the lists of every game tyre
+        self.assertIn("if (garage && garageOpen) {", function_body("renderGarage"))
 
-    def test_expand_all_and_collapse_all_do_not_touch_the_garage(self):
+    def test_expand_all_and_collapse_all_do_not_touch_the_panel(self):
         for name in ("setAllGroups", "toggleGroup", "applyFilter", "revealGroup"):
             with self.subTest(name):
                 self.assertNotIn("garage", function_body(name).lower())
@@ -1952,11 +2427,11 @@ class TestGarage(unittest.TestCase):
 
     def test_another_car_collapses_the_panel_and_forgets_the_old_answer(self):
         body = function_body("switchCar")
-        for part in ("garageOpen = false;", "garage = null;", 'garageError = "";', "renderGarage();"):
+        for part in ("garageOpen = false;", "garage = null;", 'garageError = "";', "garagePending = 0;", "garageOpenTypes.clear();", "renderGarage();"):
             self.assertIn(part, body)
         self.assertEqual(len(re.findall(r"(?m)^  garageOpen = false;", CODE)), 1)
 
-    def test_the_garage_is_read_with_the_selection_without_a_body_through_the_one_api_helper(self):
+    def test_the_tyre_choice_is_read_with_the_selection_without_a_body_through_the_one_api_helper(self):
         body = function_body("loadGarage")
         self.assertIn('await api("/api/garage", undefined, target);', body)
         self.assertIn("if (!tableLoaded) return;", body)
@@ -1966,7 +2441,7 @@ class TestGarage(unittest.TestCase):
         self.assertIn("renderGarage();", body)
         self.assertEqual(len(re.findall(r"\bfetch\(", CODE)), 1)
 
-    def test_the_garage_is_loaded_with_the_table_after_a_tab_change_after_a_job_and_after_create_and_apply(self):
+    def test_the_choice_is_loaded_with_the_table_after_a_tab_change_after_a_job_and_after_create_and_apply(self):
         self.assertIn("loadGarage();", function_body("loadCarPanels"))
         self.assertLess(function_body("loadSettings").index("tableLoaded = true;"), function_body("loadSettings").index("loadCarPanels();"))
         self.assertIn('if (tabs[i] === $("tab-car")) loadCarPanels();', function_body("selectTab"))
@@ -1977,102 +2452,253 @@ class TestGarage(unittest.TestCase):
         self.assertRegex(function_body("startJob"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
         self.assertRegex(function_body("submitDialog"), r"await refresh\(\);\s*if \(serverState && !jobRunning\(\)\) loadCarPanels\(\);")
         self.assertEqual(len(re.findall(r"\bpollTimer = setTimeout\(", CODE)), 1)
-        self.assertEqual(re.findall(r"setInterval\(([^)]*)\)", CODE), ["pollLogStatus, LOG_POLL_MS"])
         self.assertEqual(re.findall(r"setTimeout\([^;]*[Gg]arage", CODE), [])
 
-    def test_a_change_posts_the_ticked_keys_in_the_order_of_the_choices_through_the_shared_queue(self):
+    def test_every_change_posts_the_whole_choice_in_the_form_of_the_state_key_through_the_shared_queue(self):
         self.assertIn('$("garage").addEventListener("change", garageChanged);', CODE)
-        body = function_body("garageChanged")
-        self.assertIn("garageRows.filter((g) => g.input.checked).map((g) => g.key)", body)
-        self.assertIn("queue = queue.then(() => sendGarageSet(keys, target));", body)
-        self.assertIn("const target = selection;", body)
+        write = function_body("writeGarage")
+        self.assertIn("garage = garageWith(garage, choice);", write)
+        self.assertIn("garageSeq += 1;", write)
+        self.assertIn("garagePending += 1;", write)
+        self.assertIn("queue = queue.then(() => sendGarageSet(choice, target));", write)
+        self.assertIn("const target = selection;", write)
         send = function_body("sendGarageSet")
-        self.assertIn('await api("/api/garage_set", { keys: keys }, target);', send)
-        self.assertIn("showGarage(target, res.garage);", send)
-        self.assertEqual(set(re.findall(r'\b(\w+):', re.search(r'api\("/api/garage_set", (\{[^}]*\})', CODE).group(1))),
-                         set(re.findall(r'body\.get\("(\w+)"\)', inspect.getsource(ts.api_garage_set))) - {"tune", "version"})
+        self.assertIn('await api("/api/garage_set", { choice: choice }, target);', send)
+        self.assertIn("if (garagePending === 0) await loadGarage();", send)
+        self.assertIn("await garageFailed(target, e);", send)
+        choice = function_body("garageChoice")
+        self.assertIn("{ split: true, fronts: g.fronts.slice(), rears: g.rears.slice(), start_front: g.start_front, start_rear: g.start_rear }", choice)
+        self.assertIn("{ sets: g.sets.map((s) => ({ front: s.front, rear: s.rear })), split: false, start_front: g.start_front, start_rear: g.start_rear }", choice)
+        fields = set(re.findall(r"\b(\w+):", choice))
+        self.assertEqual(fields, {"split", "fronts", "rears", "start_front", "start_rear", "sets", "front", "rear"})
+        self.assertEqual(fields - {"front", "rear"}, set(ts.tune.CHOICE_FIELDS))
+        self.assertIn('body.get("choice")', inspect.getsource(ts.api_garage_set))
 
-    def test_unticking_the_last_tyre_is_prevented_with_a_message_and_no_call(self):
+    def test_the_form_of_the_choice_is_the_form_of_the_engine_and_the_server_checks_it(self):
+        self.assertIn("tune.set_tyres(", inspect.getsource(ts.api_garage_set))
+        self.assertEqual(sorted(ts.tune.CHOICE_FIELDS), ["fronts", "rears", "sets", "split", "start_front", "start_rear"])
+        for name in ("choiceToSplit", "choiceToSets", "toggleSet", "toggleTyre", "startOfSet", "startOfAxle", "fixStart"):
+            body = function_body(name)
+            self.assertNotRegex(body, r"\b(?:custom|missing|garage\.choices)\b")
+            self.assertEqual(set(re.findall(r"\b(split|sets|fronts|rears|start_front|start_rear)\b", body)) - set(ts.tune.CHOICE_FIELDS), set())
+
+    def test_switching_the_box_carries_the_lists_over(self):
         body = function_body("garageChanged")
-        refusal = body[body.index("if (keys.length === 0) {"):body.index("garageError = \"\";")]
-        self.assertIn("row.input.checked = true;", refusal)
-        self.assertIn('garageError = "Tick at least one tyre.";', refusal)
-        self.assertIn("return;", refusal)
-        self.assertNotIn("queue", refusal)
-        self.assertNotIn("api(", refusal)
-        self.assertIn("tick at least one tyre", inspect.getsource(ts.tune.set_garage))
+        self.assertIn('writeGarage(ev.target.checked ? choiceToSplit(choice) : choiceToSets(choice));', body)
+        split = function_body("choiceToSplit")
+        self.assertIn("if (choice.split) return choice;", split)
+        self.assertIn("const lists = choiceLists(choice);", split)
+        self.assertIn("{ split: true, fronts: lists[0], rears: lists[1], start_front: choice.start_front, start_rear: choice.start_rear }", split)
+        lists = function_body("choiceLists")
+        self.assertIn("uniqueKeys(choice.sets.map((s) => s.front)), uniqueKeys(choice.sets.map((s) => s.rear))", lists)
+        sets = function_body("choiceToSets")
+        self.assertIn("if (!choice.split) return choice;", sets)
+        self.assertIn("Math.max(choice.fronts.length, choice.rears.length)", sets)
+        self.assertIn("i < choice.fronts.length ? choice.fronts[i] : choice.fronts[0]", sets)
+        self.assertIn("i < choice.rears.length ? choice.rears[i] : choice.rears[0]", sets)
+        self.assertIn("if (!sets.some((s) => sameSet(s, set))) sets.push(set);", sets)
+        self.assertIn("{ sets: sets, split: false, start_front: choice.start_front, start_rear: choice.start_rear }", sets)
+        self.assertIn('$("split-tyres").checked = !!garage && garage.split;', function_body("renderGarage"))
 
-    def test_reset_posts_garage_reset_through_the_queue_and_is_off_unless_the_selection_is_custom(self):
+    def test_ticking_changes_one_list_and_keeps_the_start_valid(self):
+        sets = function_body("toggleSet")
+        self.assertIn("const sets = choice.sets.filter((s) => !sameSet(s, set));", sets)
+        self.assertIn("if (on) sets.push({ front: set.front, rear: set.rear });", sets)
+        self.assertIn("out.start_front = sets[0].front;", sets)
+        self.assertIn("out.start_rear = sets[0].rear;", sets)
+        tyre = function_body("toggleTyre")
+        self.assertIn('const field = axle === "front" ? "fronts" : "rears";', tyre)
+        self.assertIn("return fixStart(", tyre)
+        fix = function_body("fixStart")
+        self.assertIn("keyIndex(lists[0], out.start_front) < 0", fix)
+        self.assertIn("out.start_front = lists[0][0];", fix)
+        self.assertIn("out.start_rear = lists[1][0];", fix)
+        self.assertIn("start_front: choice.start_front", function_body("choiceToSets"))
+        changed = function_body("garageChanged")
+        self.assertIn("writeGarage(row.side === \"set\" ? toggleSet(choice, row.item.set, on) : toggleTyre(choice, row.side, row.item.key, on));", changed)
+        self.assertIn('writeGarage(startOfSet(choice, Number(ev.target.value)));', changed)
+        self.assertIn('writeGarage(startOfAxle(choice, id === "garage-start-front" ? "front" : "rear", ev.target.value));', changed)
+
+    def test_the_last_tick_of_a_list_cannot_be_removed_because_its_checkbox_is_disabled(self):
+        group = function_body("buildGarageGroup")
+        self.assertIn("const count = side === \"set\" ? garage.sets.length : (side === \"front\" ? garage.fronts : garage.rears).length;", group)
+        self.assertIn("const last = input.checked && count === 1;", group)
+        self.assertIn("last: last", group)
+        self.assertIn('input.title = "At least one tyre stays ticked";', group)
+        self.assertIn("for (const g of garageRows) g.input.disabled = locked || g.last;", function_body("lockGarage"))
+        self.assertNotIn("Tick at least one tyre", HTML)
+
+    def test_the_sets_list_has_the_groups_in_order_and_the_split_lists_have_the_same_groups_of_single_tyres(self):
+        body = function_body("garageGroups")
+        self.assertIn('side === "set" ? "Original sets of this car" : "Original tyres of this car"', body)
+        titles = ['"Original tyres of this car"', '"Your tyres"', '"Fits this car"']
+        self.assertEqual([body.index(t) for t in titles], sorted(body.index(t) for t in titles))
+        self.assertLess(body.index('"Fits this car"'), body.index("for (const type of tyreIndex ? tyreIndex.types : []) {"))
+        self.assertIn('collapsible: true', body)
+        self.assertIn('"Chosen front/rear pairs" : "Chosen tyres"', body)
+        self.assertIn("groups.unshift({ id: \"chosen\"", body)
+        self.assertIn("garage.stock_sets.map((s) => ({ set: { front: s.front, rear: s.rear }, label: s.label", body)
+        self.assertIn("originalTyres(side)", body)
+        self.assertIn("garage.own.map((o) => garageItem(side, o.key, o.label, false, o.source_label))", body)
+        self.assertIn("sortTyres(index.filter(fits))", body)
+        self.assertIn("sortTyres(index.filter((t) => t.type === type.type))", body)
+        self.assertIn("sizes.size > 0 && !fits(t)", body)
+        self.assertIn("return groups.filter((g) => g.items.length);", body)
+        self.assertIn('side === "set" ? { set: { front: key, rear: key }, label: "4x " + label } : { key: key, label: label }', function_body("garageItem"))
+        self.assertIn('const fits = (t) => t.width !== null && sizes.has(tyreSizeText(t));', body)
+        lists = function_body("buildGarageList")
+        self.assertIn('side === "set" ? "Tyre sets" : side === "front" ? "Front tyres" : "Rear tyres"', lists)
+        self.assertIn('"No tyre matches."', lists)
+        render = function_body("renderGarage")
+        self.assertIn('for (const side of garage.split ? ["front", "rear"] : ["set"]) box.appendChild(buildGarageList(side));', render)
+
+    def test_the_fitting_tyres_are_those_of_the_size_of_an_original_tyre(self):
+        body = function_body("originalSizes")
+        self.assertIn("for (const s of garage.stock_sets) {", body)
+        self.assertIn("for (const key of [s.front, s.rear]) {", body)
+        self.assertIn("if (t && t.width !== null) sizes.add(tyreSizeText(t));", body)
+        self.assertIn("garage.stock_sets.map((s) => (axle === \"front\" ? s.front : s.rear))", function_body("originalTyres"))
+        entry = function_body("indexEntry")
+        self.assertIn('key.startsWith("game:") ? tyreIndexMap.get(keyNorm(key.slice(5))) || null : null', entry)
+        self.assertIn("keyNorm(t.path)", function_body("loadTyreIndex"))
+
+    def test_the_type_groups_are_closed_at_the_start_and_open_with_the_search(self):
+        body = function_body("buildGarageGroup")
+        self.assertIn('el("details", "garage-group")', body)
+        self.assertIn('node.open = garageFilter !== "" || garageOpenTypes.has(gid);', body)
+        self.assertIn('el("summary", "", group.title + " (" + group.items.length + ")")', body)
+        self.assertIn("garageOpenTypes.add(gid);", body)
+        self.assertIn("garageOpenTypes.delete(gid);", body)
+        self.assertIn('if (garageFilter !== "") return;', body)
+        self.assertIn("const items = group.items.filter((i) => textMatches(i.hay, garageFilter));", body)
+        self.assertIn("if (!items.length) return null;", body)
+        self.assertRegex(CODE, r"(?m)^const garageOpenTypes = new Set\(\);")
+        self.assertNotRegex(CODE, r"garageOpenTypes\.add\([^)]*\);\s*\n\s*renderGarage")
+
+    def test_a_row_is_a_checkbox_in_a_label_with_the_name_and_the_note_other_size(self):
+        body = function_body("buildGarageGroup")
+        self.assertIn('input.type = "checkbox";', body)
+        self.assertIn("input.checked = itemTicked(side, item);", body)
+        self.assertIn('label.append(input, el("span", "", item.label));', body)
+        self.assertIn('if (item.other) row.appendChild(el("span", "unit", "other size"));', body)
+        self.assertIn('el("div", "garage-row")', body)
+        self.assertIn("garageRows.push({ side: side, item: item, id: gid + \"/\" + itemId(side, item), input: input, last: last });", body)
+        self.assertNotRegex(body, r"innerHTML|\.html\b")
+
+    def test_the_labels_of_sets_and_tyres(self):
+        self.assertIn('"4x " + tyreKeyLabel(set.front)', function_body("setLabel"))
+        self.assertIn('tyreKeyLabel(set.front) + " / " + tyreKeyLabel(set.rear)', function_body("setLabel"))
+        body = function_body("tyreKeyLabel")
+        self.assertLess(body.index("garage.labels[key]"), body.index("garage.own.find"))
+        self.assertLess(body.index("garage.own.find"), body.index("indexEntry(key)"))
+        self.assertIn("return t ? t.label : key;", body)
+        self.assertIn('key.replace(/\\//g, "\\\\").toLowerCase()', function_body("keyNorm"))
+
+    def test_the_search_filters_every_list_by_text_and_the_field_is_outside_the_lists(self):
+        self.assertIn('$("garage-search").addEventListener("input", garageSearched);', CODE)
+        body = function_body("garageSearched")
+        self.assertIn('garageFilter = $("garage-search").value.trim();', body)
+        self.assertIn("renderGarage();", body)
+        self.assertIn("hay", function_body("garageItem"))
+        self.assertIn('item.hay = item.label + " " + (extra || "");', function_body("garageItem"))
+        self.assertLess(self.PANEL.index('id="garage-search"'), self.PANEL.index('id="garage-rows"'))
+
+    def test_the_start_selects_show_the_set_or_the_two_axles(self):
+        body = function_body("renderGarageStart")
+        self.assertIn('$("garage-start").parentElement.hidden = split;', body)
+        self.assertIn('$("garage-start-front").parentElement.hidden = !split;', body)
+        self.assertIn('$("garage-start-rear").parentElement.hidden = !split;', body)
+        self.assertIn("garage.sets.map((s, i) => ({ label: setLabel(s), value: String(i) }))", body)
+        self.assertIn("garage.fronts.map((k) => ({ label: tyreKeyLabel(k), value: k }))", body)
+        self.assertIn("garage.rears.map((k) => ({ label: tyreKeyLabel(k), value: k }))", body)
+        fill = function_body("fillStart")
+        self.assertIn("if (select.value !== value) select.selectedIndex = -1;", fill)
+        self.assertIn("el(\"option\", \"\", e.label)", fill)
+
+    def test_reset_posts_garage_reset_through_the_queue_and_is_off_unless_a_choice_is_saved(self):
         self.assertIn('$("btn-garage-reset").addEventListener("click", resetGarage);', CODE)
         self.assertIn("queue = queue.then(() => sendGarageReset(target));", function_body("resetGarage"))
-        self.assertIn('await api("/api/garage_reset", {}, target);', function_body("sendGarageReset"))
-        self.assertIn("showGarage(target, res.garage);", function_body("sendGarageReset"))
+        send = function_body("sendGarageReset")
+        self.assertIn('await api("/api/garage_reset", {}, target);', send)
+        self.assertIn("await loadGarage();", send)
         body = function_body("lockGarage")
-        self.assertIn('if (!locked && !(garage && garage.custom)) why = "the car offers its stock tyres already";', body)
+        self.assertIn('if (!locked && !(garage && !garage.default)) why = "the car offers its original tyres already";', body)
         self.assertIn('$("btn-garage-reset").disabled = why !== "";', body)
         self.assertIn('$("btn-garage-reset").title = why;', body)
 
-    def test_the_server_answer_wins_and_a_failed_write_reads_the_garage_again_and_keeps_its_message(self):
-        show = function_body("showGarage")
-        self.assertIn("if (target !== selection) return;", show)
-        self.assertIn("garageSeq += 1;", show)
-        self.assertIn("garage = answer;", show)
-        self.assertIn("renderGarage();", show)
+    def test_a_failed_write_reads_the_choice_again_and_keeps_its_message(self):
         failed = function_body("garageFailed")
         self.assertLess(failed.index("await loadGarage();"), failed.index("garageError = e.message;"))
         self.assertIn("renderGarageLines();", failed)
         for name in ("sendGarageSet", "sendGarageReset"):
             with self.subTest(name):
                 self.assertIn("await garageFailed(target, e);", function_body(name))
-        self.assertEqual(inspect.getsource(ts.garage_json).count("tune.garage_choices"), 1)
+        self.assertIn('garageError = "";', function_body("writeGarage"))
 
-    def test_the_missing_keys_are_a_warning_line_and_the_error_line_is_the_alert_of_the_panel(self):
+    def test_the_note_line_says_what_the_game_tyre_read_is_doing_and_the_error_line_is_the_alert_of_the_panel(self):
         body = function_body("renderGarageLines")
-        self.assertIn('"No longer available, Apply is refused until you change the tyre list or reset it: " + missing.join(", ")', body)
-        self.assertIn("garage ? garage.missing : []", body)
-        self.assertIn('$("garage-missing").hidden = missing.length === 0;', body)
+        self.assertIn('"The game tyres could not be read: " + tyreIndexError', body)
+        self.assertIn('"Reading the game tyres ..."', body)
+        self.assertIn('"No game tyres found: install a car first, its tyres are listed here."', body)
+        self.assertIn('$("garage-note").hidden = note === "";', body)
         self.assertIn('showText("garage-error", garageError);', body)
         self.assertEqual(CODE.count('setAttribute("role", "alert")'), 1)
         self.assertNotIn("aria-live", self.PANEL)
 
-    def test_the_checkboxes_and_the_reset_button_are_off_while_a_job_runs_or_without_a_base_car(self):
+    def test_the_controls_are_off_while_a_job_runs_or_without_a_base_car_and_a_locked_version_too(self):
         body = function_body("lockGarage")
         self.assertIn("let why = panelLockReason();", body)
-        self.assertIn("for (const g of garageRows) g.input.disabled = locked;", body)
+        self.assertIn('$("split-tyres").disabled = locked || !garage;', body)
+        self.assertIn('for (const id of ["garage-start", "garage-start-front", "garage-start-rear"]) $(id).disabled = locked || !garage;', body)
         self.assertIn("lockGarage();", function_body("renderGarage"))
         self.assertIn("lockGarage();", function_body("syncGarage"))
+        self.assertIn('return "this version is locked: unlock it to change it";', function_body("panelLockReason"))
 
-    def test_the_focus_goes_back_to_the_toggled_checkbox_by_its_key_after_the_redraw(self):
+    def test_the_read_only_view_hides_the_panel(self):
+        self.assertIn('$("garage").hidden = viewOnly();', function_body("renderButtons"))
+        self.assertIn("if (viewOnly()) return;", function_body("loadCarPanels"))
+
+    def test_the_focus_goes_back_to_the_toggled_checkbox_by_its_id_after_the_redraw(self):
         body = function_body("renderGarage")
         self.assertIn("garageRows.find((g) => g.input === document.activeElement)", body)
-        self.assertIn("garageRows.find((g) => g.key === focused.key)", body)
+        self.assertIn("garageRows.find((g) => g.id === focused.id)", body)
         self.assertIn("if (back && !back.input.disabled) back.input.focus();", body)
         self.assertLess(body.index("lockGarage();"), body.index("back.input.focus();"))
         self.assertNotIn("aria-live", function_body("renderGarage") + function_body("renderGarageToggle") + function_body("toggleGarage"))
 
     def test_the_styles_use_tokens_and_the_chevron_of_the_group_toggle(self):
-        for cls in ("garage", "garage-body", "garage-help", "garage-row"):
+        for cls in ("garage", "garage-body", "garage-help", "garage-row", "garage-lists", "garage-list", "garage-box", "garage-group", "garage-subhead"):
             with self.subTest(cls):
                 self.assertIn(cls, css_classes())
                 self.assertIn(cls, used_classes())
         self.assertIn(".garage-help { font-size: 13px; color: var(--color-text-muted); }", STYLE)
         self.assertIn(".garage fieldset { min-width: 0;", STYLE)
         self.assertIn(".garage { padding: 0; overflow-wrap: anywhere; }", STYLE)
+        self.assertRegex(STYLE, r"\.garage-list \{[^}]*flex: 1 1 280px;")
+        self.assertRegex(STYLE, r"\.garage-lists \{[^}]*flex-wrap: wrap;")
 
     def test_the_server_routes_the_page_calls_exist_and_the_exemption_list_is_gone(self):
-        for route in ("/api/garage", "/api/garage_set", "/api/garage_reset"):
+        for route in ("/api/garage", "/api/garage_set", "/api/garage_reset", "/api/tyre_index"):
             with self.subTest(route):
                 self.assertTrue(route in ts.GET_ROUTES or route in ts.POST_ROUTES)
                 self.assertIn(route, called_paths())
         self.assertNotIn("SERVER_ONLY", globals())
         self.assertEqual(sorted(TestApiContract.ROUTES), sorted(list(ts.GET_ROUTES) + list(ts.POST_ROUTES)))
 
-    def test_the_fields_of_a_choice_the_page_reads_are_sent_by_the_server(self):
-        source = inspect.getsource(ts.tune.garage_choices) + inspect.getsource(ts.tune.garage_entries)
-        sent = quoted_words(ts.tune.garage_choices, ts.tune.garage_entries) | set(re.findall(r"\b(\w+)=", source))
-        read = set(re.findall(r"\b(?:c|garage)\.(\w+)", "".join(function_body(n) for n in ("renderGarage", "garageSummary", "lockGarage", "renderGarageLines"))))
-        self.assertTrue({"key", "kind", "label", "ticked", "start", "choices", "custom", "missing"} <= read, sorted(read))
+    def test_the_fields_of_the_answer_the_page_reads_are_sent_by_the_server(self):
+        sent = quoted_words(ts.tune.tyre_choices) | quoted_words(ts.garage_json) | {"own", "key", "label", "source_label"}
+        read = set(re.findall(r"\bgarage\.(\w+)", "".join(function_body(n) for n in (
+            "originalSizes", "originalTyres", "garageGroups", "garageSummary", "renderGarageStart", "lockGarage", "buildGarageGroup",
+            "tyreKeyLabel", "itemTicked", "garageChanged"))))
+        read |= set(re.findall(r"\bg\.(\w+)", function_body("garageChoice") + function_body("garageWith")))
+        self.assertTrue({"default", "stock_sets", "sets", "split", "fronts", "rears", "start_front", "start_rear", "labels", "own"} <= read, sorted(read))
         self.assertEqual(sorted(read - sent), [])
+        own = set(re.findall(r"\bo\.(\w+)", function_body("garageGroups") + function_body("tyreKeyLabel")))
+        self.assertTrue({"key", "label", "source_label"} <= own, sorted(own))
+        self.assertEqual(sorted(own - sent), [])
+        stock = set(re.findall(r"\bs\.(\w+)", function_body("garageGroups")))
+        self.assertTrue({"front", "rear", "label"} <= stock, sorted(stock))
+        self.assertIn('"label"', inspect.getsource(ts.tune.stock_sets))
 
 
 class TestTurboKit(unittest.TestCase):
@@ -3042,7 +3668,7 @@ class TestLogging(unittest.TestCase):
 
     def test_the_header_of_the_log_table_is_the_sticky_one_of_the_car_table_and_only_the_sessions_wrapper_scrolls(self):
         self.assertRegex(STYLE, r"\nthead th \{\s*position: sticky; top: 0; z-index: 2;")
-        self.assertEqual(STYLE.count("position: sticky"), 1)
+        self.assertEqual(STYLE.count("position: sticky") - sum(r.count("position: sticky") for r in re.findall(r"#tyre-table-wrap\.typed[^{]*\{[^}]*\}", STYLE)), 1)
         self.assertEqual(STYLE.count("overflow-x"), 1)
         self.assertIn("\n.sessions { overflow-x: auto; }", STYLE)
         self.assertNotRegex(STYLE, r"\.tablewrap[^{}]*\{[^}]*overflow(?!-wrap)")
@@ -3177,7 +3803,7 @@ class TestLogging(unittest.TestCase):
                 self.assertNotRegex(function_body(name), r"\blog[A-Z]")
 
     def test_the_choice_is_kept_in_the_page_only_and_the_boxes_get_their_focus_back_after_the_redraw(self):
-        self.assertEqual(CODE.count("localStorage"), 2)
+        self.assertEqual(CODE.count("localStorage") - TYRE_TYPES_STORAGE.count("localStorage"), 2)
         body = function_body("renderLog")
         self.assertIn("const focused = logBoxes.find((b) => b.input === document.activeElement);", body)
         self.assertIn("const back = focused && logBoxes.find((b) => b.key === focused.key);", body)
@@ -3357,6 +3983,107 @@ class TestLoggingCopy(unittest.TestCase):
                                                    "copyFileAsText", "copyFileOnPc", "onThisPc", "copySessionFile", "renderLogSessions"))
         code.encode("ascii")
         self.assertNotRegex(code, r"\.html\b|innerHTML|insertAdjacentHTML")
+
+
+class TestBaseName(unittest.TestCase):
+    """The car name in the header, the name of the Base (renamed like a version) and the hidden row of variant_name."""
+
+    def test_a_row_with_the_hint_hidden_is_not_built_so_no_filter_and_no_count_sees_it(self):
+        body = function_body("buildTable")
+        self.assertIn('if (data.ui === "hidden") continue;', body)
+        self.assertLess(body.index('if (data.ui === "hidden") continue;'), body.index("current = groups.find("))
+        self.assertLess(body.index('if (data.ui === "header") {'), body.index('if (data.ui === "hidden") continue;'))
+        self.assertIn("rows.push(r);", body)
+
+    def test_a_group_is_created_by_its_first_visible_row_so_meta_is_gone_without_one(self):
+        body = function_body("buildTable")
+        self.assertLess(body.index('if (data.ui === "hidden") continue;'), body.index("current = buildGroup(data.group);"))
+        self.assertIn("g.tr.hidden = !any;", function_body("applyFilter"))
+
+    def test_the_header_line_has_the_original_car_and_the_car_name_with_the_field_and_the_reset(self):
+        body = function_body("buildHeaderRow")
+        self.assertLess(body.index('el("span", "label", "Original car: ")'), body.index('el("span", "stockname", carName())'))
+        self.assertLess(body.index('el("span", "stockname", carName())'), body.index('el("span", "label", "Car name: ")'))
+        self.assertLess(body.index('el("span", "label", "Car name: ")'), body.index("r.field = buildField(r);"))
+        self.assertLess(body.index("r.field = buildField(r);"), body.index("r.reset = buildReset(r);"))
+        self.assertIn('"Base car: Apply creates a new modded car"', body)
+        self.assertIn('"Shared by all versions; change it on the base"', body)
+        self.assertNotIn("Name in the game", HTML)
+        self.assertIn("if (!target.variant) headerRow = buildHeaderRow(data, target);", function_body("buildTable"))
+
+    def test_the_creation_and_duplicate_panels_say_car_name_and_no_text_says_suffix(self):
+        panel = re.search(r'<section id="dialog".*?</section>', MARKUP, re.S).group(0)
+        self.assertIn('<label for="dialog-suffix">Car name</label>', panel)
+        self.assertIn('<input id="dialog-suffix" type="text" autocomplete="off" spellcheck="false">', panel)
+        self.assertIn("a space and the car name.", panel)
+        self.assertEqual(re.findall(r"(?i)name suffix|variant name|name of the variant", HTML), [])
+
+    def test_the_first_option_of_the_version_select_is_the_name_of_the_base_with_the_value_empty(self):
+        body = function_body("renderCars")
+        self.assertIn('const baseName = serverState && serverState.tune === selection.tune && serverState.base_name ? serverState.base_name : "Base";', body)
+        self.assertIn('[["", baseName]].concat(', body)
+        self.assertIn("o.value = id;", body)
+
+    def test_rename_is_on_for_the_base_unless_the_server_reports_no_base_name(self):
+        body = function_body("renderButtons")
+        self.assertIn('const whyRename = whyVersion || (selection.version || baseNameShown() !== null ? "" : "the base of this car has no name in the game\'s menu");', body)
+        self.assertIn('$("btn-version-rename").disabled = whyRename !== "";', body)
+        self.assertIn('$("btn-version-rename").title = whyRename;', body)
+        self.assertIn('$("btn-version-rename").disabled = whyRename !== "" || lockedNow;', body)
+        self.assertEqual(function_body("baseNameShown").count('typeof serverState.base_name === "string"'), 1)
+        self.assertIn("serverState.tune === selection.tune", function_body("baseNameShown"))
+
+    def test_lock_stays_off_on_the_base(self):
+        body = function_body("renderButtons")
+        self.assertIn('const whyLock = whyVersion || (selection.version ? "" : "select a version to rename it, the base has no version name");', body)
+        self.assertIn('$("btn-version-lock").title = whyLock;', body)
+
+    def test_the_rename_dialog_of_the_base_is_prefilled_with_its_name_and_posts_base(self):
+        opening = function_body("openVersionDialog")
+        self.assertIn("if (!add && !current && baseNameShown() === null) return;", opening)
+        self.assertIn('"Rename version " + (current ? current.name : baseNameShown())', opening)
+        self.assertIn('$("version-dialog-name").value = add ? "" : current ? current.name : baseNameShown();', opening)
+        self.assertIn('await api("/api/version_rename", { name: name, version: target.version || "base" }, target);', function_body("submitVersionDialog"))
+        self.assertIn("function baseNameShown() {", CODE)
+
+    def test_the_rename_of_the_base_reloads_the_state_so_the_select_shows_the_new_name(self):
+        body = function_body("submitVersionDialog")
+        rename = body[body.index('await api("/api/version_rename"'):]
+        self.assertLess(rename.index("closeVersionDialog(true);"), rename.index("await refresh();"))
+
+
+class TestCalculatedRows(unittest.TestCase):
+    NOTE = "Calculated from the engine settings; type a value to override"
+
+    def test_every_value_row_has_the_note_hidden_until_the_row_is_calculated(self):
+        body = function_body("buildRow")
+        self.assertIn('r.calcnote = el("div", "tunenote", "%s");' % self.NOTE, body)
+        self.assertIn("valueCell.appendChild(r.calcnote);", body)
+        self.assertEqual(HTML.count(self.NOTE), 1)
+        self.assertIn("if (r.calcnote) r.calcnote.hidden = !data.calculated;", function_body("showRow"))
+
+    def test_the_value_field_shows_the_value_of_the_row_and_the_calculated_flag_comes_from_the_server_row(self):
+        body = function_body("showRow")
+        self.assertIn("r.shown = fmtVal(data.type, data.value);", body)
+        self.assertIn("r.data = data;", body)
+        self.assertIn('"calculated"', inspect.getsource(ts.row_json))
+
+    def test_typing_saves_a_value_and_the_reset_returns_to_the_calculated_one_through_the_ordinary_routes(self):
+        self.assertIn('await api("/api/set", { id: r.data.id, value: text }, r.target);', function_body("sendSet"))
+        self.assertIn('await api("/api/unset", { id: r.data.id }, r.target);', function_body("sendUnset"))
+        self.assertIn("showRow(r, res.row);", function_body("sendSet"))
+        self.assertIn("showRow(r, res.row);", function_body("sendUnset"))
+        self.assertIn("r.reset.hidden = !data.changed;", function_body("showRow"))
+
+    def test_a_locked_version_and_the_read_only_view_disable_the_field_and_reset_of_every_row(self):
+        body = function_body("renderButtons")
+        self.assertIn("r.field.disabled = running;", body)
+        self.assertIn("r.reset.disabled = running;", body)
+        self.assertIn("r.field.disabled = true;", body)
+        self.assertNotIn("calcnote", body)
+
+    def test_the_note_class_is_styled(self):
+        self.assertIn("tunenote", css_classes())
 
 
 if __name__ == "__main__":

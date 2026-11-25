@@ -124,6 +124,15 @@ class TestChannelTable(unittest.TestCase):
         self.assertEqual(logconf.load_channels(), RAW)
         self.assertEqual(RAW["version"], 1)
 
+    def test_the_24_settings_of_the_old_tyres_section_keep_their_entries_hidden_in_the_tuner_or_not(self):
+        ids = [s["id"] for s in CAT["settings"] if s["group"] == "Tyres"]
+        self.assertEqual(len(ids), 24)
+        for sid in ids:
+            with self.subTest(sid):
+                self.assertEqual(RAW["settings"][sid], {"status": "indirect", "note": "only its effect is visible: slip_angle_deg, slip_ratio, wheel_load, acc_g, tyre_temp_core",
+                                                        "once": [], "live": []})
+                self.assertEqual(next(s for s in CAT["settings"] if s["id"] == sid)["ui"], "hidden")
+
     def test_the_file_is_the_one_next_to_the_catalogue(self):
         self.assertEqual(logconf.CHANNELS, tune.CATALOGUE.parent / "log_channels.json")
         self.assertEqual(logconf.CHANNELS, CHANNELS_FILE)
@@ -642,6 +651,12 @@ class TestTree(unittest.TestCase):
         self.assertEqual([r["id"] for r in by["Engine"]["rows"]][:3], ["limiter", "idle_rpm", "power_scale"])
         self.assertEqual([r["tickable"] for r in by["Engine"]["rows"]][:3], [True, True, False])
         self.assertEqual([r["id"] for r in by["Alignment & tyres"]["rows"]][:5], ["camber_front", "camber_rear", "static_camber_front", "static_camber_rear", "tyre_pressure_front"])
+
+    def test_the_tyres_group_of_the_logging_tab_still_lists_its_24_rows_although_the_tuner_hides_them(self):
+        tyres = {g["name"]: g for g in self.catalogue_groups()}["Tyres"]
+        self.assertEqual([r["id"] for r in tyres["rows"]], [s["id"] for s in CAT["settings"] if s["group"] == "Tyres"])
+        self.assertEqual((len(tyres["rows"]), tyres["tickable"]), (24, 0))
+        self.assertFalse(any(r["tickable"] for r in tyres["rows"]))
 
     def test_groups_without_a_direct_row_are_listed_too(self):
         by = {g["name"]: g for g in self.groups}

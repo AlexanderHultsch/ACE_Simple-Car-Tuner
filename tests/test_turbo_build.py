@@ -4,6 +4,7 @@ No game data and no schemas: the cars are synthetic and their files are JSON tex
 """
 import hashlib
 import json
+import math
 import os
 import shutil
 import struct
@@ -917,17 +918,20 @@ class TestApplyWithAKit(Apply):
             self.apply()
         self.assertEqual(self.calls, [])
 
-    def test_the_tyre_garage_and_the_kit_work_together(self):
+    def test_the_tyre_choice_and_the_kit_work_together(self):
         self.with_kit("ks_a")
         state = self.state()
-        state[tune.TYRE_KEY] = ["stock:x|y"]
-        with mock.patch.object(tune, "garage_plan", return_value={"garage": True, "entries": [{"key": "stock:x|y"}]}) as plan, \
-                mock.patch.object(tune, "write_garage", return_value=["note: garage"]) as write:
+        state[tune.TYRE_KEY] = {"sets": [{"front": "game:x", "rear": "game:y"}], "split": False, "start_front": "game:x", "start_rear": "game:y"}
+        built = {"fronts": ["game:x"], "rears": ["game:y"], "start_front": "game:x", "start_rear": "game:y", "labels": {"game:x": "X", "game:y": "Y"}}
+        with mock.patch.object(tune, "tyre_plan", return_value=built) as plan, mock.patch.object(tune, "start_tyre_edits") as start, \
+                mock.patch.object(tune, "write_tyre_choice", return_value=["note: tyres"]) as write:
             res = self.apply(state)
-        self.assertEqual(res["notes"][-2], "note: garage")
+        self.assertEqual(res["notes"][-2], "note: tyres")
         self.assertEqual(res["notes"][1][:25], "note: turbo kit: donor ks")
-        self.assertEqual((plan.call_count, write.call_count), (1, 1))
-        self.assertEqual(write.call_args[0][0], os.path.join(self.work, "ks_x", "kit", "ks_a"))
+        self.assertEqual((plan.call_count, start.call_count, write.call_count), (1, 1, 1))
+        self.assertEqual(plan.call_args[0][3], os.path.join(self.work, "ks_x", "kit", "ks_a"))
+        self.assertIs(write.call_args[0][1], built)
+        self.assertEqual(tune.load_snapshot(self.work, "ks_x", "ax_x")["garage"], built)
 
 
 class TestApplyChanges(Apply):
@@ -1015,6 +1019,117 @@ class TestApplyWithoutAKit(Apply):
         self.assertEqual(self.read(self.car_file(res["build_dir"], "ax_a", "data/engine.carengine"))["turbos"][0]["max_boost"], 0.9)
         self.assertEqual(res["notes"], ["note: from build", CAR_NOTE % "ax_a"])
         self.assertFalse(os.path.exists(os.path.join(self.work, "ks_a", "kit")))
+
+
+CURVE = {"points": [{"t": 1000.0, "value": 100.0}, {"t": 5000.0, "value": 300.0}, {"t": 7000.0, "value": 200.0}]}
+SHEET = {"brand": "B", "description": "D", "car_specs": {"items": [{"key": "KEY_POWER", "value": 400.0}, {"key": "KEY_TORQUE", "value": 500.0}]}}
+
+
+class Calculated:
+    """Mixin for the worlds below: every car gets a power curve (peak 300 Nm, 5000 rpm), a spec sheet of 400 PS and 500 Nm and the catalogue gets
+    the two display settings, power_scale and turbo_wastegate_1."""
+
+    def setUp(self):
+        super().setUp()
+        self.addCleanup(tune._engine_inputs.clear)
+        for car_id, fc in self.fakes.items():
+            self.put(fc, "data/power.curve", CURVE)
+            self.put(fc, "presets/p.mechanicalcarpreset", SHEET)
+
+            def add_curve(engine, fc=fc):
+                engine["powerCurve"] = fc.game_path("data/power.curve")
+                engine["_order"].append("powerCurve")
+            self.edit(car_id, "data/engine.carengine", add_curve)
+        self.cat = mini_catalogue(
+            *self.cat["settings"],
+            mini_setting("power_scale", kind="curve_scale", default=1.0, curve_from={"file": "@engine", "path": "powerCurve"}, targets=[]),
+            mini_setting("turbo_wastegate_1", targets=[("@engine", "turbos[0].wastegate"), ("@turbo[0]", "wastegate")], hide_if_absent=True),
+            mini_setting("display_power_ps", targets=[("@mech_preset", "car_specs.items[key=KEY_POWER].value")]),
+            mini_setting("display_torque_nm", targets=[("@mech_preset", "car_specs.items[key=KEY_TORQUE].value")]))
+
+    def shown(self, car_id="ks_x", tune_id=None, version=None):
+        rows = {r["id"]: r for r in tune.effective_rows(self.work, car_id, self.cat, True, tune_id, version)}
+        return [(rows[i]["value"], rows[i]["changed"], rows[i].get("calculated")) for i in ("display_power_ps", "display_torque_nm")]
+
+
+class TestCalculatedWithAKit(Calculated, World):
+    def test_a_car_without_a_kit_shows_its_stock_numbers(self):
+        self.assertEqual(self.shown(), [(400.0, False, None), (500.0, False, None)])
+
+    def test_the_boost_of_the_kit_multiplies_the_numbers(self):
+        self.with_kit("ks_a")
+        self.assertEqual(self.shown(), [(720.0, True, True), (900.0, True, True)])
+        self.with_kit("ks_b")
+        self.assertEqual(self.shown(), [(1280.0, True, True), (1600.0, True, True)])
+
+    def test_a_changed_boost_and_a_changed_wastegate_of_the_kit_count(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1})
+        self.assertEqual(self.shown(), [(840.0, True, True), (1050.0, True, True)])
+        tune.save_state(self.work, "ks_x", {KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1, "turbo_wastegate_1": 0.5})
+        self.assertEqual(self.shown(), [(600.0, True, True), (750.0, True, True)])
+        tune.save_state(self.work, "ks_x", {KEY: {"donor": "ks_b"}, "turbo_boost_2": 0.2})
+        self.assertEqual(self.shown(), [(880.0, True, True), (1100.0, True, True)])
+
+    def test_the_kit_and_power_scale_and_limiter_work_together(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"donor": "ks_a"}, "power_scale": 0.5, "limiter": 4000})
+        # torque peak 250 Nm at 4000 rpm, half of it, times 1.8; power peak against 275 Nm x 5500 rpm
+        self.assertEqual(self.shown(), [(math.floor(400.0 * 0.5 * 1.8 * (250.0 * 4000) / (275.0 * 5500) + 0.5) * 1.0, True, True), (375.0, True, True)])
+
+    def test_the_stock_turbo_of_a_car_is_in_the_reference(self):
+        tune.save_state(self.work, "ks_a", {})
+        self.assertEqual(self.shown("ks_a"), [(400.0, False, None), (500.0, False, None)])
+        tune.save_state(self.work, "ks_a", {"turbo_boost_1": 1.0})
+        self.assertEqual(self.shown("ks_a"), [(444.0, True, True), (556.0, True, True)])
+
+    def test_each_version_has_its_own_kit_and_the_base_none(self):
+        tune.save_state(self.work, "ks_x", {})
+        v1, v2 = tune.add_version(self.work, "ks_x", "Drift"), tune.add_version(self.work, "ks_x", "Grip")
+        tune.save_version_state(self.work, "ks_x", {KEY: {"donor": "ks_a"}}, v1)
+        tune.save_version_state(self.work, "ks_x", {KEY: {"donor": "ks_b"}, "power_scale": 0.5}, v2)
+        self.assertEqual(self.shown(version=v1), [(720.0, True, True), (900.0, True, True)])
+        self.assertEqual(self.shown(version=v2), [(640.0, True, True), (800.0, True, True)])
+        self.assertEqual(self.shown(), [(400.0, False, None), (500.0, False, None)])
+
+    def test_a_kit_that_cannot_be_built_gives_no_calculation_and_no_exception(self):
+        tune.save_state(self.work, "ks_x", {KEY: {"donor": "ks_x"}, "power_scale": 1.2})
+        with self.assertRaisesRegex(ValueError, "turbo kit"):
+            tune.effective_rows(self.work, "ks_x", self.cat, True)
+        self.assertEqual(tune.calculated_display(self.work, "ks_x", None, None, {KEY: {"donor": "ks_x"}}, []), {})
+
+
+class TestCalculatedApply(Calculated, Apply):
+    def test_apply_writes_the_calculated_numbers_into_the_spec_sheet_and_records_them(self):
+        res = self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1})
+        items = self.built(res, "presets/p.mechanicalcarpreset")["car_specs"]["items"]
+        self.assertEqual([(i["key"], i["value"]) for i in items], [("KEY_POWER", 840.0), ("KEY_TORQUE", 1050.0)])
+        self.assertEqual([(a["id"], a["old"], a["new"], a["files"]) for a in res["applied"] if a["id"].startswith("display")],
+                         [("display_power_ps", 400.0, 840.0, ["presets/p.mechanicalcarpreset"]),
+                          ("display_torque_nm", 500.0, 1050.0, ["presets/p.mechanicalcarpreset"])])
+        self.assertEqual({c["id"]: (c["from"], c["to"]) for c in res["changes"]["settings"] if c["id"].startswith("display")},
+                         {"display_power_ps": (400.0, 840.0), "display_torque_nm": (500.0, 1050.0)})
+        snapshot = tune.load_snapshot(self.work, "ks_x", "ax_x")
+        self.assertEqual((snapshot["settings"]["display_power_ps"], snapshot["settings"]["display_torque_nm"]), (840.0, 1050.0))
+        self.assertEqual(res["changes"]["total"], len(snapshot["settings"]))
+        self.assertEqual(tune.load_state(self.work, "ks_x"), {KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1})
+
+    def test_a_later_build_reports_the_change_of_a_calculated_number_and_an_override_wins(self):
+        self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.1})
+        second = self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.2})
+        self.assertEqual({c["id"]: (c["from"], c["to"]) for c in second["changes"]["settings"] if c["id"].startswith("display")},
+                         {"display_power_ps": (840.0, 880.0), "display_torque_nm": (1050.0, 1100.0)})
+        third = self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.2, "display_power_ps": 450.0})
+        self.assertEqual({c["id"]: (c["from"], c["to"]) for c in third["changes"]["settings"] if c["id"].startswith("display")},
+                         {"display_power_ps": (880.0, 450.0)})
+        items = self.built(third, "presets/p.mechanicalcarpreset")["car_specs"]["items"]
+        self.assertEqual([i["value"] for i in items], [450.0, 1100.0])
+        fourth = self.apply({KEY: {"donor": "ks_a"}, "turbo_boost_1": 1.2})
+        self.assertEqual({c["id"]: (c["from"], c["to"]) for c in fourth["changes"]["settings"] if c["id"].startswith("display")},
+                         {"display_power_ps": (450.0, 880.0)})
+
+    def test_a_car_with_nothing_to_calculate_applies_without_the_numbers(self):
+        res = self.apply({"limiter": 8000})
+        self.assertEqual([a["id"] for a in res["applied"]], ["limiter"])
+        self.assertEqual([i["value"] for i in self.built(res, "presets/p.mechanicalcarpreset")["car_specs"]["items"]], [400.0, 500.0])
 
 
 def engine_schema():

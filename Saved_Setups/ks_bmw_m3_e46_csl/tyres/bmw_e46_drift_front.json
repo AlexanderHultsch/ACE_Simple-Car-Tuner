@@ -1,0 +1,20 @@
+{
+  "version": 2,
+  "name": "Drift front",
+  "short": "DF",
+  "source": "content\\cars\\common_phsx\\tyres\\road\\road_235_35_19.tyre",
+  "values": {
+    "tyre_grip_lateral": 1.353434,
+    "tyre_grip_longitudinal": 1.326,
+    "tyre_peak_slip_angle": 8.418182,
+    "tyre_load_reference": 4320.0,
+    "tyre_pressure_ref": 28.0,
+    "tyre_flex_lateral": 38000.0,
+    "tyre_flex_longitudinal": 20000.0,
+    "tyre_stiffness_rate": 312000.0,
+    "tyre_heat_partition": 0.9,
+    "tyre_grain_gain": 0.47,
+    "tyre_grain_slip_angle_gain": 0.565,
+    "tyre_thermal_curve": "supercar"
+  }
+}

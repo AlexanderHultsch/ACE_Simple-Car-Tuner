@@ -1,0 +1,103 @@
+{
+  "version": 1,
+  "settings": {
+    "variant_name": "Base",
+    "name_suffix": "Tuned",
+    "display_power_ps": 576.0,
+    "display_torque_nm": 592.0,
+    "limiter": 8800,
+    "idle_rpm": 800,
+    "power_scale": 0.5714,
+    "nominal_rpm": 8600.0,
+    "engine_damage_rpm": 9000.0,
+    "turbo_boost_1": 0.3,
+    "turbo_boost_2": 2.0,
+    "turbo_wastegate_1": 0.3,
+    "turbo_wastegate_2": 1.5,
+    "max_turbo_boost": 1.8,
+    "final_ratio": 3.91,
+    "gear_1": 3.5,
+    "gear_2": 2.1,
+    "autoshift_up_rpm": 8700,
+    "auto_cut_off_time": 150.0,
+    "diff_power_default": 0.85,
+    "diff_coast_default": 0.7,
+    "diff_power_max": 1.0,
+    "diff_coast_max": 1.0,
+    "diff_type": "Spool",
+    "diff_hw_preload": 10.0,
+    "diff_hw_bias_power": 2.5,
+    "diff_hw_bias_coast": 3.0,
+    "diff_hw_power": 0.85,
+    "diff_hw_coast": 0.7,
+    "steer_ratio": 14.0,
+    "steer_rod_ratio": 0.0022,
+    "ff_mult": 2.1,
+    "brake_torque": 4700.0,
+    "car_mass": 1450.0,
+    "arb_front": 36000.0,
+    "arb_rear": 40000.0,
+    "spring_front": 54000.0,
+    "spring_rear": 55000.0,
+    "collar_front": 97.12118,
+    "collar_rear": 44.217757,
+    "camber_front": -3.5,
+    "camber_rear": -0.5,
+    "static_camber_front": -3.1,
+    "static_camber_rear": -0.5,
+    "camber_min_front": -4.0,
+    "camber_max_rear": 0.0,
+    "fuel_start": 29.0,
+    "tc_level": 0
+  },
+  "kit": {
+    "donor": "ks_bmw_m4_csl",
+    "label": "BMW M4 CSL",
+    "kind": "twin turbo",
+    "boost": [
+      1.0,
+      1.0
+    ]
+  },
+  "garage": {
+    "fronts": [
+      "own:bmw_e46_drift_front",
+      "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_235_35_19.tyre",
+      "game:content\\cars\\common_phsx\\tyres\\road\\road_235_35_19.tyre"
+    ],
+    "rears": [
+      "own:bmw_e46_drift_rear",
+      "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_265_30_19.tyre",
+      "game:content\\cars\\common_phsx\\tyres\\road\\road_265_30_19.tyre"
+    ],
+    "start_front": "own:bmw_e46_drift_front",
+    "start_rear": "own:bmw_e46_drift_rear",
+    "labels": {
+      "own:bmw_e46_drift_front": "Drift front",
+      "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_235_35_19.tyre": "Supercar 235/35 R19",
+      "game:content\\cars\\common_phsx\\tyres\\road\\road_235_35_19.tyre": "Road 235/35 R19",
+      "own:bmw_e46_drift_rear": "Drift rear",
+      "game:content\\cars\\common_phsx\\tyres\\supercar\\supercar_265_30_19.tyre": "Supercar 265/30 R19",
+      "game:content\\cars\\common_phsx\\tyres\\road\\road_265_30_19.tyre": "Road 265/30 R19"
+    }
+  },
+  "sounds": {
+    "turbo": "event:/parts/turbos/turbo_quattro",
+    "backfire": "event:/parts/backfires/backfire_supra"
+  },
+  "name": "BMW M3 E46 CSL Tuned",
+  "time": "2026-11-25T16:53:49Z",
+  "changes": {
+    "since": "last build",
+    "settings": [],
+    "extras": [
+      {
+        "kind": "garage",
+        "from": "front BMW E46 Drift front, Supercar 235/35 R19, Road 235/35 R19; rear BMW E46 Drift rear, Supercar 265/30 R19, Road 265/30 R19; starts on BMW E46 Drift front / BMW E46 Drift rear",
+        "to": "front Drift front, Supercar 235/35 R19, Road 235/35 R19; rear Drift rear, Supercar 265/30 R19, Road 265/30 R19; starts on Drift front / Drift rear",
+        "text": "Tyres: front Drift front, Supercar 235/35 R19, Road 235/35 R19; rear Drift rear, Supercar 265/30 R19, Road 265/30 R19; starts on Drift front / Drift rear"
+      }
+    ],
+    "total": 48
+  }
+}

@@ -150,6 +150,7 @@ col.c-desc { width: 38%; }
 #panel-car col.c-default { width: 14%; }
 col.c-range { width: 13%; }
 #panel-car col.c-desc { width: 34%; }
+col.c-type { width: 120px; }
 col.c-tick { width: 44px; }
 col.c-unit { width: 9%; }
 col.c-once { width: 25%; }
@@ -164,7 +165,6 @@ button.grouptoggle {
   background: transparent; color: var(--color-text-muted); letter-spacing: inherit; text-align: left; text-transform: inherit;
 }
 button.grouptoggle:focus-visible { outline-offset: -2px; }
-tr.group th.plain { padding: 8px 12px; }
 tr.group td { padding-top: 8px; padding-bottom: 8px; background: var(--color-bg-elevated); }
 button.grouptoggle:hover .gname { color: var(--color-accent); }
 .gname { color: var(--color-text); }
@@ -214,6 +214,30 @@ button.small { padding: 2px 8px; font-size: 12px; }
 }
 .default { font-size: 13.5px; }
 .range-none { color: var(--color-text-muted); }
+.typebar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; margin: 0 0 10px; }
+.typebuttons { display: flex; flex-wrap: wrap; gap: 6px; }
+.typebuttons button[aria-pressed="true"] { border-color: var(--color-accent); background: var(--color-accent-tint); }
+.typehead { display: flex; align-items: center; justify-content: space-between; gap: 6px; }
+.tcount { font-size: 12px; font-weight: normal; color: var(--color-text-muted); }
+/* a shown type column: the table gets a width of its own and the wrapper scrolls, with the header and the first column kept in view */
+#tyre-table-wrap.typed { position: relative; overflow: auto; max-height: 80vh; container-type: inline-size; }
+#tyre-table-wrap.typed table {
+  --w-name: max(190px, 22cqw); --w-value: max(190px, 23cqw); --w-default: max(130px, 17cqw);
+  width: max(100%, calc(var(--w-name) + var(--w-value) + var(--w-default) + 220px + var(--tyre-types, 0) * 120px));
+}
+#tyre-table-wrap.typed col.c-name { width: var(--w-name); }
+#tyre-table-wrap.typed col.c-value { width: var(--w-value); }
+#tyre-table-wrap.typed col.c-default { width: var(--w-default); }
+#tyre-table-wrap.typed col.c-desc { width: auto; }
+@media (min-width: 700px) {
+  #tyre-table-wrap.typed thead th:first-child { left: 0; z-index: 3; }
+  #tyre-table-wrap.typed td.name {
+    position: sticky; left: 0; z-index: 1; background: var(--color-bg-alt); box-shadow: 1px 0 0 var(--color-border);
+  }
+  #tyre-table-wrap.typed tr.changed td.name { box-shadow: inset 0 0 0 999px var(--color-accent-tint), 1px 0 0 var(--color-border); }
+  #tyre-table-wrap.typed tr.group th > button.grouptoggle { position: sticky; left: 0; width: fit-content; }
+  #tyre-table-wrap.typed tr.group th > .gdesc { position: sticky; left: 0; }
+}
 .garage { padding: 0; overflow-wrap: anywhere; }
 .tablewrap + .garage { margin-top: 12px; }
 .garage-body { padding: 0 14px 12px; }
@@ -221,6 +245,17 @@ button.small { padding: 2px 8px; font-size: 12px; }
 .garage fieldset { min-width: 0; margin: 0 0 8px; padding: 0; border: 0; }
 .garage-row { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 3px 0; }
 .garage-row label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+.garage-lists { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 6px 0; }
+.garage-list { flex: 1 1 280px; min-width: 0; }
+.garage-list h3 { margin: 4px 0; font-size: 13px; color: var(--color-text-muted); }
+.garage-box { max-height: 340px; overflow: auto; padding: 4px 10px; border: 1px solid var(--color-border); border-radius: 6px; background: var(--color-bg); }
+.garage-group { margin: 6px 0; }
+.garage-group summary { cursor: pointer; font-weight: 600; }
+.garage-subhead { font-weight: 600; }
+.garage-search { margin: 6px 0; }
+.dialog .field .hint { flex: 1 0 100%; margin: 0; }
+#tyre-list-wrap table { table-layout: auto; }
+tr.picked td { background: var(--color-accent-tint); }
 .empty { padding: 18px 14px; color: var(--color-text-muted); }
 .sr-only {
   position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden;
@@ -231,7 +266,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
 }
 @media (max-width: 1000px) {
   .page { padding: 0 12px 30px; }
-  td, thead th, button.grouptoggle, tr.group th.plain { padding-left: 8px; padding-right: 8px; }
+  td, thead th, button.grouptoggle { padding-left: 8px; padding-right: 8px; }
   .gdesc { padding-left: 31px; padding-right: 8px; }
   .valuewrap input { width: 7em; }
   .valuewrap input, .valuewrap select { max-width: 100%; min-width: 0; }
@@ -288,10 +323,10 @@ button.small { padding: 2px 8px; font-size: 12px; }
         <input id="dialog-id" class="mono" type="text" autocomplete="off" spellcheck="false" aria-describedby="dialog-hint">
       </div>
       <div class="field">
-        <label for="dialog-suffix">Name suffix</label>
+        <label for="dialog-suffix">Car name</label>
         <input id="dialog-suffix" type="text" autocomplete="off" spellcheck="false">
       </div>
-      <p class="hint">The game shows the stock car's name, a space and the name suffix.</p>
+      <p class="hint">The game shows the stock car's name, a space and the car name.</p>
       <p id="dialog-hint" class="hint"></p>
       <p id="dialog-error" class="msg err" role="alert" hidden></p>
       <div class="actions">
@@ -377,20 +412,37 @@ button.small { padding: 2px 8px; font-size: 12px; }
       <div id="garage" class="panel garage">
         <button id="garage-toggle" class="grouptoggle" type="button" aria-expanded="false" aria-controls="garage-body">
           <span class="chev" aria-hidden="true"></span>
-          <span class="gname">Garage tyres</span>
+          <span class="gname">Tyres offered in the game</span>
           <span id="garage-count" class="gcount"></span>
         </button>
         <div id="garage-body" class="garage-body" hidden>
-          <p class="garage-help">Tick the tyres this car offers in the garage. The first ticked tyre in the list is the one the car starts on. Own tyres (from the Tyre Creator tab) are listed first. Unverified: whether the game accepts extra or removed tyres is not tested yet.</p>
-          <fieldset>
-            <legend class="sr-only">Tyres offered in the garage</legend>
-            <div id="garage-rows"></div>
-          </fieldset>
+          <p class="garage-help">Tick the tyres this car offers in the game. A tyre is used as 4x the same tyre; with different front and rear tyres each axle has its own list. Your own tyres (from the Tyre Creator tab) are listed first. Checked in the game: a car can offer more tyres than its original ones, tyres of other sizes and your own tyres.</p>
+          <p class="garage-help">The game offers the front and rear tyres separately. The start tyre is what the car begins with; you can switch in the game under Fuel &amp; strategy.</p>
+          <div class="garage-row">
+            <label><input id="split-tyres" type="checkbox" disabled><span>Different front and rear tyres</span></label>
+          </div>
+          <div class="garage-row">
+            <label for="garage-search">Search</label>
+            <input id="garage-search" class="garage-search" type="search" autocomplete="off" spellcheck="false" placeholder="size or name, for example 235/35" disabled>
+          </div>
+          <p id="garage-note" class="garage-help" hidden></p>
+          <div id="garage-rows" class="garage-lists"></div>
+          <div class="garage-row">
+            <label for="garage-start">Starts on</label>
+            <select id="garage-start" disabled></select>
+          </div>
+          <div class="garage-row" hidden>
+            <label for="garage-start-front">Front starts on</label>
+            <select id="garage-start-front" disabled></select>
+          </div>
+          <div class="garage-row" hidden>
+            <label for="garage-start-rear">Rear starts on</label>
+            <select id="garage-start-rear" disabled></select>
+          </div>
           <div class="actions">
-            <button id="btn-garage-reset" type="button" disabled>Reset to stock tyres</button>
+            <button id="btn-garage-reset" type="button" disabled>Reset to the original tyres</button>
           </div>
           <p id="garage-error" class="msg err" role="alert" hidden></p>
-          <p id="garage-missing" class="msg warn" hidden></p>
         </div>
       </div>
       <div id="sounds" class="panel garage">
@@ -422,16 +474,14 @@ button.small { padding: 2px 8px; font-size: 12px; }
   <div id="panel-tyres" role="tabpanel" aria-labelledby="tab-tyres" hidden>
     <section class="panel">
       <h2>Tyre Creator</h2>
-      <p>Tyres you create here are saved once and can be ticked in the garage list of any modded car in the Car Tuner tab.</p>
+      <p>Tyres you create here are saved once and can be chosen for any modded car in the Car Tuner tab, in the panel Tyres offered in the game. A tyre is used as 4x the same tyre, or 2x on the front or the rear only; you choose that in the Car Tuner. The + buttons above the table show the lowest and highest value of each tyre type, as a guide how far to go.</p>
       <p class="msg warn">Kunos advises against editing the tyre model values: the code that connects them is not user-controlled, and a changed calibration can make a tyre behave unpredictably (tyres may need too much slip to grip or react nervously). Change little and test in the game.</p>
     </section>
 
     <div class="toolbar">
-      <label class="selectrow">Tyre
-        <select id="tyre-select" aria-label="Tyre" disabled></select>
-      </label>
-      <button id="btn-tyre-new" class="primary" type="button" disabled>New tyre&hellip;</button>
+      <button id="btn-tyre-new" class="primary" type="button" disabled>Create tyre&hellip;</button>
       <button id="btn-tyre-rename" type="button" disabled>Rename&hellip;</button>
+      <button id="btn-tyre-source" type="button" disabled>Change source&hellip;</button>
       <button id="btn-tyre-delete" type="button" disabled>Delete</button>
     </div>
 
@@ -442,9 +492,25 @@ button.small { padding: 2px 8px; font-size: 12px; }
         <label for="tyre-dialog-name">Name</label>
         <input id="tyre-dialog-name" type="text" autocomplete="off" spellcheck="false">
       </div>
-      <div id="tyre-dialog-source-field" class="field">
-        <label for="tyre-dialog-source">Source tyre (from your installed cars)</label>
-        <select id="tyre-dialog-source"></select>
+      <div id="tyre-dialog-short-field" class="field">
+        <label for="tyre-dialog-short">Short name (optional)</label>
+        <input id="tyre-dialog-short" type="text" autocomplete="off" spellcheck="false" maxlength="3" placeholder="automatic">
+        <p class="hint">1 to 3 letters or digits; without one it is made from the name.</p>
+      </div>
+      <div id="tyre-dialog-source-field">
+        <div class="field">
+          <label for="tyre-dialog-type">Source tyre: type</label>
+          <select id="tyre-dialog-type"></select>
+        </div>
+        <div class="field">
+          <label for="tyre-dialog-filter">Size or name</label>
+          <input id="tyre-dialog-filter" type="search" autocomplete="off" spellcheck="false" placeholder="for example 235/35">
+        </div>
+        <div class="field">
+          <label for="tyre-dialog-source">Source tyre</label>
+          <select id="tyre-dialog-source"></select>
+        </div>
+        <p id="tyre-dialog-none" class="hint" hidden>No game tyre matches.</p>
       </div>
       <p id="tyre-dialog-error" class="msg err" role="alert" hidden></p>
       <div class="actions">
@@ -456,14 +522,38 @@ button.small { padding: 2px 8px; font-size: 12px; }
     <p id="tyre-error" class="msg err" role="alert" hidden></p>
     <div id="tyre-notes"></div>
 
+    <div id="tyre-list-wrap" class="tablewrap" hidden>
+      <table>
+        <caption class="sr-only">Your tyres</caption>
+        <thead>
+          <tr>
+            <th scope="col">Tyre</th>
+            <th scope="col">Short</th>
+            <th scope="col">Source</th>
+            <th scope="col">Changed values</th>
+            <th scope="col">Used by</th>
+          </tr>
+        </thead>
+        <tbody id="tyre-list-rows"></tbody>
+      </table>
+    </div>
+
     <section id="tyre-editor" hidden>
       <div class="namerow">
-        <label class="selectrow">Source:
-          <select id="tyre-source" aria-label="Source tyre"></select>
-        </label>
+        <span class="label">Short name: </span><span id="tyre-short-text" class="stockname mono"></span>
+        <span class="label">Source: </span><span id="tyre-source-text" class="stockname"></span>
         <button id="btn-tyre-reset" type="button">Reset all values</button>
+        <button id="btn-tyre-expand-all" type="button">Expand all</button>
+        <button id="btn-tyre-collapse-all" type="button">Collapse all</button>
       </div>
-      <div class="tablewrap">
+      <div class="toolbar">
+        <input id="tyre-search" type="search" placeholder="Search id, name or description" aria-label="Search tyre settings">
+      </div>
+      <div id="tyre-types" class="typebar" hidden>
+        <span class="tunenote">Values by tyre type:</span>
+        <span id="tyre-type-buttons" class="typebuttons" role="group" aria-label="Values by tyre type"></span>
+      </div>
+      <div id="tyre-table-wrap" class="tablewrap">
         <table>
           <caption class="sr-only">Settings of the selected tyre</caption>
           <colgroup><col class="c-name"><col class="c-value"><col class="c-default"><col class="c-desc"></colgroup>
@@ -477,6 +567,7 @@ button.small { padding: 2px 8px; font-size: 12px; }
           </thead>
           <tbody id="tyre-rows"></tbody>
         </table>
+        <div id="tyre-empty" class="empty" hidden>No settings match.</div>
       </div>
     </section>
   </div>
@@ -542,6 +633,7 @@ const POLL_IDLE_MS = 5000;
 const POLL_HIDDEN_MS = 30000;
 const LOG_POLL_MS = 2000;
 const SELECTION_KEY = "tuner.selection";
+const TYRE_TYPES_KEY = "tuner.tyre_types";
 // the routes that work on the version of the selected modded car when the request carries its id
 const VERSION_PATHS = ["/api/settings", "/api/set", "/api/unset", "/api/reset_all", "/api/garage", "/api/garage_set", "/api/garage_reset",
   "/api/turbo", "/api/turbo_set", "/api/turbo_reset", "/api/sounds", "/api/sound_set", "/api/sound_reset"];
@@ -592,28 +684,49 @@ let awaitCreated = null;
 const tabs = [$("tab-car"), $("tab-tyres"), $("tab-logging")];
 const panels = [$("panel-car"), $("panel-tyres"), $("panel-logging")];
 let activeTab = 0;
-// the Tyre Creator: the library and the game tyres it can start from as the server listed them last, the id of the
+// the Tyre Creator: the library as the server listed it last ({id, name, short, source, source_label, changed, users, error}), the id of the
 // selected tyre (kept while another tab is shown) and the rows of its editor
 let tyres = [];
-let tyreSources = [];
 let tyreId = null;
 let tyreRows = [];
+// the setting groups of the selected tyre as the server listed them ({name, description}, in display order; [] when it lists none) and
+// the headers built for them; tyreExpanded holds the names of the groups the user opened, every group starts collapsed and the set is
+// kept while another tyre is selected or a value is saved
+let tyreGroupList = [];
+let tyreGroups = [];
+const tyreExpanded = new Set();
+// the tyre types of the game as the server listed them with the selected tyre ({type, label, total}, in menu order; each also holds its
+// header cell th, column col and toggle button btn) and the names of the types whose column is shown, remembered in the browser; the cell
+// of a type in a row is r.typeCells[type]
+let tyreTypes = [];
+let tyreShownTypes = new Set(storedTyreTypes());
 let tyreLoaded = false;
 let tyreError = "";
-// the open New / Rename / Delete panel: {kind, id, opener, busy}, else null
+// the open Create / Rename / Change source / Delete panel: {kind, id, opener, busy}, else null
 let tyreDialog = null;
 // counts the loads of the library, so that a slow answer never replaces a newer one
 let tyreSeq = 0;
 let tyreJobRunning = false;
-// the garage of the shown car or modded car as the server answered last ({choices, custom, missing, ...}), null until it is
-// loaded; garageOpen is the state of its panel: collapsed by default, reset when another car is selected; garageRows are the
-// checkboxes in the order of the choices; garageSeq counts the loads and the answers of writes, so that a slow load never
-// replaces a newer answer
+// the tyres of the game as /api/tyre_index listed them ({tyres, types, package}) and by normalised game path; null until they are read
+// (once, when the Tyre Creator or the tyre panel of the Car Tuner needs them first); tyreIndexLoading is that read, tyreIndexError the text of
+// a failed one
+let tyreIndex = null;
+let tyreIndexMap = null;
+let tyreIndexLoading = null;
+let tyreIndexError = "";
+// the tyre choice of the shown car or modded car as the server answered last ({stock_sets, sets, split, fronts, rears, start_front,
+// start_rear, own, ...}), null until it is loaded; garageOpen is the state of its panel: collapsed by default, reset when another car is
+// selected; garageRows are the checkboxes of the shown lists; garageSeq counts the loads and the changes, so that a slow load never
+// replaces a newer state; garagePending counts the changes not saved yet; garageFilter is the text of the search field and
+// garageOpenTypes the lists of types the user opened
 let garage = null;
 let garageOpen = false;
 let garageError = "";
 let garageRows = [];
 let garageSeq = 0;
+let garagePending = 0;
+let garageFilter = "";
+const garageOpenTypes = new Set();
 let garageJobRunning = false;
 // the turbo kit of the shown car or modded car as the server answered last ({donor, donors, picked, has_turbo, ...}), null
 // until it is loaded; turboOpen is the state of its panel: collapsed by default, reset when another car is selected; turboSeq
@@ -675,6 +788,24 @@ function storedSelection() {
 function storeSelection(s) {
   try {
     window.localStorage.setItem(SELECTION_KEY, JSON.stringify(s));
+  } catch (e) {
+    /* the page works without it */
+  }
+}
+
+// the tyre types whose column is shown in the Tyre Creator (names of types, in no order)
+function storedTyreTypes() {
+  try {
+    const list = JSON.parse(window.localStorage.getItem(TYRE_TYPES_KEY));
+    return Array.isArray(list) ? list.filter((t) => typeof t === "string") : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function storeTyreTypes() {
+  try {
+    window.localStorage.setItem(TYRE_TYPES_KEY, JSON.stringify(tyreTypes.map((t) => t.type).filter((t) => tyreShownTypes.has(t))));
   } catch (e) {
     /* the page works without it */
   }
@@ -747,6 +878,11 @@ function variantEntry() {
 // the versions of the selected modded car as the last state listed them ([{id, name}]; empty while that state is of another car)
 function versionList() {
   return serverState && serverState.tune === selection.tune && serverState.versions ? serverState.versions : [];
+}
+
+// the name of the base in the game's menu as the server reports it for the selected modded car; null when the car's base has no name
+function baseNameShown() {
+  return serverState && serverState.tune === selection.tune && typeof serverState.base_name === "string" ? serverState.base_name : null;
 }
 
 function versionEntry() {
@@ -890,7 +1026,8 @@ function renderCars() {
   select.disabled = list.length === 0;
   const versionSelect = $("version-select");
   versionSelect.replaceChildren();
-  for (const [id, name] of [["", "Base"]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))) {
+  const baseName = serverState && serverState.tune === selection.tune && serverState.base_name ? serverState.base_name : "Base";
+  for (const [id, name] of [["", baseName]].concat(versions.map((v) => [v.id, v.locked ? v.name + " (locked)" : v.name]))) {
     const o = el("option", "", name);
     o.value = id;
     versionSelect.appendChild(o);
@@ -931,7 +1068,8 @@ function renderButtons() {
   if (!serverState) whyVersion = why;
   else if (running) whyVersion = "a job is running";
   else if (!serverState.base_present) whyVersion = "extract the stock car first";
-  const whyRename = whyVersion || (selection.version ? "" : "select a version to rename it, the base has no version name");
+  const whyLock = whyVersion || (selection.version ? "" : "select a version to rename it, the base has no version name");
+  const whyRename = whyVersion || (selection.version || baseNameShown() !== null ? "" : "the base of this car has no name in the game's menu");
   $("btn-version-add").hidden = !moddedSelected;
   $("btn-version-add").disabled = whyVersion !== "";
   $("btn-version-add").title = whyVersion;
@@ -943,8 +1081,8 @@ function renderButtons() {
   if (whyRename === "" && lockedNow) $("btn-version-rename").title = "this version is locked: unlock it to rename it";
   $("btn-version-lock").hidden = !moddedSelected;
   $("btn-version-lock").textContent = lockedNow ? "Unlock version" : "Lock version";
-  $("btn-version-lock").disabled = whyRename !== "";
-  $("btn-version-lock").title = whyRename;
+  $("btn-version-lock").disabled = whyLock !== "";
+  $("btn-version-lock").title = whyLock;
   const lockedEntry = lockedNow ? versionEntry() : null;
   $("version-note").hidden = !lockedEntry;
   $("version-note").textContent = lockedEntry ? "Locked: Apply keeps this version's files from its build of " +
@@ -1185,6 +1323,7 @@ function showRow(r, data, refilter = true) {
   setField(r);
   r.tr.classList.toggle("changed", data.changed);
   r.reset.hidden = !data.changed;
+  if (r.calcnote) r.calcnote.hidden = !data.calculated;
   if (refilter) applyFilter();
 }
 
@@ -1299,9 +1438,10 @@ function newRow(data, target) {
 function buildHeaderRow(data, target) {
   const r = newRow(data, target);
   r.tr = el("div", "namerow");
-  r.tr.appendChild(el("span", "label", "Name in the game's car list: "));
+  r.tr.appendChild(el("span", "label", "Original car: "));
+  r.tr.appendChild(el("span", "stockname", carName()));
+  r.tr.appendChild(el("span", "label", "Car name: "));
   const joined = el("span", "namefield");
-  joined.appendChild(el("span", "stockname", carName() + " "));
   r.field = buildField(r);
   r.field.title = data.description;
   joined.appendChild(r.field);
@@ -1356,6 +1496,8 @@ function buildRow(data, target, withRange) {
   valueCell.appendChild(wrap);
   valueCell.appendChild(r.msg);
   if (data.applicable === false) valueCell.appendChild(el("div", "msg warn", "Not applicable: " + data.reason));
+  r.calcnote = el("div", "tunenote", "Calculated from the engine settings; type a value to override");
+  valueCell.appendChild(r.calcnote);
   if (target.version && (data.kind === "meta" || data.shared)) valueCell.appendChild(el("div", "tunenote", "Shared by all versions; change it on the base"));
 
   const descCell = el("td");
@@ -1400,6 +1542,7 @@ function buildTable(list, target) {
       if (!target.variant) headerRow = buildHeaderRow(data, target);
       continue;
     }
+    if (data.ui === "hidden") continue;
     if (!current || current.name !== data.group) {
       current = groups.find((g) => g.name === data.group);
       if (!current) {
@@ -1468,6 +1611,10 @@ function setAllGroups(open) {
 
 // a message in a collapsed group would stay invisible: open the group
 function revealGroup(r) {
+  if (r.tyre) {
+    revealTyreGroup(r);
+    return;
+  }
   if (!r.group || !groups.includes(r.group) || expanded.has(r.group.name)) return;
   expanded.add(r.group.name);
   applyFilter();
@@ -1700,11 +1847,11 @@ function openVersionDialog(kind) {
   if (!serverState || !moddedEntry()) return;
   const add = kind === "add";
   const current = versionEntry();
-  if (!add && !current) return;
+  if (!add && !current && baseNameShown() === null) return;
   const opener = versionDialog ? versionDialog.opener : document.activeElement;
   versionDialog = { kind: kind, opener: opener, busy: false };
-  $("version-dialog-title").textContent = add ? "Add a version of " + shownName() : "Rename version " + current.name;
-  $("version-dialog-name").value = add ? "" : current.name;
+  $("version-dialog-title").textContent = add ? "Add a version of " + shownName() : "Rename version " + (current ? current.name : baseNameShown());
+  $("version-dialog-name").value = add ? "" : current ? current.name : baseNameShown();
   $("version-dialog-hint").textContent = add ?
     "The new version starts as a copy of " + (current ? "version " + current.name : "the base") +
     ". The game shows the name as the version's name." : "The game shows the name as the version's name.";
@@ -1742,7 +1889,7 @@ async function submitVersionDialog() {
       closeVersionDialog(true);
       switchCar({ car: target.car, tune: target.tune, version: res.id });
     } else {
-      await api("/api/version_rename", { name: name, version: target.version }, target);
+      await api("/api/version_rename", { name: name, version: target.version || "base" }, target);
       if (versionDialog !== mine) return;
       closeVersionDialog(true);
       await refresh();
@@ -1776,6 +1923,8 @@ function switchCar(next) {
   garageOpen = false;
   garage = null;
   garageError = "";
+  garagePending = 0;
+  garageOpenTypes.clear();
   renderGarage();
   turboOpen = false;
   turbo = null;
@@ -1797,18 +1946,67 @@ function switchCar(next) {
   refresh();
 }
 
+/* ---------- game tyres ---------- */
+
+// the tyres of the game are read once, when the Tyre Creator or the Car Tuner panel needs them first, and kept; a failed read is
+// tried again the next time (the promise never rejects: the text of a failure is tyreIndexError)
+function loadTyreIndex() {
+  if (tyreIndexLoading === null) {
+    tyreIndexLoading = api("/api/tyre_index", undefined, selection).then((res) => {
+      tyreIndex = res;
+      tyreIndexMap = new Map(res.tyres.map((t) => [keyNorm(t.path), t]));
+      tyreIndexError = "";
+    }, (e) => {
+      tyreIndexError = e.message;
+      tyreIndexLoading = null;
+    }).then(() => {
+      renderTyres();
+      renderGarage();
+    });
+  }
+  return tyreIndexLoading;
+}
+
+// without the game package the index lists the extracted tyre files, which a finished job may have changed
+function forgetTyreIndex() {
+  if (tyreIndex && !tyreIndex.package) {
+    tyreIndex = null;
+    tyreIndexMap = null;
+    tyreIndexLoading = null;
+  }
+}
+
+function tyreSizeText(t) {
+  return t.width === null ? "" : t.width + "/" + t.aspect + " R" + t.rim;
+}
+
+// the text of a tyre in a list: its label, for a tyre without a size its file name
+function tyreOptionText(t) {
+  return t.width === null ? t.file : t.label;
+}
+
+// the tyres of the index in the order of the list: by width, aspect and rim, a tyre without a size last
+function sortTyres(list) {
+  const part = (v) => (v === null ? Infinity : v);
+  return list.slice().sort((a, b) => part(a.width) - part(b.width) || part(a.aspect) - part(b.aspect) || part(a.rim) - part(b.rim) ||
+    (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+}
+
+// every word of the filter is somewhere in the text, case ignored; an empty filter matches everything
+function textMatches(text, filter) {
+  const hay = text.toLowerCase();
+  return filter.toLowerCase().split(/\s+/).filter(Boolean).every((w) => hay.includes(w));
+}
+
+// the tyres of one type ("" is every type) whose label, file name or type has all words of the filter
+function matchingTyres(list, type, filter) {
+  return list.filter((t) => (type === "" || t.type === type) && textMatches(t.label + " " + t.file + " " + t.type_label, filter));
+}
+
 /* ---------- tyre creator ---------- */
 
 function tyreEntry() {
   return tyres.find((t) => t.id === tyreId && !t.error) || null;
-}
-
-function sourceKey(source) {
-  return source.front + "|" + source.rear;
-}
-
-function sourceText(source) {
-  return source.front === source.rear ? source.front : source.front + " + " + source.rear;
 }
 
 // the tyre that is selected when this one is deleted: the next one of the list, else the one before it
@@ -1819,30 +2017,40 @@ function neighbourOf(id) {
   return next ? next.id : null;
 }
 
+function tyreUsersText(t) {
+  return t.users.length ? t.users.join(", ") : "not used";
+}
+
 // locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncTyres() {
   const running = jobRunning();
   // a job that ends may have installed a car, so the game tyres are read again
-  if (tyreJobRunning && !running && !$("panel-tyres").hidden) loadTyres(true);
+  if (tyreJobRunning && !running) {
+    forgetTyreIndex();
+    if (!$("panel-tyres").hidden) loadTyres(true);
+  }
   tyreJobRunning = running;
   let whyNew = "";
   if (running) whyNew = "a job is running";
   else if (!tyreLoaded) whyNew = tyreError || "the tyre library is not loaded yet";
-  else if (tyreSources.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";
+  else if (!tyreIndex) whyNew = tyreIndexError || "the game tyres are not loaded yet";
+  else if (tyreIndex.tyres.length === 0) whyNew = "install a car first (Car Tuner tab), its game tyres are the sources";
   let whyEdit = "";
   if (running) whyEdit = "a job is running";
   else if (tyreEntry() === null) whyEdit = "select a tyre first";
   $("btn-tyre-new").disabled = whyNew !== "";
   $("btn-tyre-new").title = whyNew;
+  $("btn-tyre-source").disabled = whyEdit !== "" || !tyreIndex || tyreIndex.tyres.length === 0;
+  $("btn-tyre-source").title = whyEdit || (tyreIndex && tyreIndex.tyres.length ? "" : whyNew);
   for (const id of ["btn-tyre-rename", "btn-tyre-delete"]) {
     $(id).disabled = whyEdit !== "";
     $(id).title = whyEdit;
   }
-  $("tyre-select").disabled = tyres.length === 0;
-  $("tyre-source").disabled = running;
   $("btn-tyre-reset").disabled = running;
   const locked = running || (tyreDialog !== null && tyreDialog.busy);
-  for (const id of ["tyre-dialog-name", "tyre-dialog-source", "tyre-dialog-ok"]) $(id).disabled = locked;
+  for (const id of ["tyre-dialog-name", "tyre-dialog-short", "tyre-dialog-type", "tyre-dialog-filter", "tyre-dialog-source", "tyre-dialog-ok"]) {
+    $(id).disabled = locked;
+  }
   $("tyre-dialog-cancel").disabled = tyreDialog !== null && tyreDialog.busy;
   for (const r of tyreRows) {
     r.field.disabled = running || r.data.applicable === false;
@@ -1850,45 +2058,44 @@ function syncTyres() {
   }
 }
 
+function buildTyreListRow(t) {
+  const tr = el("tr");
+  if (t.error) {
+    const td = el("td", "", t.id + " (damaged): " + t.error);
+    td.colSpan = 5;
+    tr.appendChild(td);
+    return tr;
+  }
+  tr.classList.toggle("picked", t.id === tyreId);
+  const pick = el("button", "small", t.name);
+  pick.type = "button";
+  pick.setAttribute("aria-pressed", t.id === tyreId ? "true" : "false");
+  pick.title = "Show the values of this tyre";
+  pick.addEventListener("click", () => selectTyre(t.id));
+  const name = el("td", "name");
+  name.appendChild(pick);
+  tr.append(name, el("td", "mono", t.short), el("td", "", t.source_label), el("td", "", String(t.changed)), el("td", "", tyreUsersText(t)));
+  return tr;
+}
+
 function renderTyres() {
   const entry = tyreEntry();
-  const select = $("tyre-select");
-  select.replaceChildren();
-  for (const t of tyres) {
-    const o = el("option", "", t.error ? t.id + " (damaged)" : t.name);
-    o.value = t.id;
-    if (t.error) {
-      o.disabled = true;
-      o.title = t.error;
-    }
-    select.appendChild(o);
-  }
-  if (entry) select.value = entry.id;
-  else select.selectedIndex = -1;
-  showText("tyre-error", tyreError);
+  const body = $("tyre-list-rows");
+  body.replaceChildren();
+  for (const t of tyres) body.appendChild(buildTyreListRow(t));
+  $("tyre-list-wrap").hidden = tyres.length === 0;
+  showText("tyre-error", tyreError || tyreIndexError);
   const notes = $("tyre-notes");
   notes.replaceChildren();
-  if (tyreLoaded && tyres.length === 0) addLine(notes, "No tyres yet. Press New tyre to create one.", "empty");
-  if (tyreLoaded && tyreSources.length === 0) {
+  if (tyreLoaded && tyres.length === 0) addLine(notes, "No tyres yet. Press Create tyre to make one.", "empty");
+  if (tyreLoaded && tyreIndex && tyreIndex.tyres.length === 0) {
     addLine(notes, "No game tyres found: install a car in the Car Tuner tab first, its tyres become the sources.", "empty");
   }
   $("tyre-editor").hidden = entry === null;
   if (entry) {
-    const key = sourceKey(entry.source);
-    const box = $("tyre-source");
-    box.replaceChildren();
-    if (!tyreSources.some((s) => s.key === key)) {
-      const gone = el("option", "", sourceText(entry.source) + " (not offered by any installed car)");
-      gone.value = key;
-      gone.disabled = true;
-      box.appendChild(gone);
-    }
-    for (const s of tyreSources) {
-      const o = el("option", "", s.label);
-      o.value = s.key;
-      box.appendChild(o);
-    }
-    box.value = key;
+    $("tyre-source-text").textContent = entry.source_label;
+    $("tyre-source-text").title = entry.source;
+    $("tyre-short-text").textContent = entry.short;
   }
   syncTyres();
 }
@@ -1896,33 +2103,240 @@ function renderTyres() {
 function clearTyreRows() {
   $("tyre-rows").replaceChildren();
   tyreRows = [];
+  tyreGroups = [];
 }
 
+// the header row of a group of the tyre table, built like buildGroup builds the one of the car table
 function buildTyreGroup(name) {
-  const tr = el("tr", "group");
-  const th = el("th", "plain");
+  const g = { name: name, tr: el("tr", "group"), rows: [], desc: null };
+  const th = el("th");
   th.colSpan = 4;
   th.scope = "rowgroup";
-  th.appendChild(el("span", "gname", name));
-  tr.appendChild(th);
-  return tr;
+  g.th = th;
+  g.btn = el("button", "grouptoggle");
+  g.btn.type = "button";
+  g.btn.setAttribute("aria-expanded", "false");
+  const chev = el("span", "chev");
+  chev.setAttribute("aria-hidden", "true");
+  g.count = el("span", "gcount");
+  g.btn.append(chev, el("span", "gname", name), g.count);
+  g.btn.addEventListener("click", () => toggleTyreGroup(g));
+  th.appendChild(g.btn);
+  const known = tyreGroupList.find((x) => x.name === name);
+  if (known && known.description) {
+    // shown only while the group is open (applyTyreFilter); tyreGroups.length is the index this group gets in buildTyreRows
+    g.desc = el("div", "gdesc", known.description);
+    g.desc.id = "tdesc-" + tyreGroups.length;
+    g.desc.hidden = true;
+    g.btn.setAttribute("aria-describedby", g.desc.id);
+    th.appendChild(g.desc);
+  }
+  g.tr.appendChild(th);
+  return g;
 }
 
-// the rows of the server come front and rear mixed: each axle gets its group row and keeps the order of the server
-function buildTyreRows(list, id) {
+// the header cell of a type column: the label with a button that hides the column, and the number of tyres of the type below
+function buildTyreTypeHead(t) {
+  const th = el("th");
+  th.scope = "col";
+  const top = el("div", "typehead");
+  top.appendChild(el("span", "", t.label));
+  const hide = el("button", "small", "\u2212");
+  hide.type = "button";
+  hide.setAttribute("aria-label", "Hide " + t.label);
+  hide.title = "Hide the values of the " + t.total + " " + t.label + " tyres";
+  hide.addEventListener("click", () => toggleTyreType(t, true));
+  top.appendChild(hide);
+  th.append(top, el("div", "tcount", t.total + (t.total === 1 ? " tyre" : " tyres")));
+  return th;
+}
+
+// the header cells, columns and toggle buttons of the tyre types, in the order of the server; the columns start hidden (applyTyreTypes
+// shows the remembered ones) and stay as they are while the list of types does not change
+function buildTyreTypes(types) {
+  const same = JSON.stringify(types.map((t) => [t.type, t.label, t.total])) === JSON.stringify(tyreTypes.map((t) => [t.type, t.label, t.total]));
+  if (same) return;
+  const table = $("tyre-rows").closest("table");
+  const head = table.tHead.rows[0];
+  const cols = table.querySelector("colgroup");
+  const buttons = $("tyre-type-buttons");
+  for (const t of tyreTypes) {
+    t.th.remove();
+    t.col.remove();
+  }
+  buttons.replaceChildren();
+  tyreTypes = types.map((t) => ({ type: t.type, label: t.label, total: t.total }));
+  for (const t of tyreTypes) {
+    t.col = el("col", "c-type");
+    t.col.hidden = true;
+    t.th = buildTyreTypeHead(t);
+    t.th.hidden = true;
+    t.btn = el("button", "small");
+    t.btn.type = "button";
+    t.btn.addEventListener("click", () => toggleTyreType(t, false));
+    cols.insertBefore(t.col, cols.lastElementChild);
+    head.insertBefore(t.th, head.lastElementChild);
+    buttons.appendChild(t.btn);
+  }
+  $("tyre-types").hidden = tyreTypes.length === 0;
+}
+
+// the cell of a type column: what the tyres of the type store in the field (type_ranges of the row), or a muted dash
+function buildTyreTypeCell(data, t) {
+  const e = data.type_ranges && data.type_ranges[t.type];
+  if (!e) {
+    const none = el("td", "default mono", "\u2013");
+    none.classList.add("range-none");
+    none.setAttribute("aria-label", "no value");
+    none.title = "No " + t.label + " tyre stores this value; it counts as 0";
+    return none;
+  }
+  const where = e.count + " of " + t.total + " " + t.label + " tyres";
+  let text;
+  let tip = "";
+  if (e.values) {
+    text = data.type === "bool" ? e.values.map((v) => fmtVal("bool", v)).join(" / ") : e.values.join(", ");
+    if (e.count < t.total) tip = "Stored in " + where + (data.type === "bool" ? "; the others count as off" : "");
+  } else {
+    const low = fmtVal(data.type, Number(e.low.toPrecision(5)));
+    const high = fmtVal(data.type, Number(e.high.toPrecision(5)));
+    text = (e.low === e.high ? low : low + " \u2013 " + high) + (data.unit ? " " + data.unit : "");
+    const exact = e.low === e.high ? fmtVal(data.type, e.low) : fmtVal(data.type, e.low) + " \u2013 " + fmtVal(data.type, e.high);
+    tip = exact + ". " + (e.count < t.total ? "Stored in " + where + "; the others count as 0" :
+      "Lowest and highest value of all " + t.total + " " + t.label + " tyres");
+  }
+  const cell = el("td", "default mono", text);
+  if (tip) {
+    cell.title = tip;
+    cell.setAttribute("aria-description", tip);
+  }
+  return cell;
+}
+
+// the cells of all type columns of a row, between the default and the description; they are built once and hidden until their type is shown
+function addTyreTypeCells(r, data) {
+  r.typeCells = {};
+  for (const t of tyreTypes) {
+    const cell = buildTyreTypeCell(data, t);
+    cell.hidden = true;
+    r.typeCells[t.type] = cell;
+    r.tr.insertBefore(cell, r.tr.lastElementChild);
+  }
+}
+
+// shows or hides the columns of the types by their state, without building anything again: header cells, columns, cells, the toggle
+// buttons, the span of the group rows and the layout of the wrapper (a shown column widens the table, then the wrapper scrolls)
+function applyTyreTypes() {
+  let shown = 0;
+  for (const t of tyreTypes) {
+    const on = tyreShownTypes.has(t.type);
+    if (on) shown += 1;
+    t.col.hidden = !on;
+    t.th.hidden = !on;
+    for (const r of tyreRows) r.typeCells[t.type].hidden = !on;
+    t.btn.textContent = (on ? "\u2212 " : "+ ") + t.label;
+    t.btn.setAttribute("aria-pressed", on ? "true" : "false");
+    t.btn.title = (on ? "Hide" : "Show") + " the values of the " + t.total + " " + t.label + " tyres";
+  }
+  for (const g of tyreGroups) g.th.colSpan = 4 + shown;
+  const wrap = $("tyre-table-wrap");
+  wrap.classList.toggle("typed", shown > 0);
+  wrap.style.setProperty("--tyre-types", String(shown));
+}
+
+// refocus: the button that was pressed is gone with its column, so the focus goes to the toggle button of the type
+function toggleTyreType(t, refocus) {
+  if (!tyreShownTypes.delete(t.type)) tyreShownTypes.add(t.type);
+  storeTyreTypes();
+  applyTyreTypes();
+  if (refocus) t.btn.focus({ preventScroll: true });
+}
+
+function toggleTyreGroup(g) {
+  if (!tyreExpanded.delete(g.name)) tyreExpanded.add(g.name);
+  applyTyreFilter();
+}
+
+function setAllTyreGroups(open) {
+  if (open) {
+    for (const g of tyreGroups) tyreExpanded.add(g.name);
+  } else {
+    tyreExpanded.clear();
+  }
+  applyTyreFilter();
+}
+
+// a message in a collapsed group would stay invisible: open the group
+function revealTyreGroup(r) {
+  if (!r.group || !tyreGroups.includes(r.group) || tyreExpanded.has(r.group.name)) return;
+  tyreExpanded.add(r.group.name);
+  applyTyreFilter();
+}
+
+// the search of the tyre table: a filter opens the groups with matches for as long as it is set, without touching the remembered state;
+// a row whose group the server did not list stands below the groups and is only filtered
+function applyTyreFilter() {
+  const q = $("tyre-search").value.trim().toLowerCase();
+  let visible = 0;
+  for (const g of tyreGroups) {
+    let any = false;
+    let changed = 0;
+    for (const r of g.rows) {
+      r.match = !q || r.hay.includes(q);
+      if (r.match) any = true;
+      if (r.data.changed) changed += 1;
+    }
+    const open = q !== "" ? any : tyreExpanded.has(g.name);
+    for (const r of g.rows) r.tr.hidden = !(open && r.match);
+    g.tr.hidden = !any;
+    g.btn.setAttribute("aria-expanded", open ? "true" : "false");
+    if (g.desc) g.desc.hidden = !open;
+    const text = "(" + g.rows.length + (g.rows.length === 1 ? " setting, " : " settings, ") + changed + " changed)";
+    if (g.count.textContent !== text) g.count.textContent = text;
+    if (any) visible += 1;
+  }
+  for (const r of tyreRows) {
+    if (r.group) continue;
+    r.match = !q || r.hay.includes(q);
+    r.tr.hidden = !r.match;
+    if (r.match) visible += 1;
+  }
+  $("tyre-empty").hidden = visible > 0 || tyreRows.length === 0;
+}
+
+// a tyre has one set of values: it is used on all four wheels or on one axle, which you choose in the Car Tuner
+function buildTyreRows(list, id, groupList) {
   const body = $("tyre-rows");
   clearTyreRows();
-  for (const axle of ["front", "rear"]) {
-    body.appendChild(buildTyreGroup(axle === "front" ? "Front tyre" : "Rear tyre"));
-    for (const item of list.filter((data) => data.axle === axle)) {
-      const r = buildRow(item, null);
-      r.tyre = id;
-      r.save = sendTyreSet;
-      r.clear = sendTyreUnset;
-      tyreRows.push(r);
-      body.appendChild(r.tr);
+  tyreGroupList = groupList || [];
+  for (const item of list) {
+    const r = buildRow(item, {}, false);
+    addTyreTypeCells(r, item);
+    r.tyre = id;
+    r.save = sendTyreSet;
+    r.clear = sendTyreUnset;
+    r.tr.id = "tyre-row-" + tyreRows.length;
+    let g = tyreGroups.find((x) => x.name === item.group);
+    if (!g && tyreGroupList.some((x) => x.name === item.group)) {
+      g = buildTyreGroup(item.group);
+      tyreGroups.push(g);
     }
+    if (g) {
+      r.group = g;
+      g.rows.push(r);
+    }
+    tyreRows.push(r);
   }
+  // the groups follow the list of the server; each header is followed by the rows of its group, the rows without a listed group come last
+  const listed = tyreGroupList.map((x) => x.name);
+  tyreGroups.sort((a, b) => listed.indexOf(a.name) - listed.indexOf(b.name));
+  for (const g of tyreGroups) {
+    g.btn.setAttribute("aria-controls", g.rows.map((r) => r.tr.id).join(" "));
+    body.append(g.tr, ...g.rows.map((r) => r.tr));
+  }
+  body.append(...tyreRows.filter((r) => !r.group).map((r) => r.tr));
+  applyTyreFilter();
+  applyTyreTypes();
 }
 
 async function loadTyre() {
@@ -1936,7 +2350,8 @@ async function loadTyre() {
     const res = await api("/api/tyre?id=" + encodeURIComponent(id), undefined, selection);
     if (id !== tyreId) return;
     tyreError = "";
-    buildTyreRows(res.rows, id);
+    buildTyreTypes(res.types || []);
+    buildTyreRows(res.rows, id, res.groups);
   } catch (e) {
     if (id !== tyreId) return;
     clearTyreRows();
@@ -1945,14 +2360,14 @@ async function loadTyre() {
   renderTyres();
 }
 
-// reload: also read the settings of the selected tyre again, else they are read only when another tyre is selected
+// reload: also read the settings of the selected tyre again, else they are read only when another tyre is selected; a save reads only the list (loadTyres(false)) so that the Changed values column is current and the editor keeps its fields and its focus
 async function loadTyres(reload) {
   const seq = ++tyreSeq;
+  loadTyreIndex();
   try {
     const res = await api("/api/tyres", undefined, selection);
     if (seq !== tyreSeq) return;
     tyres = res.tyres;
-    tyreSources = res.sources;
     tyreLoaded = true;
     tyreError = "";
   } catch (e) {
@@ -1970,11 +2385,11 @@ async function loadTyres(reload) {
   else renderTyres();
 }
 
-function selectTyre() {
-  const id = $("tyre-select").value;
+function selectTyre(id) {
   if (id === tyreId) return;
   tyreId = id;
   tyreError = "";
+  renderTyres();
   loadTyre();
 }
 
@@ -1982,6 +2397,8 @@ async function sendTyreSet(r, text) {
   try {
     const res = await api("/api/tyre_set", { id: r.tyre, setting: r.data.id, value: text }, selection);
     showRow(r, res.row, false);
+    applyTyreFilter();
+    loadTyres(false);
     setMsg(r, res.warnings.join(" "), "warn");
   } catch (e) {
     setField(r);
@@ -1993,6 +2410,8 @@ async function sendTyreUnset(r) {
   try {
     const res = await api("/api/tyre_unset", { id: r.tyre, setting: r.data.id }, selection);
     showRow(r, res.row, false);
+    applyTyreFilter();
+    loadTyres(false);
     setMsg(r, "", "");
   } catch (e) {
     setMsg(r, e.message, "err");
@@ -2011,13 +2430,6 @@ function writeTyre(route, body) {
   });
 }
 
-function changeTyreSource() {
-  const entry = tyreEntry();
-  if (!entry) return;
-  const key = $("tyre-source").value;
-  writeTyre("/api/tyre_source", { id: entry.id, source: key });
-}
-
 function resetTyre() {
   const entry = tyreEntry();
   if (!entry || !window.confirm("Reset all values of the tyre " + entry.name + " to those of its source tyre?")) return;
@@ -2028,25 +2440,58 @@ function showTyreDialogError(text) {
   showText("tyre-dialog-error", text);
 }
 
+// the type select of the source picker: "All types" first, then the types of the index with their number of tyres
+function fillTyreTypes() {
+  const box = $("tyre-dialog-type");
+  box.replaceChildren();
+  const all = el("option", "", "All types");
+  all.value = "";
+  box.appendChild(all);
+  for (const t of tyreIndex ? tyreIndex.types : []) {
+    const o = el("option", "", t.label + " (" + t.count + ")");
+    o.value = t.type;
+    box.appendChild(o);
+  }
+}
+
+// the select of the picker holds the tyres of the chosen type that match the filter text; the chosen tyre stays when it still matches
+function fillTyrePicker() {
+  const box = $("tyre-dialog-source");
+  const before = box.value;
+  box.replaceChildren();
+  for (const t of matchingTyres(tyreIndex ? tyreIndex.tyres : [], $("tyre-dialog-type").value, $("tyre-dialog-filter").value)) {
+    const o = el("option", "", tyreOptionText(t));
+    o.value = t.path;
+    o.title = t.path;
+    box.appendChild(o);
+  }
+  if (before && Array.from(box.options).some((o) => o.value === before)) box.value = before;
+  $("tyre-dialog-none").hidden = box.options.length > 0;
+}
+
 function openTyreDialog(kind) {
   const entry = tyreEntry();
   const create = kind === "new";
   const remove = kind === "delete";
-  if (create ? tyreSources.length === 0 : entry === null) return;
+  const rename = kind === "rename";
+  const source = kind === "source";
+  if (create ? !tyreIndex || tyreIndex.tyres.length === 0 : entry === null) return;
   const opener = tyreDialog ? tyreDialog.opener : document.activeElement;
   tyreDialog = { kind: kind, id: entry ? entry.id : null, opener: opener, busy: false };
-  $("tyre-dialog-title").textContent = create ? "New tyre" : remove ? "Delete tyre" : "Rename tyre";
+  $("tyre-dialog-title").textContent = create ? "Create tyre" : remove ? "Delete tyre" : rename ? "Rename tyre" : "Change source of " + entry.name;
   $("tyre-dialog-text").textContent = remove ? "Delete tyre " + entry.name + "? This cannot be undone." : "";
   $("tyre-dialog-text").hidden = !remove;
-  $("tyre-dialog-name-field").hidden = remove;
-  $("tyre-dialog-name").value = create || remove ? "" : entry.name;
-  $("tyre-dialog-source-field").hidden = !create;
-  const box = $("tyre-dialog-source");
-  box.replaceChildren();
-  for (const s of tyreSources) {
-    const o = el("option", "", s.label + " \u2014 " + s.cars.join(", "));
-    o.value = s.key;
-    box.appendChild(o);
+  $("tyre-dialog-name-field").hidden = remove || source;
+  $("tyre-dialog-name").value = create || remove || source ? "" : entry.name;
+  $("tyre-dialog-short-field").hidden = !create && !rename;
+  $("tyre-dialog-short").value = rename ? entry.short : "";
+  $("tyre-dialog-source-field").hidden = !create && !source;
+  $("tyre-dialog-filter").value = "";
+  if (create || source) {
+    fillTyreTypes();
+    $("tyre-dialog-type").value = "";
+    fillTyrePicker();
+    if (source) $("tyre-dialog-source").value = entry.source;
   }
   $("tyre-dialog-ok").textContent = remove ? "Delete" : "OK";
   showTyreDialogError("");
@@ -2054,6 +2499,8 @@ function openTyreDialog(kind) {
   syncTyres();
   if (remove) {
     $("tyre-dialog-cancel").focus();
+  } else if (source) {
+    $("tyre-dialog-filter").focus();
   } else {
     $("tyre-dialog-name").focus();
     $("tyre-dialog-name").select();
@@ -2067,7 +2514,7 @@ function closeTyreDialog(restoreFocus) {
   $("tyre-dialog").hidden = true;
   syncTyres();
   if (restoreFocus) {
-    const back = [opener, $("tyre-select"), $("btn-tyre-new")].find((n) => n && document.contains(n) && !n.disabled);
+    const back = [opener, $("btn-tyre-new")].find((n) => n && document.contains(n) && !n.disabled);
     (back || $("tab-tyres")).focus();
   }
 }
@@ -2076,16 +2523,19 @@ async function submitTyreDialog() {
   if (!tyreDialog || tyreDialog.busy || jobRunning()) return;
   const mine = tyreDialog;
   const name = $("tyre-dialog-name").value.trim();
+  const short = $("tyre-dialog-short").value.trim().toUpperCase() || undefined;
   const source = $("tyre-dialog-source").value;
   mine.busy = true;
   showTyreDialogError("");
   syncTyres();
   try {
     if (mine.kind === "new") {
-      const res = await api("/api/tyre_new", { name: name, source: source }, selection);
-      tyreId = res.tyre.id;
+      const res = await api("/api/tyre_new", { name: name, short: short, source: source }, selection);
+      tyreId = res.id;
     } else if (mine.kind === "rename") {
-      await api("/api/tyre_rename", { id: mine.id, name: name }, selection);
+      await api("/api/tyre_rename", { id: mine.id, name: name, short: short }, selection);
+    } else if (mine.kind === "source") {
+      await api("/api/tyre_source", { id: mine.id, source: source }, selection);
     } else {
       await api("/api/tyre_delete", { id: mine.id }, selection);
       tyreId = neighbourOf(mine.id);
@@ -2094,7 +2544,7 @@ async function submitTyreDialog() {
     mine.busy = false;
     if (tyreDialog === mine) {
       showTyreDialogError(e.message);
-      (mine.kind === "delete" ? $("tyre-dialog-cancel") : $("tyre-dialog-name")).focus();
+      (mine.kind === "delete" ? $("tyre-dialog-cancel") : $("tyre-dialog-ok")).focus();
     }
     syncTyres();
     return;
@@ -2108,19 +2558,196 @@ function tyreDialogKey(ev) {
   if (ev.key === "Escape") {
     ev.preventDefault();
     if (!tyreDialog.busy) closeTyreDialog(true);
-  } else if (ev.key === "Enter" && ev.target.tagName === "INPUT") {
+  } else if (ev.key === "Enter" && ev.target.tagName === "INPUT" && ev.target.id !== "tyre-dialog-filter") {
     ev.preventDefault();
     submitTyreDialog();
   }
 }
 
-/* ---------- garage tyres ---------- */
+/* ---------- tyres offered in the game ---------- */
+
+// a tyre key is "game:<game path>" or "own:<tyre id>"; paths are compared with any slashes and case
+function keyNorm(key) {
+  return key.replace(/\//g, "\\").toLowerCase();
+}
+
+function sameKey(a, b) {
+  return keyNorm(a) === keyNorm(b);
+}
+
+function keyIndex(keys, key) {
+  return keys.findIndex((k) => sameKey(k, key));
+}
+
+function uniqueKeys(keys) {
+  const out = [];
+  for (const k of keys) if (keyIndex(out, k) < 0) out.push(k);
+  return out;
+}
+
+function sameSet(a, b) {
+  return sameKey(a.front, b.front) && sameKey(a.rear, b.rear);
+}
+
+// the tyre choice of the answer of the server in the form the server saves it
+function garageChoice(g) {
+  if (g.split) return { split: true, fronts: g.fronts.slice(), rears: g.rears.slice(), start_front: g.start_front, start_rear: g.start_rear };
+  return { sets: g.sets.map((s) => ({ front: s.front, rear: s.rear })), split: false, start_front: g.start_front, start_rear: g.start_rear };
+}
+
+// the front and the rear tyres of a choice in order, each once (the tyres of its sets when it is not split)
+function choiceLists(choice) {
+  if (choice.split) return [choice.fronts, choice.rears];
+  return [uniqueKeys(choice.sets.map((s) => s.front)), uniqueKeys(choice.sets.map((s) => s.rear))];
+}
+
+// the answer of the server as it will be once the choice is saved
+function garageWith(g, choice) {
+  const lists = choiceLists(choice);
+  return Object.assign({}, g, { default: false, split: choice.split, sets: choice.split ? [] : choice.sets, fronts: lists[0], rears: lists[1],
+    start_front: choice.start_front, start_rear: choice.start_rear });
+}
+
+// the start tyres must be among the tyres of their axle: else the first one of the axle
+function fixStart(choice) {
+  const lists = choiceLists(choice);
+  const out = Object.assign({}, choice);
+  if (lists[0].length === 0 || lists[1].length === 0) return out;
+  if (!out.start_front || keyIndex(lists[0], out.start_front) < 0) out.start_front = lists[0][0];
+  if (!out.start_rear || keyIndex(lists[1], out.start_rear) < 0) out.start_rear = lists[1][0];
+  return out;
+}
+
+// sets -> split: the front and the rear tyres of the sets in order of the sets, without duplicates; the start tyres stay
+function choiceToSplit(choice) {
+  if (choice.split) return choice;
+  const lists = choiceLists(choice);
+  return { split: true, fronts: lists[0], rears: lists[1], start_front: choice.start_front, start_rear: choice.start_rear };
+}
+
+// split -> sets: the sets are front[i] / rear[i], the shorter list repeats its first tyre; the start tyres stay
+function choiceToSets(choice) {
+  if (!choice.split) return choice;
+  const sets = [];
+  const n = choice.fronts.length && choice.rears.length ? Math.max(choice.fronts.length, choice.rears.length) : 0;
+  for (let i = 0; i < n; i++) {
+    const set = { front: i < choice.fronts.length ? choice.fronts[i] : choice.fronts[0], rear: i < choice.rears.length ? choice.rears[i] : choice.rears[0] };
+    if (!sets.some((s) => sameSet(s, set))) sets.push(set);
+  }
+  return { sets: sets, split: false, start_front: choice.start_front, start_rear: choice.start_rear };
+}
+
+// tick or untick a set; when the start set goes, the first set that is left is the start
+function toggleSet(choice, set, on) {
+  const sets = choice.sets.filter((s) => !sameSet(s, set));
+  if (on) sets.push({ front: set.front, rear: set.rear });
+  const out = Object.assign({}, choice, { sets: sets });
+  const start = { front: choice.start_front, rear: choice.start_rear };
+  if (sets.length && (!choice.start_front || !sets.some((s) => sameSet(s, start)))) {
+    out.start_front = sets[0].front;
+    out.start_rear = sets[0].rear;
+  }
+  return out;
+}
+
+// tick or untick a tyre of one axle ("front" or "rear")
+function toggleTyre(choice, axle, key, on) {
+  const field = axle === "front" ? "fronts" : "rears";
+  const list = choice[field].filter((k) => !sameKey(k, key));
+  if (on) list.push(key);
+  return fixStart(Object.assign({}, choice, { [field]: list }));
+}
+
+function startOfSet(choice, i) {
+  return Object.assign({}, choice, { start_front: choice.sets[i].front, start_rear: choice.sets[i].rear });
+}
+
+function startOfAxle(choice, axle, key) {
+  return Object.assign({}, choice, axle === "front" ? { start_front: key } : { start_rear: key });
+}
+
+function indexEntry(key) {
+  return tyreIndexMap && key.startsWith("game:") ? tyreIndexMap.get(keyNorm(key.slice(5))) || null : null;
+}
+
+// the name of a tyre key in a list: the label the server sent, the name of an own tyre, the label of the index, else the key
+function tyreKeyLabel(key) {
+  if (garage && garage.labels && garage.labels[key]) return garage.labels[key];
+  const own = garage ? garage.own.find((o) => o.key === key) : null;
+  if (own) return own.label;
+  const t = indexEntry(key);
+  return t ? t.label : key;
+}
+
+function setLabel(set) {
+  return sameKey(set.front, set.rear) ? "4x " + tyreKeyLabel(set.front) : tyreKeyLabel(set.front) + " / " + tyreKeyLabel(set.rear);
+}
+
+// the sizes (text like 235/35 R19) of the original tyres of the car
+function originalSizes() {
+  const sizes = new Set();
+  if (!garage) return sizes;
+  for (const s of garage.stock_sets) {
+    for (const key of [s.front, s.rear]) {
+      const t = indexEntry(key);
+      if (t && t.width !== null) sizes.add(tyreSizeText(t));
+    }
+  }
+  return sizes;
+}
+
+function originalTyres(axle) {
+  return uniqueKeys(garage ? garage.stock_sets.map((s) => (axle === "front" ? s.front : s.rear)) : []);
+}
+
+// the entry of a list: a set on the sets list, a tyre on a front or rear list; other is true for a tyre of another size than the originals
+function garageItem(side, key, label, other, extra) {
+  const item = side === "set" ? { set: { front: key, rear: key }, label: "4x " + label } : { key: key, label: label };
+  item.other = other;
+  item.hay = item.label + " " + (extra || "");
+  return item;
+}
+
+function itemTicked(side, item) {
+  if (side === "set") return garage.sets.some((s) => sameSet(s, item.set));
+  return keyIndex(side === "front" ? garage.fronts : garage.rears, item.key) >= 0;
+}
+
+function itemId(side, item) {
+  return side === "set" ? keyNorm(item.set.front) + "|" + keyNorm(item.set.rear) : keyNorm(item.key);
+}
+
+// the groups of one list in order: the ticked entries that are in no group, the originals, your tyres, the tyres of the size of the
+// originals, then one closed group for every type of the game tyres
+function garageGroups(side) {
+  const groups = [];
+  const index = tyreIndex ? tyreIndex.tyres : [];
+  const sizes = originalSizes();
+  const fits = (t) => t.width !== null && sizes.has(tyreSizeText(t));
+  const stock = side === "set" ? garage.stock_sets.map((s) => ({ set: { front: s.front, rear: s.rear }, label: s.label, other: false, hay: s.label })) :
+    originalTyres(side).map((k) => ({ key: k, label: tyreKeyLabel(k), other: false, hay: tyreKeyLabel(k) }));
+  const taken = new Set(stock.map((i) => itemId(side, i)));
+  groups.push({ id: "stock", title: side === "set" ? "Original sets of this car" : "Original tyres of this car", items: stock });
+  groups.push({ id: "own", title: "Your tyres", items: garage.own.map((o) => garageItem(side, o.key, o.label, false, o.source_label)) });
+  const near = sortTyres(index.filter(fits)).map((t) => garageItem(side, "game:" + t.path, t.label, false, t.file));
+  groups.push({ id: "fits", title: "Fits this car", items: near.filter((i) => side === "set" || !taken.has(itemId(side, i))) });
+  for (const type of tyreIndex ? tyreIndex.types : []) {
+    const items = sortTyres(index.filter((t) => t.type === type.type)).map((t) => garageItem(side, "game:" + t.path, t.label, sizes.size > 0 && !fits(t), t.file));
+    groups.push({ id: "type:" + type.type, title: type.label, items: items, collapsible: true });
+  }
+  const listed = new Set();
+  for (const g of groups) for (const i of g.items) listed.add(itemId(side, i));
+  const ticked = side === "set" ? garage.sets.map((s) => ({ set: s, label: setLabel(s), other: false, hay: setLabel(s) })) :
+    (side === "front" ? garage.fronts : garage.rears).map((k) => ({ key: k, label: tyreKeyLabel(k), other: false, hay: tyreKeyLabel(k) }));
+  const orphans = ticked.filter((i) => !listed.has(itemId(side, i)));
+  if (orphans.length) groups.unshift({ id: "chosen", title: side === "set" ? "Chosen front/rear pairs" : "Chosen tyres", items: orphans });
+  return groups.filter((g) => g.items.length);
+}
 
 function garageSummary() {
   if (!garage) return "";
-  const start = garage.choices.find((c) => c.start);
-  return "(" + garage.choices.filter((c) => c.ticked).length + " of " + garage.choices.length + " ticked" +
-    (start ? ", starts on " + start.label : "") + ")";
+  if (garage.default) return "(default)";
+  return "(" + garage.fronts.length + " front, " + garage.rears.length + " rear)";
 }
 
 function renderGarageToggle() {
@@ -2130,52 +2757,122 @@ function renderGarageToggle() {
 }
 
 function renderGarageLines() {
-  const missing = garage ? garage.missing : [];
-  $("garage-missing").textContent = missing.length ? "No longer available, Apply is refused until you change the tyre list or reset it: " + missing.join(", ") : "";
-  $("garage-missing").hidden = missing.length === 0;
+  let note = "";
+  if (garageOpen && !tyreIndex) note = tyreIndexError ? "The game tyres could not be read: " + tyreIndexError : "Reading the game tyres ...";
+  else if (garageOpen && tyreIndex.tyres.length === 0) note = "No game tyres found: install a car first, its tyres are listed here.";
+  $("garage-note").textContent = note;
+  $("garage-note").hidden = note === "";
   showText("garage-error", garageError);
 }
 
-// the checkboxes are off while a job runs and while the page has no base car; the reset button is off for the same reasons and while the car offers its stock tyres already
+// the checkboxes and the selects are off while a job runs and while the page has no base car, the last ticked tyre of a list cannot be
+// unticked; the reset button is off for the same reasons and while the car offers its original tyres already
 function lockGarage() {
   let why = panelLockReason();
   const locked = why !== "";
-  for (const g of garageRows) g.input.disabled = locked;
-  if (!locked && !(garage && garage.custom)) why = "the car offers its stock tyres already";
+  for (const g of garageRows) g.input.disabled = locked || g.last;
+  $("split-tyres").disabled = locked || !garage;
+  $("garage-search").disabled = !garage;
+  for (const id of ["garage-start", "garage-start-front", "garage-start-rear"]) $(id).disabled = locked || !garage;
+  if (!locked && !(garage && !garage.default)) why = "the car offers its original tyres already";
   $("btn-garage-reset").disabled = why !== "";
   $("btn-garage-reset").title = why;
 }
 
-// the list is drawn from the answer of the server; the focus stays on the checkbox the user toggled
+function buildGarageGroup(side, group) {
+  const items = group.items.filter((i) => textMatches(i.hay, garageFilter));
+  if (!items.length) return null;
+  const gid = side + ":" + group.id;
+  const node = group.collapsible ? el("details", "garage-group") : el("div", "garage-group");
+  if (group.collapsible) {
+    node.open = garageFilter !== "" || garageOpenTypes.has(gid);
+    node.appendChild(el("summary", "", group.title + " (" + group.items.length + ")"));
+    node.addEventListener("toggle", () => {
+      if (garageFilter !== "") return;
+      if (node.open) garageOpenTypes.add(gid);
+      else garageOpenTypes.delete(gid);
+    });
+  } else {
+    node.appendChild(el("div", "garage-subhead", group.title));
+  }
+  for (const item of items) {
+    const row = el("div", "garage-row");
+    const label = el("label");
+    const input = el("input");
+    input.type = "checkbox";
+    input.checked = itemTicked(side, item);
+    const count = side === "set" ? garage.sets.length : (side === "front" ? garage.fronts : garage.rears).length;
+    const last = input.checked && count === 1;
+    if (last) input.title = "At least one tyre stays ticked";
+    label.append(input, el("span", "", item.label));
+    row.appendChild(label);
+    if (item.other) row.appendChild(el("span", "unit", "other size"));
+    node.appendChild(row);
+    garageRows.push({ side: side, item: item, id: gid + "/" + itemId(side, item), input: input, last: last });
+  }
+  return node;
+}
+
+function buildGarageList(side) {
+  const col = el("div", "garage-list");
+  col.appendChild(el("h3", "", side === "set" ? "Tyre sets" : side === "front" ? "Front tyres" : "Rear tyres"));
+  const box = el("div", "garage-box");
+  for (const group of garageGroups(side)) {
+    const node = buildGarageGroup(side, group);
+    if (node) box.appendChild(node);
+  }
+  if (!box.firstChild) box.appendChild(el("p", "garage-help", "No tyre matches."));
+  col.appendChild(box);
+  return col;
+}
+
+// "Starts on": the select of the sets, or one select for the front and one for the rear tyre
+function fillStart(select, entries, value) {
+  select.replaceChildren();
+  for (const e of entries) {
+    const o = el("option", "", e.label);
+    o.value = e.value;
+    select.appendChild(o);
+  }
+  select.value = value;
+  if (select.value !== value) select.selectedIndex = -1;
+}
+
+function renderGarageStart() {
+  const split = !!garage && garage.split;
+  $("garage-start").parentElement.hidden = split;
+  $("garage-start-front").parentElement.hidden = !split;
+  $("garage-start-rear").parentElement.hidden = !split;
+  if (!garage) return;
+  if (split) {
+    fillStart($("garage-start-front"), garage.fronts.map((k) => ({ label: tyreKeyLabel(k), value: k })), garage.start_front);
+    fillStart($("garage-start-rear"), garage.rears.map((k) => ({ label: tyreKeyLabel(k), value: k })), garage.start_rear);
+  } else {
+    const start = garage.sets.findIndex((s) => garage.start_front && sameKey(s.front, garage.start_front) && sameKey(s.rear, garage.start_rear));
+    fillStart($("garage-start"), garage.sets.map((s, i) => ({ label: setLabel(s), value: String(i) })), String(start));
+  }
+}
+
 function renderGarage() {
   const focused = garageRows.find((g) => g.input === document.activeElement);
   const box = $("garage-rows");
   box.replaceChildren();
   garageRows = [];
-  for (const c of garage ? garage.choices : []) {
-    const row = el("div", "garage-row");
-    const label = el("label");
-    const input = el("input");
-    input.type = "checkbox";
-    input.checked = c.ticked;
-    label.append(input, el("span", "", c.label));
-    row.appendChild(label);
-    row.appendChild(el("span", "unit", c.kind === "own" ? "own tyre" : "stock tyre"));
-    if (c.start) row.appendChild(el("span", "unit", "starts on this"));
-    box.appendChild(row);
-    garageRows.push({ key: c.key, input: input });
+  $("split-tyres").checked = !!garage && garage.split;
+  if (garage && garageOpen) {
+    for (const side of garage.split ? ["front", "rear"] : ["set"]) box.appendChild(buildGarageList(side));
   }
+  renderGarageStart();
   renderGarageToggle();
   renderGarageLines();
   lockGarage();
-  const back = focused && garageRows.find((g) => g.key === focused.key);
+  const back = focused && garageRows.find((g) => g.id === focused.id);
   if (back && !back.input.disabled) back.input.focus();
 }
 
-// locks the controls and, when a job has just ended, reads the data again (the job may have changed it)
 function syncGarage() {
   const running = jobRunning();
-  // a job that ends may have changed the library or the car, so the garage is read again
+  // a job that ends may have changed the library or the car, so the tyre choice is read again
   if (garageJobRunning && !running && !$("panel-car").hidden) loadGarage();
   garageJobRunning = running;
   lockGarage();
@@ -2185,6 +2882,7 @@ async function loadGarage() {
   if (!tableLoaded) return;
   const target = selection;
   const seq = ++garageSeq;
+  if (garageOpen) loadTyreIndex();
   try {
     const res = await api("/api/garage", undefined, target);
     if (seq !== garageSeq || target !== selection) return;
@@ -2198,16 +2896,7 @@ async function loadGarage() {
   renderGarage();
 }
 
-// the answer of a write carries the garage of the server, which wins over what the page showed
-function showGarage(target, answer) {
-  if (target !== selection) return;
-  garageSeq += 1;
-  garage = answer;
-  garageError = "";
-  renderGarage();
-}
-
-// a failed write: the garage is read again and the message of the write stays in the panel
+// a failed write: the choice is read again and the message of the write stays in the panel
 async function garageFailed(target, e) {
   await loadGarage();
   if (target !== selection) return;
@@ -2215,38 +2904,59 @@ async function garageFailed(target, e) {
   renderGarageLines();
 }
 
-async function sendGarageSet(keys, target) {
+// the page shows a changed choice at once and saves it in the order of the edits; when the last save is done the choice is read again
+async function sendGarageSet(choice, target) {
   try {
-    const res = await api("/api/garage_set", { keys: keys }, target);
-    showGarage(target, res.garage);
+    await api("/api/garage_set", { choice: choice }, target);
   } catch (e) {
+    garagePending = Math.max(0, garagePending - 1);
     await garageFailed(target, e);
+    return;
   }
+  garagePending = Math.max(0, garagePending - 1);
+  if (garagePending === 0) await loadGarage();
 }
 
 async function sendGarageReset(target) {
   try {
-    const res = await api("/api/garage_reset", {}, target);
-    showGarage(target, res.garage);
+    await api("/api/garage_reset", {}, target);
+    await loadGarage();
   } catch (e) {
     await garageFailed(target, e);
   }
 }
 
-function garageChanged(ev) {
-  const row = garageRows.find((g) => g.input === ev.target);
-  if (!row) return;
-  const keys = garageRows.filter((g) => g.input.checked).map((g) => g.key);
-  if (keys.length === 0) {
-    row.input.checked = true;
-    garageError = "Tick at least one tyre.";
-    renderGarageLines();
-    return;
-  }
-  garageError = "";
-  renderGarageLines();
+function writeGarage(choice) {
   const target = selection;
-  queue = queue.then(() => sendGarageSet(keys, target));
+  garageError = "";
+  garage = garageWith(garage, choice);
+  garageSeq += 1;
+  garagePending += 1;
+  renderGarage();
+  queue = queue.then(() => sendGarageSet(choice, target));
+}
+
+function garageChanged(ev) {
+  if (!garage) return;
+  const id = ev.target.id;
+  const choice = garageChoice(garage);
+  if (id === "split-tyres") {
+    writeGarage(ev.target.checked ? choiceToSplit(choice) : choiceToSets(choice));
+  } else if (id === "garage-start") {
+    if (!choice.split && garage.sets[Number(ev.target.value)]) writeGarage(startOfSet(choice, Number(ev.target.value)));
+  } else if (id === "garage-start-front" || id === "garage-start-rear") {
+    if (choice.split) writeGarage(startOfAxle(choice, id === "garage-start-front" ? "front" : "rear", ev.target.value));
+  } else {
+    const row = garageRows.find((g) => g.input === ev.target);
+    if (!row) return;
+    const on = row.input.checked;
+    writeGarage(row.side === "set" ? toggleSet(choice, row.item.set, on) : toggleTyre(choice, row.side, row.item.key, on));
+  }
+}
+
+function garageSearched() {
+  garageFilter = $("garage-search").value.trim();
+  renderGarage();
 }
 
 function resetGarage() {
@@ -2258,7 +2968,8 @@ function resetGarage() {
 
 function toggleGarage() {
   garageOpen = !garageOpen;
-  renderGarageToggle();
+  if (garageOpen) loadTyreIndex();
+  renderGarage();
 }
 
 /* ---------- turbo kit ---------- */
@@ -3143,12 +3854,16 @@ $("btn-collapse-all").addEventListener("click", () => setAllGroups(false));
 $("dialog-ok").addEventListener("click", submitDialog);
 $("dialog-cancel").addEventListener("click", () => closeDialog(true));
 $("dialog").addEventListener("keydown", dialogKey);
-$("tyre-select").addEventListener("change", selectTyre);
 $("btn-tyre-new").addEventListener("click", () => openTyreDialog("new"));
 $("btn-tyre-rename").addEventListener("click", () => openTyreDialog("rename"));
+$("btn-tyre-source").addEventListener("click", () => openTyreDialog("source"));
 $("btn-tyre-delete").addEventListener("click", () => openTyreDialog("delete"));
-$("tyre-source").addEventListener("change", changeTyreSource);
 $("btn-tyre-reset").addEventListener("click", resetTyre);
+$("btn-tyre-expand-all").addEventListener("click", () => setAllTyreGroups(true));
+$("btn-tyre-collapse-all").addEventListener("click", () => setAllTyreGroups(false));
+$("tyre-search").addEventListener("input", applyTyreFilter);
+$("tyre-dialog-type").addEventListener("change", fillTyrePicker);
+$("tyre-dialog-filter").addEventListener("input", fillTyrePicker);
 $("tyre-dialog-ok").addEventListener("click", submitTyreDialog);
 $("tyre-dialog-cancel").addEventListener("click", () => closeTyreDialog(true));
 $("tyre-dialog").addEventListener("keydown", tyreDialogKey);
@@ -3156,6 +3871,7 @@ $("turbo-toggle").addEventListener("click", toggleTurbo);
 $("turbo-donor").addEventListener("change", turboChanged);
 $("garage-toggle").addEventListener("click", toggleGarage);
 $("garage").addEventListener("change", garageChanged);
+$("garage-search").addEventListener("input", garageSearched);
 $("btn-garage-reset").addEventListener("click", resetGarage);
 $("sounds-toggle").addEventListener("click", toggleSounds);
 $("sounds").addEventListener("change", soundChanged);

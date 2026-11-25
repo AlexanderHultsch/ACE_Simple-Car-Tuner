@@ -15,7 +15,7 @@ import tune
 CARS = ROOT / "tuner" / "cars.json"
 KNOWN_KEYS = set(tune.REQUIRED) | {"min", "max", "default", "default_template", "choices", "choice_values", "targets",
                                    "needs", "curve_from", "handler", "hide_if_absent", "create_missing", "ui", "value",
-                                   "advanced", "shared"}
+                                   "advanced", "shared", "tyre_group"}
 ROLE_NAMES = set(tune.MANIFEST_ROLES) | set(tune.TYRE_ROLES) | {"car", "mech_preset", "turbo"}
 TEMPLATE_FIELDS = {"stock_display_name", "stock_variant_name"}
 COMMON = "content\\cars\\common_phsx\\"
@@ -336,8 +336,20 @@ class TestCatalogueData(unittest.TestCase):
                           "Springs & anti-roll": 12, "Ride height & bump stops": 12, "Dampers": 8, "Suspension (physical)": 12,
                           "Alignment & tyres": 17, "Tyres": 24, "Fuel": 1, "Electronics": 4})
 
-    def test_ui_hint_is_header(self):
-        self.assertEqual({s["ui"] for s in SETTINGS if "ui" in s}, {"header"})
+    def test_ui_hints_are_header_and_hidden(self):
+        self.assertEqual({s["ui"] for s in SETTINGS if "ui" in s}, {"header", "hidden"})
+        self.assertEqual({s["id"]: s["ui"] for s in SETTINGS if "ui" in s},
+                         dict({"name_suffix": "header", "variant_name": "hidden"}, **{s["id"]: "hidden" for s in SETTINGS if s["group"] == "Tyres"}))
+
+    def test_the_car_name_and_the_hidden_variant_name_in_the_meta_group(self):
+        meta = {s["id"]: s for s in SETTINGS if s["group"] == "Meta"}
+        self.assertEqual(list(meta), ["variant_name", "name_suffix"])
+        self.assertEqual((meta["name_suffix"]["label"], meta["name_suffix"]["ui"]), ("Car name", "header"))
+        self.assertIn("name of the tuned car in the game's car list", meta["name_suffix"]["description"])
+        self.assertNotIn("suffix", meta["name_suffix"]["description"].lower())
+        self.assertEqual(meta["variant_name"]["ui"], "hidden")
+        self.assertEqual(meta["variant_name"]["label"], "Variant name")
+        self.assertNotIn("suffix", [g for g in CAT["groups"] if g["name"] == "Meta"][0]["description"].lower())
 
     def test_no_target_listed_twice_in_a_setting(self):
         for s in SETTINGS:
@@ -354,6 +366,51 @@ class TestCatalogueData(unittest.TestCase):
         for s in SETTINGS:
             with self.subTest(s["id"]):
                 self.assertNotIn("Kunos documentation:", s["description"])
+
+
+class TestOldTyresSection(unittest.TestCase):
+    """The 24 settings of the group Tyres (tyre_*_front, tyre_*_rear) stay in the catalogue but are hidden from the page and refused by set."""
+
+    TYRE = [s for s in SETTINGS if s["group"] == "Tyres"]
+
+    def test_the_24_settings_are_the_tyre_settings_of_the_car_and_all_have_the_hint_hidden(self):
+        self.assertEqual(len(self.TYRE), 24)
+        self.assertEqual([s["id"] for s in tune.tyre_settings(CAT)], [s["id"] for s in self.TYRE])
+        self.assertEqual({s["id"]: s["ui"] for s in self.TYRE}, {s["id"]: "hidden" for s in self.TYRE})
+        self.assertEqual(sorted(s["id"] for s in SETTINGS if s.get("ui") == "hidden"), sorted(["variant_name"] + [s["id"] for s in self.TYRE]))
+
+    def test_the_group_and_its_description_stay_listed(self):
+        self.assertIn("Tyres", [g["name"] for g in tune.group_list()])
+
+    def test_the_tyre_creator_still_has_its_12_fields_from_the_front_settings(self):
+        derived = [f for f in tune.tyre_fields(CAT) if "front_id" in f]
+        self.assertEqual(sorted(f["front_id"] for f in derived), sorted(s["id"] for s in self.TYRE if s["id"].endswith("_front")))
+        self.assertEqual(len(derived), 12)
+        self.assertEqual(len(tune.tyre_fields(CAT)), 12 + len(CAT["tyre_settings"]))
+
+    def test_a_rear_setting_has_the_targets_the_front_one_has_so_one_tyre_gives_the_same_file_for_either_axle(self):
+        for s in self.TYRE:
+            if s["id"].endswith("_front"):
+                rear = BY_ID[s["id"][:-len("_front")] + "_rear"]
+                with self.subTest(s["id"]):
+                    self.assertEqual([t["path"] for t in s["targets"]], [t["path"] for t in rear["targets"]])
+                    self.assertEqual([t["file"] for t in s["targets"]], ["@tyre_front"] * len(s["targets"]))
+                    self.assertEqual([t["file"] for t in rear["targets"]], ["@tyre_rear"] * len(rear["targets"]))
+                    for key in ("type", "unit", "min", "max", "choices", "choice_values"):
+                        self.assertEqual(s.get(key), rear.get(key), key)
+
+    def test_set_refuses_each_of_them_before_it_looks_at_any_car(self):
+        with tmp() as d:
+            for s in self.TYRE:
+                for kw in ({}, {"tune": "ax01"}, {"tune": tune.DRAFT}):
+                    with self.subTest(s["id"], **kw), self.assertRaisesRegex(
+                            ValueError, "^tyre values are edited in the Tyre Creator: choose or create a tyre there$"):
+                        tune.set_value(str(d / "w"), "ks_x", s["id"], "1", CAT, **kw)
+            self.assertEqual(os.listdir(d), [])
+
+    def test_the_other_settings_are_not_hidden_or_refused_by_this(self):
+        self.assertEqual([s["id"] for s in SETTINGS if "tyre" in s["id"] and s["group"] != "Tyres" and s.get("ui") == "hidden"], [])
+        self.assertEqual({t["id"] for t in tune.tyre_settings(CAT)}, {s["id"] for s in self.TYRE})
 
 
 class TestLoaderValidation(unittest.TestCase):
